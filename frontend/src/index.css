@@ -1,0 +1,112 @@
+@import "tailwindcss";
+
+@theme {
+  --color-nexus-50: #eef7ff;
+  --color-nexus-100: #d9edff;
+  --color-nexus-200: #bce0ff;
+  --color-nexus-300: #8ecdff;
+  --color-nexus-400: #59b0ff;
+  --color-nexus-500: #3b8eff;
+  --color-nexus-600: #1b6cf5;
+  --color-nexus-700: #1557e1;
+  --color-nexus-800: #1846b6;
+  --color-nexus-900: #1a3e8f;
+  --color-nexus-950: #142757;
+
+  --color-surface-50: #f8fafc;
+  --color-surface-100: #f1f5f9;
+  --color-surface-200: #e2e8f0;
+  --color-surface-700: #1e293b;
+  --color-surface-800: #0f172a;
+  --color-surface-850: #0c1322;
+  --color-surface-900: #080e1a;
+  --color-surface-950: #040812;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+
+body {
+  background: var(--color-surface-950);
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-in {
+  animation: slide-in 0.3s ease-out;
+}
+
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 4px rgba(59, 142, 255, 0.3); }
+  50% { box-shadow: 0 0 16px rgba(59, 142, 255, 0.6); }
+}
+
+.animate-glow {
+  animation: glow 3s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-20px); }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+.animate-float-slow {
+  animation: float 8s ease-in-out infinite;
+}
+
+.animate-float-fast {
+  animation: float 4s ease-in-out infinite;
+}
+
+@keyframes gradient-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.animate-gradient {
+  background-size: 200% 200%;
+  animation: gradient-shift 8s ease infinite;
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.8s ease-out forwards;
+}
+
+.animate-fade-in-up-delay-1 {
+  opacity: 0;
+  animation: fade-in-up 0.8s ease-out 0.1s forwards;
+}
+
+.animate-fade-in-up-delay-2 {
+  opacity: 0;
+  animation: fade-in-up 0.8s ease-out 0.2s forwards;
+}
+
+.animate-fade-in-up-delay-3 {
+  opacity: 0;
+  animation: fade-in-up 0.8s ease-out 0.3s forwards;
+}

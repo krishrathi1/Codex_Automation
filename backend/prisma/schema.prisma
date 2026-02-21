@@ -1,0 +1,588 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ──────────────────────────────────────────────
+
+enum AgentStatus {
+  ONLINE
+  IDLE
+  OFFLINE
+  ERROR
+}
+
+enum ActivityType {
+  HEARTBEAT
+  TASK_START
+  TASK_COMPLETE
+  ERROR
+  MESSAGE
+  DELEGATION
+  ALERT
+  SYSTEM
+}
+
+enum TaskStatus {
+  BACKLOG
+  ASSIGNED
+  IN_PROGRESS
+  REVIEW
+  DONE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum Severity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum McpTransport {
+  SSE
+  STREAMABLE_HTTP
+}
+
+enum GatewayStatus {
+  ONLINE
+  OFFLINE
+  UNKNOWN
+}
+
+enum LlmProviderMode {
+  BYOK
+  PLATFORM
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ─── Organization & Auth ────────────────────────────────
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  settings  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members        OrgMember[]
+  agents         Agent[]
+  activities     Activity[]
+  tasks          Task[]
+  threads        Thread[]
+  sessions       Session[]
+  tokenUsages    TokenUsage[]
+  metrics        MetricSnapshot[]
+  alertRules     AlertRule[]
+  alertEvents    AlertEvent[]
+  commands       Command[]
+  apiKeys        OrgApiKey[]
+  gateways       Gateway[]
+  llmProviders   LlmProvider[]
+  usageCredit    UsageCredit?
+  boards         Board[]
+  boardGroups    BoardGroup[]
+
+  @@index([slug])
+}
+
+model OrgMember {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           OrgRole      @default(MEMBER)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@index([organizationId])
+}
+
+model OrgApiKey {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  keyHash        String       @unique
+  keyPrefix      String
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+  @@index([keyHash])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships   OrgMember[]
+  refreshTokens RefreshToken[]
+}
+
+// ─── Core Models ────────────────────────────────────────
+
+model Agent {
+  id                String       @id @default(uuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name              String
+  displayName       String
+  workspace         String       @default("")
+  description       String
+  status            AgentStatus  @default(IDLE)
+  lastHeartbeat     DateTime?
+  heartbeatInterval Int          @default(30)
+  currentTask       String?
+  avatar            String?
+  enabled           Boolean      @default(true)
+  soulMd            String?      @db.Text
+  gatewayId         String?
+  gateway           Gateway?     @relation(fields: [gatewayId], references: [id], onDelete: SetNull)
+  gatewayAgentId    String?      @unique
+  boardId           String?
+  board             Board?       @relation(fields: [boardId], references: [id], onDelete: SetNull)
+  isBoardLead       Boolean      @default(false)
+  agentTokenHash    String?      @unique
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  activities       Activity[]
+  tasks            Task[]
+  sentMessages     Message[]        @relation("SentMessages")
+  receivedMessages Message[]        @relation("ReceivedMessages")
+  sessions         Session[]
+  tokenUsages      TokenUsage[]
+  metrics          MetricSnapshot[]
+  alerts           AlertRule[]
+  commands         Command[]
+  mcpServers       McpServer[]
+  approvals        Approval[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@index([status])
+  @@index([gatewayId])
+  @@index([boardId])
+}
+
+model Activity {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agentId        String
+  agent          Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  type           ActivityType
+  message        String
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+  @@index([agentId])
+  @@index([createdAt])
+  @@index([type])
+  @@index([message])
+}
+
+model Task {
+  id             String     @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  title          String
+  description    String?
+  status         TaskStatus @default(BACKLOG)
+  priority       Priority   @default(MEDIUM)
+  agentId        String?
+  agent          Agent?     @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  boardId        String?
+  board          Board?     @relation(fields: [boardId], references: [id], onDelete: SetNull)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  approvals          Approval[]
+  dependentOn        TaskDependency[] @relation("DependentOn")
+  blocking           TaskDependency[] @relation("Blocking")
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([agentId])
+  @@index([boardId])
+}
+
+// ─── Inter-Agent Communication ──────────────────────────
+
+model Thread {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  title          String?
+  messages       Message[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+}
+
+model Message {
+  id         String   @id @default(uuid())
+  threadId   String
+  thread     Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  senderId   String
+  sender     Agent    @relation("SentMessages", fields: [senderId], references: [id])
+  receiverId String
+  receiver   Agent    @relation("ReceivedMessages", fields: [receiverId], references: [id])
+  content    String   @db.Text
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([threadId])
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([createdAt])
+}
+
+// ─── Sessions & Timeline ────────────────────────────────
+
+model Session {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agentId        String
+  agent          Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  type           String
+  startedAt      DateTime     @default(now())
+  endedAt        DateTime?
+  durationMs     Int?
+  status         String
+  summary        String?
+  tokensUsed     Int?
+  cost           Float?
+
+  @@index([organizationId])
+  @@index([agentId])
+  @@index([startedAt])
+  @@index([status])
+}
+
+// ─── Cost & Token Tracking ──────────────────────────────
+
+model TokenUsage {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agentId        String
+  agent          Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  inputTokens    Int
+  outputTokens   Int
+  totalTokens    Int
+  model          String       @default("gemini-2.0-flash")
+  cost           Float
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+  @@index([agentId])
+  @@index([createdAt])
+}
+
+// ─── Performance Metrics ────────────────────────────────
+
+model MetricSnapshot {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agentId        String
+  agent          Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  responseTimeMs Int
+  success        Boolean
+  errorMessage   String?
+  toolName       String?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+  @@index([agentId])
+  @@index([createdAt])
+  @@index([success])
+}
+
+// ─── Alert System ───────────────────────────────────────
+
+model AlertRule {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  agentId        String?
+  agent          Agent?       @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  condition      String
+  threshold      Float?
+  windowMinutes  Int          @default(5)
+  enabled        Boolean      @default(true)
+  lastTriggered  DateTime?
+  createdAt      DateTime     @default(now())
+
+  events AlertEvent[]
+
+  @@index([organizationId])
+  @@index([enabled])
+}
+
+model AlertEvent {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  alertRuleId    String
+  alertRule      AlertRule    @relation(fields: [alertRuleId], references: [id], onDelete: Cascade)
+  message        String
+  severity       Severity     @default(WARNING)
+  acknowledged   Boolean      @default(false)
+  acknowledgedAt DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+  @@index([alertRuleId])
+  @@index([acknowledged])
+  @@index([createdAt])
+}
+
+// ─── Human-in-the-Loop Commands ─────────────────────────
+
+model Command {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agentId        String
+  agent          Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  type           String
+  payload        Json?
+  status         String       @default("PENDING")
+  issuedBy       String?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+  @@index([agentId])
+  @@index([status])
+}
+
+// ─── MCP Integration ────────────────────────────────────
+
+model McpServer {
+  id            String       @id @default(uuid())
+  agentId       String
+  agent         Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  name          String
+  url           String
+  transport     McpTransport @default(SSE)
+  enabled       Boolean      @default(true)
+  lastConnected DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  tools McpTool[]
+
+  @@index([agentId])
+}
+
+model McpTool {
+  id          String    @id @default(uuid())
+  mcpServerId String
+  mcpServer   McpServer @relation(fields: [mcpServerId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  inputSchema Json?
+  createdAt   DateTime  @default(now())
+
+  @@unique([mcpServerId, name])
+  @@index([mcpServerId])
+}
+
+// ─── Gateways ──────────────────────────────────────────
+
+model Gateway {
+  id             String        @id @default(uuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  url            String
+  token          String
+  workspaceRoot  String        @default("")
+  status         GatewayStatus @default(UNKNOWN)
+  lastCheckedAt  DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  agents Agent[]
+  boards Board[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+// ─── LLM Providers ────────────────────────────────────
+
+model LlmProvider {
+  id              String          @id @default(uuid())
+  organizationId  String
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  provider        String
+  mode            LlmProviderMode @default(PLATFORM)
+  apiKey          String?
+  isActive        Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@unique([organizationId, provider])
+  @@index([organizationId])
+}
+
+model UsageCredit {
+  id              String       @id @default(uuid())
+  organizationId  String       @unique
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  balanceCents    Int          @default(0)
+  totalSpentCents Int          @default(0)
+  lastTopUpAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+}
+
+// ─── Boards ───────────────────────────────────────────
+
+model Board {
+  id                      String       @id @default(uuid())
+  organizationId          String
+  organization            Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name                    String
+  slug                    String
+  description             String       @default("")
+  gatewayId               String?
+  gateway                 Gateway?     @relation(fields: [gatewayId], references: [id], onDelete: SetNull)
+  boardGroupId            String?
+  boardGroup              BoardGroup?  @relation(fields: [boardGroupId], references: [id], onDelete: SetNull)
+  boardType               String       @default("goal")
+  objective               String?
+  successMetrics          Json?
+  targetDate              DateTime?
+  maxAgents               Int          @default(3)
+  requireApprovalForDone  Boolean      @default(true)
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+
+  tasks     Task[]
+  agents    Agent[]
+  approvals Approval[]
+  memory    BoardMemory[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+  @@index([boardGroupId])
+}
+
+model BoardGroup {
+  id              String       @id @default(uuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name            String
+  slug            String
+  description     String       @default("")
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  boards Board[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+}
+
+// ─── Approvals ────────────────────────────────────────
+
+model Approval {
+  id          String         @id @default(uuid())
+  boardId     String
+  board       Board          @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  taskId      String?
+  task        Task?          @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  agentId     String?
+  agent       Agent?         @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  actionType  String
+  payload     Json?
+  confidence  Float?
+  status      ApprovalStatus @default(PENDING)
+  resolvedAt  DateTime?
+  createdAt   DateTime       @default(now())
+
+  @@index([boardId])
+  @@index([status])
+}
+
+// ─── Board Memory ─────────────────────────────────────
+
+model BoardMemory {
+  id        String   @id @default(uuid())
+  boardId   String
+  board     Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  content   String   @db.Text
+  tags      Json?
+  isChat    Boolean  @default(false)
+  source    String?
+  createdAt DateTime @default(now())
+
+  @@index([boardId])
+  @@index([createdAt])
+}
+
+// ─── Task Dependencies ───────────────────────────────
+
+model TaskDependency {
+  id              String @id @default(uuid())
+  dependentTaskId String
+  dependentTask   Task   @relation("DependentOn", fields: [dependentTaskId], references: [id], onDelete: Cascade)
+  blockingTaskId  String
+  blockingTask    Task   @relation("Blocking", fields: [blockingTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([dependentTaskId, blockingTaskId])
+  @@index([dependentTaskId])
+  @@index([blockingTaskId])
+}
