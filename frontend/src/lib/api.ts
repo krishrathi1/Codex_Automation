@@ -1,4 +1,4 @@
-import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, Gateway, GatewayHealth, ModelInfo, ChatHistory, ChatResponse, WorkspaceFile, LlmProvider, UsageCredit, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate } from '../types';
+import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, Gateway, GatewayHealth, ModelInfo, ChatHistory, ChatResponse, WorkspaceFile, LlmProvider, UsageCredit, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate } from '../types';
 import { useAuthStore } from '../stores/auth-store';
 
 const BASE_URL = '/api';
@@ -103,6 +103,17 @@ export const api = {
       request<AgentSkill>(`/agents/${id}/skills/${skillId}`, { method: 'PATCH', body: JSON.stringify(data) }),
     removeSkill: (id: string, skillId: string) =>
       request<void>(`/agents/${id}/skills/${skillId}`, { method: 'DELETE' }),
+    // Integrations
+    listIntegrations: (id: string) =>
+      request<AgentIntegration[]>(`/agents/${id}/integrations`),
+    getIntegration: (id: string, channel: string) =>
+      request<AgentIntegration>(`/agents/${id}/integrations/${channel}`),
+    upsertIntegration: (id: string, channel: string, data: Record<string, unknown>) =>
+      request<AgentIntegration>(`/agents/${id}/integrations/${channel}`, { method: 'PUT', body: JSON.stringify(data) }),
+    toggleIntegration: (id: string, channel: string, enabled: boolean) =>
+      request<AgentIntegration>(`/agents/${id}/integrations/${channel}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
+    deleteIntegration: (id: string, channel: string) =>
+      request<void>(`/agents/${id}/integrations/${channel}`, { method: 'DELETE' }),
   },
   mcp: {
     list: (agentId: string) => request(`/agents/${agentId}/mcp-servers`),

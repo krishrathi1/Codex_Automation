@@ -89,6 +89,41 @@ export function AgentProfile() {
           </div>
         )}
 
+        {/* Integrations */}
+        {agent.integrations && agent.integrations.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-white/5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs text-gray-500 uppercase tracking-wider">Integrations</span>
+              <Link to={`/agents/${agent.id}/edit`} className="text-[10px] text-nexus-400 hover:underline">Configure</Link>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {agent.integrations.map((integration) => (
+                <div
+                  key={integration.id}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-900 border border-white/5"
+                >
+                  <span className="text-sm">
+                    {integration.channel === 'TELEGRAM' ? '✈️' : integration.channel === 'SLACK' ? '💬' : '💭'}
+                  </span>
+                  <span className="text-xs text-gray-300 font-medium">
+                    {integration.channel === 'GOOGLE_CHAT' ? 'Google Chat' : integration.channel.charAt(0) + integration.channel.slice(1).toLowerCase()}
+                  </span>
+                  <span className={cn(
+                    'w-1.5 h-1.5 rounded-full',
+                    integration.enabled ? 'bg-emerald-400' : 'bg-gray-600'
+                  )} />
+                  <span className={cn(
+                    'text-[10px]',
+                    integration.enabled ? 'text-emerald-400' : 'text-gray-600'
+                  )}>
+                    {integration.enabled ? 'Active' : 'Disabled'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Quick stats */}
         <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-white/5">
           <div className="text-center">

@@ -29,6 +29,7 @@ export interface Agent {
   activities?: Activity[];
   tasks?: Task[];
   agentSkills?: AgentSkill[];
+  integrations?: AgentIntegration[];
   gateway?: Gateway;
 }
 
@@ -486,6 +487,28 @@ export interface AgentSkill {
   customConfig: Record<string, unknown> | null;
   enabled: boolean;
   skill: MarketplaceSkill;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Agent Integrations ─────────────────────────────
+
+export type ChannelType = 'TELEGRAM' | 'SLACK' | 'GOOGLE_CHAT';
+
+export interface AgentIntegration {
+  id: string;
+  agentId: string;
+  channel: ChannelType;
+  enabled: boolean;
+  botToken: string | null;
+  appToken: string | null;
+  serviceAccount: Record<string, unknown> | null;
+  webhookUrl: string | null;
+  dmPolicy: string;
+  groupPolicy: string;
+  status: string;
+  lastError: string | null;
+  lastConnectedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

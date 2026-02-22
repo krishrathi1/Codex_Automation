@@ -277,6 +277,7 @@ model Agent {
   approvals        Approval[]
   webhooks         BoardWebhook[]
   agentSkills      AgentSkill[]
+  integrations     AgentIntegration[]
   soulTemplateId   String?
 
   @@unique([organizationId, name])
@@ -989,4 +990,41 @@ model SoulTemplate {
   @@unique([organizationId, slug])
   @@index([organizationId])
   @@index([category])
+}
+
+// ─── Agent Integrations (Telegram, Slack, Google Chat) ──
+
+enum ChannelType {
+  TELEGRAM
+  SLACK
+  GOOGLE_CHAT
+}
+
+model AgentIntegration {
+  id              String      @id @default(uuid())
+  agentId         String
+  agent           Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  channel         ChannelType
+  enabled         Boolean     @default(true)
+
+  // Credentials
+  botToken        String?
+  appToken        String?
+  serviceAccount  Json?
+  webhookUrl      String?
+
+  // Channel policies
+  dmPolicy        String      @default("open")
+  groupPolicy     String      @default("open")
+
+  // Status
+  status          String      @default("disconnected")
+  lastError       String?
+  lastConnectedAt DateTime?
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@unique([agentId, channel])
+  @@index([agentId])
 }

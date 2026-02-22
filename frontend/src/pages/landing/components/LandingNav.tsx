@@ -14,6 +14,7 @@ export function LandingNav() {
 
   const navLinks = [
     { label: 'Features', href: '#features' },
+    { label: 'Integrations', href: '#integrations' },
     { label: 'How It Works', href: '#how-it-works' },
     { label: 'Use Cases', href: '#use-cases' },
     { label: 'Docs', href: '/docs', isRoute: true },

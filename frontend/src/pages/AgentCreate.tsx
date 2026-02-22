@@ -3,7 +3,7 @@ import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import type { Agent, Gateway, McpServer, McpTool, LlmProvider, SoulTemplate, MarketplaceSkill, AgentSkill } from '@/types';
+import type { Agent, Gateway, McpServer, McpTool, LlmProvider, SoulTemplate, MarketplaceSkill, AgentSkill, AgentIntegration, ChannelType } from '@/types';
 
 interface McpServerWithTools extends McpServer {
   tools?: McpTool[];
@@ -173,6 +173,15 @@ export function AgentCreate() {
   const [editingSkillId, setEditingSkillId] = useState<string | null>(null);
   const [skillCustomizations, setSkillCustomizations] = useState<Record<string, { customName: string; customDescription: string }>>({});
 
+  // Integration state
+  const [integrations, setIntegrations] = useState<Record<ChannelType, Partial<AgentIntegration>>>({
+    TELEGRAM: {},
+    SLACK: {},
+    GOOGLE_CHAT: {},
+  });
+  const [expandedChannel, setExpandedChannel] = useState<ChannelType | null>(null);
+  const [savingIntegration, setSavingIntegration] = useState<ChannelType | null>(null);
+
   // General state
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -230,6 +239,15 @@ export function AgentCreate() {
           });
           setSkillCustomizations(customizations);
         }
+
+        // Load integrations
+        if (agent.integrations) {
+          const intMap: Record<ChannelType, Partial<AgentIntegration>> = { TELEGRAM: {}, SLACK: {}, GOOGLE_CHAT: {} };
+          agent.integrations.forEach((i: AgentIntegration) => {
+            intMap[i.channel] = i;
+          });
+          setIntegrations(intMap);
+        }
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
@@ -272,6 +290,48 @@ export function AgentCreate() {
         setSoulMd(template.content);
       }
     }
+  };
+
+  // Save integration
+  const handleSaveIntegration = async (channel: ChannelType) => {
+    if (!id) return;
+    setSavingIntegration(channel);
+    try {
+      const data = integrations[channel];
+      const result = await api.agents.upsertIntegration(id, channel, data as Record<string, unknown>);
+      setIntegrations(prev => ({ ...prev, [channel]: result }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save integration');
+    } finally {
+      setSavingIntegration(null);
+    }
+  };
+
+  const handleDeleteIntegration = async (channel: ChannelType) => {
+    if (!id) return;
+    try {
+      await api.agents.deleteIntegration(id, channel);
+      setIntegrations(prev => ({ ...prev, [channel]: {} }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to remove integration');
+    }
+  };
+
+  const handleToggleIntegration = async (channel: ChannelType, enabled: boolean) => {
+    if (!id) return;
+    try {
+      const result = await api.agents.toggleIntegration(id, channel, enabled);
+      setIntegrations(prev => ({ ...prev, [channel]: result }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to toggle integration');
+    }
+  };
+
+  const updateIntegrationField = (channel: ChannelType, field: string, value: unknown) => {
+    setIntegrations(prev => ({
+      ...prev,
+      [channel]: { ...prev[channel], [field]: value },
+    }));
   };
 
   // Skill toggle
@@ -381,6 +441,15 @@ export function AgentCreate() {
               customName: custom.customName || null,
               customDescription: custom.customDescription || null,
             });
+          }
+        }
+
+        // Save integrations configured during creation
+        for (const channel of ['TELEGRAM', 'SLACK', 'GOOGLE_CHAT'] as ChannelType[]) {
+          const integ = integrations[channel];
+          const hasCredentials = integ.botToken || integ.appToken || integ.serviceAccount || integ.webhookUrl;
+          if (hasCredentials) {
+            await api.agents.upsertIntegration(created.id, channel, integ as Record<string, unknown>);
           }
         }
 
@@ -1020,6 +1089,235 @@ export function AgentCreate() {
               {selectedSkillIds.size > 0 && (
                 <p className="text-[11px] text-gray-500 mt-2">{selectedSkillIds.size} skill{selectedSkillIds.size !== 1 ? 's' : ''} selected</p>
               )}
+            </div>
+
+            {/* Platform Integrations */}
+            <div className="rounded-xl border border-white/5 bg-surface-850 p-5">
+                <h3 className="text-sm font-semibold text-white mb-1">Platform Integrations</h3>
+                <p className="text-xs text-gray-500 mb-3">
+                  Connect this agent to Telegram, Slack, or Google Chat
+                </p>
+                <div className="space-y-3">
+                  {/* Telegram */}
+                  {(() => {
+                    const channels: { key: ChannelType; label: string; color: string; borderColor: string; bgColor: string }[] = [
+                      { key: 'TELEGRAM', label: 'Telegram', color: 'text-sky-400', borderColor: 'border-sky-500/30', bgColor: 'bg-sky-500/10' },
+                      { key: 'SLACK', label: 'Slack', color: 'text-purple-400', borderColor: 'border-purple-500/30', bgColor: 'bg-purple-500/10' },
+                      { key: 'GOOGLE_CHAT', label: 'Google Chat', color: 'text-emerald-400', borderColor: 'border-emerald-500/30', bgColor: 'bg-emerald-500/10' },
+                    ];
+                    return channels.map(({ key, label, color, borderColor, bgColor }) => {
+                      const integration = integrations[key];
+                      const isConfigured = Boolean(integration?.id);
+                      const isExpanded = expandedChannel === key;
+                      return (
+                        <div key={key} className={cn('rounded-lg border transition-all', isConfigured ? borderColor : 'border-white/5', isConfigured ? bgColor.replace('/10', '/5') : 'bg-surface-900')}>
+                          {/* Channel header */}
+                          <div
+                            className="flex items-center gap-3 px-4 py-3 cursor-pointer"
+                            onClick={() => setExpandedChannel(isExpanded ? null : key)}
+                          >
+                            <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold', bgColor, color)}>
+                              {label.charAt(0)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium text-white">{label}</span>
+                                {isConfigured && (
+                                  <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium',
+                                    integration.enabled ? 'text-emerald-400 bg-emerald-500/10' : 'text-gray-500 bg-gray-500/10'
+                                  )}>
+                                    {integration.enabled ? 'Enabled' : 'Disabled'}
+                                  </span>
+                                )}
+                                {isConfigured && integration.status && (
+                                  <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium',
+                                    integration.status === 'connected' ? 'text-emerald-400 bg-emerald-500/10' :
+                                    integration.status === 'error' ? 'text-red-400 bg-red-500/10' :
+                                    'text-gray-500 bg-gray-500/10'
+                                  )}>
+                                    {integration.status}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-gray-500">
+                                {!isConfigured ? 'Not configured' : integration.lastError ? integration.lastError : 'Click to configure'}
+                              </p>
+                            </div>
+                            {isConfigured && (
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); isEditMode && id ? handleToggleIntegration(key, !integration.enabled) : updateIntegrationField(key, 'enabled', !integration.enabled); }}
+                                className={cn(
+                                  'relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0',
+                                  integration.enabled ? 'bg-emerald-500' : 'bg-gray-600'
+                                )}
+                              >
+                                <div className={cn(
+                                  'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200',
+                                  integration.enabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                                )} />
+                              </button>
+                            )}
+                            <svg className={cn('w-4 h-4 text-gray-500 transition-transform shrink-0', isExpanded && 'rotate-180')} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </div>
+
+                          {/* Expanded config form */}
+                          {isExpanded && (
+                            <div className="px-4 pb-4 pt-1 border-t border-white/5 space-y-3">
+                              {/* Telegram fields */}
+                              {key === 'TELEGRAM' && (
+                                <>
+                                  <div>
+                                    <label className="block text-[11px] text-gray-400 mb-1">Bot Token <span className="text-gray-600">(from @BotFather)</span></label>
+                                    <input
+                                      type="password"
+                                      value={integration.botToken || ''}
+                                      onChange={(e) => updateIntegrationField(key, 'botToken', e.target.value)}
+                                      placeholder="123456:ABC-DEF..."
+                                      className="w-full px-2.5 py-1.5 rounded bg-surface-850 border border-white/10 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-sky-500/50"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[11px] text-gray-400 mb-1">Webhook URL <span className="text-gray-600">(optional, uses polling if empty)</span></label>
+                                    <input
+                                      type="text"
+                                      value={integration.webhookUrl || ''}
+                                      onChange={(e) => updateIntegrationField(key, 'webhookUrl', e.target.value)}
+                                      placeholder="https://your-domain.com/telegram"
+                                      className="w-full px-2.5 py-1.5 rounded bg-surface-850 border border-white/10 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-sky-500/50"
+                                    />
+                                  </div>
+                                </>
+                              )}
+
+                              {/* Slack fields */}
+                              {key === 'SLACK' && (
+                                <>
+                                  <div>
+                                    <label className="block text-[11px] text-gray-400 mb-1">Bot Token <span className="text-gray-600">(xoxb-...)</span></label>
+                                    <input
+                                      type="password"
+                                      value={integration.botToken || ''}
+                                      onChange={(e) => updateIntegrationField(key, 'botToken', e.target.value)}
+                                      placeholder="xoxb-..."
+                                      className="w-full px-2.5 py-1.5 rounded bg-surface-850 border border-white/10 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-purple-500/50"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[11px] text-gray-400 mb-1">App Token <span className="text-gray-600">(xapp-... for Socket Mode)</span></label>
+                                    <input
+                                      type="password"
+                                      value={integration.appToken || ''}
+                                      onChange={(e) => updateIntegrationField(key, 'appToken', e.target.value)}
+                                      placeholder="xapp-..."
+                                      className="w-full px-2.5 py-1.5 rounded bg-surface-850 border border-white/10 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-purple-500/50"
+                                    />
+                                  </div>
+                                </>
+                              )}
+
+                              {/* Google Chat fields */}
+                              {key === 'GOOGLE_CHAT' && (
+                                <>
+                                  <div>
+                                    <label className="block text-[11px] text-gray-400 mb-1">Service Account JSON</label>
+                                    <textarea
+                                      value={integration.serviceAccount ? JSON.stringify(integration.serviceAccount, null, 2) : ''}
+                                      onChange={(e) => {
+                                        try {
+                                          const parsed = JSON.parse(e.target.value);
+                                          updateIntegrationField(key, 'serviceAccount', parsed);
+                                        } catch {
+                                          // Allow typing incomplete JSON
+                                          updateIntegrationField(key, 'serviceAccount', e.target.value as any);
+                                        }
+                                      }}
+                                      rows={4}
+                                      placeholder='{"type": "service_account", "project_id": "...", ...}'
+                                      className="w-full px-2.5 py-1.5 rounded bg-surface-850 border border-white/10 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-emerald-500/50 font-mono resize-y"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[11px] text-gray-400 mb-1">Webhook URL <span className="text-gray-600">(public HTTPS endpoint)</span></label>
+                                    <input
+                                      type="text"
+                                      value={integration.webhookUrl || ''}
+                                      onChange={(e) => updateIntegrationField(key, 'webhookUrl', e.target.value)}
+                                      placeholder="https://your-domain.com/googlechat"
+                                      className="w-full px-2.5 py-1.5 rounded bg-surface-850 border border-white/10 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-emerald-500/50"
+                                    />
+                                  </div>
+                                </>
+                              )}
+
+                              {/* Common: DM & Group Policy */}
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="block text-[11px] text-gray-400 mb-1">DM Policy</label>
+                                  <select
+                                    value={integration.dmPolicy || 'open'}
+                                    onChange={(e) => updateIntegrationField(key, 'dmPolicy', e.target.value)}
+                                    className="w-full px-2.5 py-1.5 rounded bg-surface-850 border border-white/10 text-xs text-white focus:outline-none"
+                                  >
+                                    <option value="open">Open</option>
+                                    <option value="pairing">Pairing</option>
+                                    <option value="allowlist">Allowlist</option>
+                                    <option value="disabled">Disabled</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] text-gray-400 mb-1">Group Policy</label>
+                                  <select
+                                    value={integration.groupPolicy || 'open'}
+                                    onChange={(e) => updateIntegrationField(key, 'groupPolicy', e.target.value)}
+                                    className="w-full px-2.5 py-1.5 rounded bg-surface-850 border border-white/10 text-xs text-white focus:outline-none"
+                                  >
+                                    <option value="open">Open</option>
+                                    <option value="allowlist">Allowlist</option>
+                                    <option value="disabled">Disabled</option>
+                                  </select>
+                                </div>
+                              </div>
+
+                              {/* Action buttons */}
+                              {isEditMode && id ? (
+                                <div className="flex items-center gap-2 pt-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSaveIntegration(key)}
+                                    disabled={savingIntegration === key}
+                                    className={cn('px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-colors disabled:opacity-50',
+                                      key === 'TELEGRAM' ? 'bg-sky-600 hover:bg-sky-500' :
+                                      key === 'SLACK' ? 'bg-purple-600 hover:bg-purple-500' :
+                                      'bg-emerald-600 hover:bg-emerald-500'
+                                    )}
+                                  >
+                                    {savingIntegration === key ? 'Saving...' : isConfigured ? 'Update' : 'Connect'}
+                                  </button>
+                                  {isConfigured && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteIntegration(key)}
+                                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors"
+                                    >
+                                      Remove
+                                    </button>
+                                  )}
+                                </div>
+                              ) : (
+                                <p className="text-[10px] text-gray-500 pt-1">
+                                  Integration will be saved when you create the agent.
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
             </div>
 
             {/* SOUL.md Editor */}

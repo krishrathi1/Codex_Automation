@@ -49,6 +49,9 @@ export async function getAgentById(id: string, organizationId: string) {
         include: { skill: true },
         orderBy: { createdAt: 'asc' },
       },
+      integrations: {
+        orderBy: { createdAt: 'asc' },
+      },
       _count: { select: { activities: true, tasks: true } },
     },
   });

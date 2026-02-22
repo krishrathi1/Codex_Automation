@@ -2,12 +2,13 @@ import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import * as agentService from '../services/agent.service.js';
 import * as agentSkillService from '../services/agent-skill.service.js';
+import * as integrationService from '../services/integration.service.js';
 import * as activityService from '../services/activity.service.js';
 import * as llmProviderService from '../services/llm-provider.service.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { getGatewayClient } from '../openclaw/client.js';
-import type { AgentStatus } from '@prisma/client';
+import type { AgentStatus, ChannelType } from '@prisma/client';
 
 const router = Router();
 
@@ -786,6 +787,68 @@ router.post('/:id/token', async (req, res) => {
     res.json({ token });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// ── Agent Integrations (Telegram, Slack, Google Chat) ──
+
+router.get('/:id/integrations', async (req, res) => {
+  try {
+    const result = await integrationService.listIntegrations(req.params.id, req.organizationId!);
+    res.json(result);
+  } catch (err) {
+    res.status(404).json({ error: (err as Error).message });
+  }
+});
+
+router.get('/:id/integrations/:channel', async (req, res) => {
+  try {
+    const channel = req.params.channel.toUpperCase() as ChannelType;
+    const result = await integrationService.getIntegration(req.params.id, channel, req.organizationId!);
+    res.json(result);
+  } catch (err) {
+    res.status(404).json({ error: (err as Error).message });
+  }
+});
+
+router.put('/:id/integrations/:channel', async (req, res) => {
+  try {
+    const channel = req.params.channel.toUpperCase() as ChannelType;
+    const result = await integrationService.upsertIntegration(
+      req.params.id,
+      channel,
+      req.organizationId!,
+      req.body,
+    );
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+router.patch('/:id/integrations/:channel', async (req, res) => {
+  try {
+    const channel = req.params.channel.toUpperCase() as ChannelType;
+    const { enabled } = req.body;
+    const result = await integrationService.toggleIntegration(
+      req.params.id,
+      channel,
+      req.organizationId!,
+      enabled,
+    );
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+router.delete('/:id/integrations/:channel', async (req, res) => {
+  try {
+    const channel = req.params.channel.toUpperCase() as ChannelType;
+    await integrationService.deleteIntegration(req.params.id, channel, req.organizationId!);
+    res.status(204).end();
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
   }
 });
 
