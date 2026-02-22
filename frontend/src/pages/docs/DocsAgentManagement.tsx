@@ -1,15 +1,17 @@
-import { useEffect } from 'react';
 import { DocSection } from './components/DocSection';
 import { CodeBlock } from './components/CodeBlock';
 import { EndpointBlock } from './components/EndpointBlock';
+import { SEO } from '../../components/SEO';
 
 export function DocsAgentManagement() {
-  useEffect(() => {
-    document.title = 'Agent Management - Nexus Docs';
-  }, []);
-
   return (
     <div>
+      <SEO
+        title="AI Agent Management — Nexus AI Agent Platform Docs"
+        description="Create, configure, and manage the full lifecycle of autonomous AI agents. Learn agent provisioning, SOUL.md identity, workspace configuration, and multi-agent orchestration with Nexus by Blostem."
+        canonical="https://nexus.blostem.com/docs/agent-management"
+        keywords="AI agent management, agent lifecycle, AI agent provisioning, SOUL.md, autonomous agent configuration, multi-agent orchestration, Blostem AI"
+      />
       <h1 className="text-4xl font-bold text-white mb-2">Agent Management</h1>
       <p className="text-gray-400 text-lg mb-10">
         Create, configure, and manage the full lifecycle of your AI agents.

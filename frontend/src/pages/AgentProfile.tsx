@@ -44,20 +44,50 @@ export function AgentProfile() {
                   <div className={cn('w-2.5 h-2.5 rounded-full', statusColors[agent.status], agent.status === 'ONLINE' && 'animate-pulse-dot')} />
                   <span className={cn('text-sm font-medium', statusTextColors[agent.status])}>{agent.status}</span>
                 </div>
+                {agent.agentToAgent && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full font-medium uppercase bg-nexus-600/15 text-nexus-400 border border-nexus-500/20">
+                    A2A
+                  </span>
+                )}
               </div>
             </div>
           </div>
 
-          <div className="text-right">
-            <div className="text-xs text-gray-500 uppercase tracking-wider">Last Heartbeat</div>
-            <div className="text-sm text-white mt-0.5">{timeAgo(agent.lastHeartbeat)}</div>
-            {agent.heartbeatInterval > 0 && (
-              <div className="text-xs text-gray-600 mt-0.5">Every {agent.heartbeatInterval}m</div>
-            )}
+          <div className="flex items-center gap-4">
+            <div className="text-right">
+              <div className="text-xs text-gray-500 uppercase tracking-wider">Last Heartbeat</div>
+              <div className="text-sm text-white mt-0.5">{timeAgo(agent.lastHeartbeat)}</div>
+              {agent.heartbeatInterval > 0 && (
+                <div className="text-xs text-gray-600 mt-0.5">Every {agent.heartbeatInterval}m</div>
+              )}
+            </div>
+            <Link
+              to={`/agents/${agent.id}/edit`}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-nexus-600 text-white hover:bg-nexus-500 transition-colors"
+            >
+              Edit Agent
+            </Link>
           </div>
         </div>
 
         <p className="text-sm text-gray-400 mt-4">{agent.description}</p>
+
+        {/* Assigned Skills */}
+        {agent.agentSkills && agent.agentSkills.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-white/5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs text-gray-500 uppercase tracking-wider">Skills</span>
+              <Link to={`/agents/${agent.id}/edit`} className="text-[10px] text-nexus-400 hover:underline">Edit</Link>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {agent.agentSkills.map((as) => (
+                <span key={as.id} className="px-2 py-0.5 text-xs rounded-full bg-surface-900 border border-white/5 text-gray-300">
+                  {as.customName || as.skill.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Quick stats */}
         <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-white/5">

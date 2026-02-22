@@ -1,4 +1,7 @@
 import { prisma } from '../lib/prisma.js';
+import { trace, SpanStatusCode } from '@opentelemetry/api';
+import { logger } from '../lib/logger.js';
+const tracer = trace.getTracer('nexus-thread');
 
 const agentSelectFields = {
   id: true,

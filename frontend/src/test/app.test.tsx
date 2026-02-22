@@ -165,6 +165,8 @@ describe('Type Validation', () => {
       gatewayAgentId: null,
       boardId: null,
       isBoardLead: false,
+      agentToAgent: false,
+      soulTemplateId: null,
       createdAt: '2025-01-01T00:00:00Z',
       updatedAt: '2025-01-01T00:00:00Z',
     };
@@ -209,6 +211,9 @@ describe('Type Validation', () => {
       targetDate: null,
       maxAgents: 10,
       requireApprovalForDone: false,
+      requireReviewBeforeDone: false,
+      blockStatusChangesWithPendingApproval: false,
+      onlyLeadCanChangeStatus: false,
       createdAt: '2025-01-01T00:00:00Z',
       updatedAt: '2025-01-01T00:00:00Z',
     };

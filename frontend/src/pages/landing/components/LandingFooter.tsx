@@ -36,12 +36,12 @@ const columns: FooterColumn[] = [
     ],
   },
   {
-    title: 'Open Source',
+    title: 'Resources',
     links: [
-      { label: 'GitHub', href: '#' },
-      { label: 'Contributing', href: '#' },
       { label: 'Changelog', href: '#' },
-      { label: 'License', href: '#' },
+      { label: 'Status', href: '#' },
+      { label: 'Privacy Policy', href: '#' },
+      { label: 'Terms of Service', href: '#' },
     ],
   },
 ];
@@ -60,8 +60,19 @@ export function LandingFooter() {
               <span className="text-lg font-semibold text-white">Nexus</span>
             </div>
             <p className="mt-4 text-sm leading-relaxed text-gray-500">
-              AI Agent Mission Control. Deploy, manage, and orchestrate
-              autonomous AI agents from one unified dashboard.
+              AI Agent Orchestration &amp; Mission Control. Deploy, manage, and
+              orchestrate autonomous AI agents with agentic workflows.
+            </p>
+            <p className="mt-3 text-sm text-gray-600">
+              A product by{' '}
+              <a
+                href="https://blostem.com"
+                className="text-nexus-500 transition-colors hover:text-nexus-400"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Blostem
+              </a>
             </p>
           </div>
 
@@ -99,7 +110,7 @@ export function LandingFooter() {
         {/* Bottom bar */}
         <div className="mt-16 border-t border-white/5 pt-8">
           <p className="text-center text-sm text-gray-500">
-            &copy; 2025&ndash;2026 Nexus. All rights reserved.
+            &copy; 2025&ndash;2026 Nexus by Blostem. All rights reserved.
           </p>
         </div>
       </div>

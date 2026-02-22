@@ -1,6 +1,8 @@
 import { useState, FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/auth-store';
+import { api } from '../lib/api';
+import { SEO } from '../components/SEO';
 
 export function Login() {
   const navigate = useNavigate();
@@ -8,22 +10,47 @@ export function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+  const [emailNotVerified, setEmailNotVerified] = useState(false);
+  const [resendStatus, setResendStatus] = useState<string | null>(null);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setLocalError(null);
+    setEmailNotVerified(false);
+    setResendStatus(null);
     try {
       await login(email, password);
       navigate('/dashboard', { replace: true });
     } catch (err: any) {
-      setLocalError(err.message);
+      if (err.message === 'Email not verified') {
+        setEmailNotVerified(true);
+      } else {
+        setLocalError(err.message);
+      }
     }
   };
 
-  const displayError = localError || error;
+  const handleResendVerification = async () => {
+    if (!email) return;
+    setResendStatus(null);
+    try {
+      await api.auth.resendVerification(email);
+      setResendStatus('Verification email sent! Check your inbox.');
+    } catch {
+      setResendStatus('Failed to resend. Please try again.');
+    }
+  };
+
+  const displayError = !emailNotVerified ? (localError || error) : null;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-surface-950 px-4">
+      <SEO
+        title="Log In — Nexus AI Agent Platform"
+        description="Sign in to Nexus, the AI agent orchestration and mission control platform by Blostem. Manage your autonomous AI agents, agentic workflows, and enterprise agent operations."
+        canonical="https://nexus.blostem.com/login"
+        keywords="Nexus login, AI agent platform login, Blostem AI"
+      />
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
@@ -39,6 +66,25 @@ export function Login() {
           {displayError && (
             <div className="mb-6 px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
               {displayError}
+            </div>
+          )}
+
+          {emailNotVerified && (
+            <div className="mb-6 px-4 py-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-sm">
+              <p className="font-medium mb-1">Email not verified</p>
+              <p className="text-amber-400/80 mb-2">
+                Please check your inbox and click the verification link before signing in.
+              </p>
+              <button
+                type="button"
+                onClick={handleResendVerification}
+                className="text-nexus-400 hover:text-nexus-300 underline text-sm transition-colors"
+              >
+                Resend verification email
+              </button>
+              {resendStatus && (
+                <p className="mt-2 text-emerald-400 text-xs">{resendStatus}</p>
+              )}
             </div>
           )}
 

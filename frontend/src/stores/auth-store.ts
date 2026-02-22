@@ -65,23 +65,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const res = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include', // send/receive httpOnly cookies
+        credentials: 'include',
         body: JSON.stringify({ email, password, name, orgName }),
       });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || 'Signup failed');
       }
-      const data = await res.json();
-      // Refresh token is in httpOnly cookie (not in response body)
-      set({
-        user: data.user,
-        organization: data.organization,
-        orgRole: data.role,
-        accessToken: data.accessToken,
-        isAuthenticated: true,
-        isLoading: false,
-      });
+      // Signup no longer returns tokens — user must verify email first
+      set({ isLoading: false });
     } catch (e: any) {
       set({ error: e.message, isLoading: false });
       throw e;

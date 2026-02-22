@@ -1,6 +1,7 @@
 import { useState, FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/auth-store';
+import { SEO } from '../components/SEO';
 
 export function Signup() {
   const navigate = useNavigate();
@@ -16,7 +17,8 @@ export function Signup() {
     setLocalError(null);
     try {
       await signup(email, password, name, orgName);
-      navigate('/dashboard', { replace: true });
+      // Redirect to check-email page with the email as state
+      navigate('/check-email', { replace: true, state: { email } });
     } catch (err: any) {
       setLocalError(err.message);
     }
@@ -26,6 +28,12 @@ export function Signup() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-surface-950 px-4">
+      <SEO
+        title="Sign Up Free — Nexus AI Agent Orchestration Platform"
+        description="Create your free Nexus account and start orchestrating autonomous AI agents. Deploy agents, build agentic workflows, and manage enterprise AI operations with Blostem's AI agent platform."
+        canonical="https://nexus.blostem.com/signup"
+        keywords="sign up AI agent platform, free AI agent management, Nexus registration, Blostem AI, agentic workflow platform"
+      />
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">

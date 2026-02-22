@@ -1,18 +1,22 @@
 import { Link } from 'react-router-dom';
 import {
   ArrowRight,
+  BrainCircuit,
   ChevronDown,
   Cpu,
   KanbanSquare,
-  MessageSquare,
+  Puzzle,
   ShieldCheck,
+  Webhook,
 } from 'lucide-react';
 
 const stats = [
-  { icon: Cpu, label: '739 Models Available' },
-  { icon: MessageSquare, label: 'Real-time Chat' },
-  { icon: ShieldCheck, label: 'Approval Workflows' },
+  { icon: Cpu, label: '700+ LLM Models' },
+  { icon: Puzzle, label: 'Skills Marketplace' },
+  { icon: ShieldCheck, label: 'Board Policies' },
   { icon: KanbanSquare, label: 'Kanban Boards' },
+  { icon: BrainCircuit, label: 'Agent-to-Agent' },
+  { icon: Webhook, label: 'Webhook Integrations' },
 ];
 
 export function HeroSection() {
@@ -42,22 +46,22 @@ export function HeroSection() {
         {/* Badge */}
         <div className="animate-fade-in-up mb-8 inline-flex items-center gap-2.5 rounded-full border border-nexus-500/30 bg-nexus-500/10 px-4 py-1.5 text-sm font-medium text-nexus-400">
           <span className="animate-pulse-dot h-2 w-2 rounded-full bg-nexus-400" />
-          Open Source Mission Control
+          AI Agent Platform by Blostem
         </div>
 
         {/* Heading */}
         <h1 className="animate-fade-in-up-delay-1 text-5xl font-bold leading-[1.1] tracking-tight text-white lg:text-7xl">
-          Your AI Agents,{' '}
+          AI Agent Orchestration{' '}
           <span className="bg-gradient-to-r from-nexus-400 via-nexus-500 to-nexus-600 bg-clip-text text-transparent">
-            Orchestrated
+            &amp; Mission Control
           </span>
         </h1>
 
         {/* Subtitle */}
         <p className="animate-fade-in-up-delay-2 mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-gray-400 sm:text-xl">
-          Connect your own LLM gateway. Create specialized agents. Organize
-          their work on boards, approve their actions before they execute, and
-          chat with them in real time&nbsp;&mdash; all from one mission control.
+          Deploy autonomous AI agents, build agentic workflows with
+          human-in-the-loop approvals, and manage enterprise multi-agent
+          operations&nbsp;&mdash; all from one unified mission control dashboard.
         </p>
 
         {/* CTA Buttons */}

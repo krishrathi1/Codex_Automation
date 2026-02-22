@@ -6,6 +6,7 @@ import cookieParser from 'cookie-parser';
 import pinoHttp from 'pino-http';
 import { createServer } from 'http';
 import { logger } from './lib/logger.js';
+import { prisma } from './lib/prisma.js';
 import { setupWebSocket } from './websocket/index.js';
 import { requireAuth } from './middleware/auth.js';
 import authRoutes from './routes/auth.js';
@@ -28,11 +29,23 @@ import llmProviderRoutes from './routes/llm-providers.js';
 import boardRoutes from './routes/boards.js';
 import approvalRoutes from './routes/approvals.js';
 import agentApiRoutes from './routes/agent-api.js';
+import tagRoutes from './routes/tags.js';
+import customFieldRoutes from './routes/custom-fields.js';
+import skillRoutes from './routes/skills.js';
+import webhookRoutes from './routes/webhooks.js';
+import webhookInboundRoutes from './routes/webhook-inbound.js';
+import onboardingRoutes from './routes/onboarding.js';
+import boardGroupMemoryRoutes from './routes/board-group-memory.js';
+import boardMemoryRoutes from './routes/board-memory.js';
+import soulTemplateRoutes from './routes/soul-templates.js';
 import { connectAllGateways, setSocketIO } from './services/gateway.service.js';
 
 const app = express();
 const httpServer = createServer(app);
 const PORT = process.env.PORT || 4000;
+
+// Trust first proxy (nginx/Cloudflare) — required for correct rate limiting & secure cookies
+app.set('trust proxy', 1);
 
 // CORS: env-based origin configuration
 const corsOrigins = process.env.CORS_ORIGINS
@@ -112,12 +125,50 @@ app.use('/api/approvals', requireAuth, approvalRoutes);
 // Agent self-auth API (agents authenticate with X-Agent-Token, no JWT needed)
 app.use('/api/agent-api', agentApiRoutes);
 
+// Mission Control features
+app.use('/api/tags', requireAuth, tagRoutes);
+app.use('/api/custom-fields', requireAuth, customFieldRoutes);
+app.use('/api/skills', requireAuth, skillRoutes);
+app.use('/api/boards', requireAuth, webhookRoutes);
+app.use('/api/v1/webhooks', webhookInboundRoutes);  // PUBLIC - no auth
+app.use('/api/boards', requireAuth, onboardingRoutes);
+app.use('/api/board-groups', requireAuth, boardGroupMemoryRoutes);
+app.use('/api/boards', requireAuth, boardMemoryRoutes);
+app.use('/api/soul-templates', requireAuth, soulTemplateRoutes);
+
+// Global error handler for unhandled async errors in routes
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  // Prisma unique constraint violation
+  if (err?.code === 'P2002') {
+    return res.status(409).json({ error: `Unique constraint failed on: ${err.meta?.target?.join(', ') || 'unknown field'}` });
+  }
+  // Prisma foreign key constraint violation
+  if (err?.code === 'P2003') {
+    return res.status(400).json({ error: `Foreign key constraint violated: ${err.meta?.field_name || 'unknown'}` });
+  }
+  // Prisma record not found
+  if (err?.code === 'P2025') {
+    return res.status(404).json({ error: 'Record not found' });
+  }
+  logger.error({ err }, 'Unhandled route error');
+  res.status(500).json({ error: err.message || 'Internal server error' });
+});
+
 // WebSocket
 const io = setupWebSocket(httpServer);
 app.set('io', io);
 
 // Share Socket.io with gateway service for event forwarding
 setSocketIO(io);
+
+// Reset any agents stuck as ONLINE from a previous crash (no agent can be
+// actively processing when the server just started)
+prisma.agent.updateMany({
+  where: { status: 'ONLINE' },
+  data: { status: 'IDLE' },
+}).then(({ count }) => {
+  if (count > 0) logger.info({ count }, 'Reset stuck ONLINE agents to IDLE on startup');
+}).catch(() => {});
 
 // Connect to all gateways on startup
 connectAllGateways().catch(err => {

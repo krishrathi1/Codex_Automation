@@ -25,16 +25,18 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { boardId, taskId, agentId, actionType, payload, confidence } = req.body;
+  const { boardId, taskId, taskIds, agentId, actionType, payload, confidence, rubricScores } = req.body;
   if (!boardId || !actionType) {
     return res.status(400).json({ error: 'boardId and actionType are required' });
   }
   try {
-    const approval = await approvalService.createApproval(req.organizationId!, { boardId, taskId, agentId, actionType, payload, confidence });
+    const approval = await approvalService.createApproval(req.organizationId!, {
+      boardId, taskId, taskIds, agentId, actionType, payload, confidence, rubricScores,
+    });
     req.app.get('io')?.to(`org:${req.organizationId}`).emit('approval:created', approval);
     res.status(201).json(approval);
   } catch (e: any) {
-    return res.status(404).json({ error: e.message });
+    return res.status(e.statusCode || 404).json({ error: e.message });
   }
 });
 

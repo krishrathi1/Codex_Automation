@@ -818,6 +818,9 @@ function LlmProvidersTab({ isAdmin }: { isAdmin: boolean }) {
   const [saving, setSaving] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [showTopUp, setShowTopUp] = useState(false);
+  const [topUpAmount, setTopUpAmount] = useState('');
+  const [topUpSaving, setTopUpSaving] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -937,19 +940,70 @@ function LlmProvidersTab({ isAdmin }: { isAdmin: boolean }) {
 
       {/* Credit Balance */}
       {credit && (
-        <div className="rounded-xl border border-white/5 bg-surface-850 p-4 mb-4 flex items-center justify-between">
-          <div>
-            <p className="text-xs text-gray-500 uppercase tracking-wider">Platform Credit Balance</p>
-            <p className="text-xl font-bold text-white mt-0.5">
-              ${(credit.balanceCents / 100).toFixed(2)}
-            </p>
+        <div className="rounded-xl border border-white/5 bg-surface-850 p-4 mb-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wider">Platform Credit Balance</p>
+              <p className="text-xl font-bold text-white mt-0.5">
+                ${(credit.balanceCents / 100).toFixed(2)}
+              </p>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="text-right">
+                <p className="text-xs text-gray-500 uppercase tracking-wider">Total Spent</p>
+                <p className="text-sm text-gray-400 mt-0.5">
+                  ${(credit.totalSpentCents / 100).toFixed(2)}
+                </p>
+              </div>
+              {isAdmin && (
+                <button
+                  onClick={() => setShowTopUp(!showTopUp)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-nexus-600 text-white hover:bg-nexus-500 transition-colors"
+                >
+                  {showTopUp ? 'Cancel' : 'Add Credits'}
+                </button>
+              )}
+            </div>
           </div>
-          <div className="text-right">
-            <p className="text-xs text-gray-500 uppercase tracking-wider">Total Spent</p>
-            <p className="text-sm text-gray-400 mt-0.5">
-              ${(credit.totalSpentCents / 100).toFixed(2)}
-            </p>
-          </div>
+          {showTopUp && isAdmin && (
+            <div className="mt-3 pt-3 border-t border-white/5 flex items-end gap-3">
+              <div className="flex-1">
+                <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Amount ($)</label>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={topUpAmount}
+                  onChange={(e) => setTopUpAmount(e.target.value)}
+                  placeholder="10.00"
+                  className="w-full px-3 py-2 rounded-lg bg-surface-900 border border-white/10 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-nexus-500/50"
+                />
+              </div>
+              <button
+                disabled={topUpSaving || !topUpAmount || Number(topUpAmount) <= 0}
+                onClick={async () => {
+                  setTopUpSaving(true);
+                  try {
+                    const cents = Math.round(Number(topUpAmount) * 100);
+                    const updated = await api.llmProviders.addCredit(cents);
+                    setCredit(updated);
+                    setTopUpAmount('');
+                    setShowTopUp(false);
+                    setMessage({ type: 'success', text: `Added $${(cents / 100).toFixed(2)} in credits` });
+                    clearMessage();
+                  } catch {
+                    setMessage({ type: 'error', text: 'Failed to add credits' });
+                    clearMessage();
+                  } finally {
+                    setTopUpSaving(false);
+                  }
+                }}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-500 transition-colors disabled:opacity-50"
+              >
+                {topUpSaving ? 'Adding...' : 'Add'}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

@@ -33,6 +33,22 @@ router.get('/', async (req, res) => {
   res.json(boards);
 });
 
+// Board Snapshot — full board state in one response
+router.get('/:id/snapshot', async (req, res) => {
+  const snapshot = await boardService.getBoardSnapshot(req.params.id, req.organizationId!);
+  if (!snapshot) return res.status(404).json({ error: 'Board not found' });
+  res.json(snapshot);
+});
+
+// Board Group Snapshot — cross-board summary for the board's group
+router.get('/groups/:groupId/snapshot', async (req, res) => {
+  const includeDone = req.query.includeDone === 'true';
+  const perBoardTaskLimit = parseInt(req.query.perBoardTaskLimit as string) || 5;
+  const snapshot = await boardService.getBoardGroupSnapshot(req.params.groupId, req.organizationId!, { includeDone, perBoardTaskLimit });
+  if (!snapshot) return res.status(404).json({ error: 'Board group not found' });
+  res.json(snapshot);
+});
+
 router.get('/:id', async (req, res) => {
   const board = await boardService.getBoardById(req.params.id, req.organizationId!);
   if (!board) return res.status(404).json({ error: 'Board not found' });

@@ -21,11 +21,14 @@ export interface Agent {
   gatewayAgentId: string | null;
   boardId: string | null;
   isBoardLead: boolean;
+  agentToAgent: boolean;
+  soulTemplateId: string | null;
   createdAt: string;
   updatedAt: string;
   _count?: { activities: number; tasks: number };
   activities?: Activity[];
   tasks?: Task[];
+  agentSkills?: AgentSkill[];
   gateway?: Gateway;
 }
 
@@ -58,6 +61,10 @@ export interface Task {
     displayName: string;
     avatar: string | null;
   } | null;
+  fingerprintHash?: string | null;
+  tags?: TagAssignment[];
+  customFieldValues?: TaskCustomFieldValue[];
+  duplicateOf?: { id: string; title: string; status: TaskStatus } | null;
 }
 
 export interface AgentStats {
@@ -317,6 +324,9 @@ export interface Board {
   targetDate: string | null;
   maxAgents: number;
   requireApprovalForDone: boolean;
+  requireReviewBeforeDone: boolean;
+  blockStatusChangesWithPendingApproval: boolean;
+  onlyLeadCanChangeStatus: boolean;
   createdAt: string;
   updatedAt: string;
   _count?: { tasks: number; agents: number; approvals: number };
@@ -363,4 +373,214 @@ export interface BoardMemory {
   isChat: boolean;
   source: string | null;
   createdAt: string;
+}
+
+// ─── Tags ────────────────────────────────────────────
+
+export interface Tag {
+  id: string;
+  name: string;
+  slug: string;
+  color: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+  _count?: { assignments: number };
+}
+
+export interface TagAssignment {
+  id: string;
+  taskId: string;
+  tagId: string;
+  tag: Tag;
+  createdAt: string;
+}
+
+// ─── Task Fingerprints ──────────────────────────────
+
+export interface TaskFingerprint {
+  id: string;
+  boardId: string;
+  fingerprintHash: string;
+  taskId: string;
+  createdAt: string;
+}
+
+// ─── Custom Fields ──────────────────────────────────
+
+export type CustomFieldType = 'TEXT' | 'TEXT_LONG' | 'INTEGER' | 'DECIMAL' | 'BOOLEAN' | 'DATE' | 'DATE_TIME' | 'URL' | 'JSON';
+export type CustomFieldVisibility = 'ALWAYS' | 'IF_SET' | 'HIDDEN';
+
+export interface TaskCustomFieldDefinition {
+  id: string;
+  fieldKey: string;
+  label: string;
+  fieldType: CustomFieldType;
+  uiVisibility: CustomFieldVisibility;
+  validationRegex: string | null;
+  defaultValue: string | null;
+  createdAt: string;
+  updatedAt: string;
+  _count?: { boardFields: number; values: number };
+}
+
+export interface BoardTaskCustomField {
+  id: string;
+  boardId: string;
+  definitionId: string;
+  definition: TaskCustomFieldDefinition;
+  createdAt: string;
+}
+
+export interface TaskCustomFieldValue {
+  id: string;
+  taskId: string;
+  definitionId: string;
+  definition: TaskCustomFieldDefinition;
+  value: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Skills Marketplace ─────────────────────────────
+
+export interface MarketplaceSkill {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  risk: string;
+  sourceUrl: string | null;
+  metadata: Record<string, unknown> | null;
+  installedGatewayIds: string[];
+  isInstalled?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillPack {
+  id: string;
+  name: string;
+  description: string;
+  sourceUrl: string;
+  branch: string;
+  metadata: Record<string, unknown> | null;
+  lastSyncedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GatewayInstalledSkill {
+  id: string;
+  gatewayId: string;
+  skillId: string;
+  createdAt: string;
+}
+
+export interface AgentSkill {
+  id: string;
+  agentId: string;
+  skillId: string;
+  customName: string | null;
+  customDescription: string | null;
+  customConfig: Record<string, unknown> | null;
+  enabled: boolean;
+  skill: MarketplaceSkill;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Board Webhooks ─────────────────────────────────
+
+export interface BoardWebhook {
+  id: string;
+  boardId: string;
+  agentId: string | null;
+  description: string;
+  secret: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  agent?: { id: string; displayName: string; avatar: string | null } | null;
+  _count?: { payloads: number };
+}
+
+export interface BoardWebhookPayload {
+  id: string;
+  webhookId: string;
+  payload: unknown;
+  headers: Record<string, string> | null;
+  sourceIp: string | null;
+  contentType: string | null;
+  receivedAt: string;
+}
+
+// ─── Board Onboarding ───────────────────────────────
+
+export type OnboardingStatus = 'IN_PROGRESS' | 'COMPLETED' | 'ABANDONED';
+
+export interface BoardOnboardingSession {
+  id: string;
+  boardId: string;
+  sessionKey: string;
+  status: OnboardingStatus;
+  messages: Array<{ role: string; content: string; timestamp: string }>;
+  draftGoal: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Board Group Memory ─────────────────────────────
+
+export interface BoardGroupMemory {
+  id: string;
+  boardGroupId: string;
+  content: string;
+  tags: string[] | null;
+  isChat: boolean;
+  source: string | null;
+  createdAt: string;
+}
+
+// ─── Organization Invites ───────────────────────────
+
+export type InviteStatus = 'PENDING' | 'ACCEPTED' | 'EXPIRED' | 'REVOKED';
+
+export interface OrgInvite {
+  id: string;
+  organizationId: string;
+  invitedEmail: string;
+  token: string;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER';
+  status: InviteStatus;
+  allBoardsRead: boolean;
+  allBoardsWrite: boolean;
+  createdByUserId: string | null;
+  acceptedByUserId: string | null;
+  acceptedAt: string | null;
+  expiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  boardAccess?: OrgInviteBoardAccess[];
+}
+
+export interface OrgInviteBoardAccess {
+  id: string;
+  inviteId: string;
+  boardId: string;
+  canRead: boolean;
+  canWrite: boolean;
+}
+
+// ─── Soul Templates ─────────────────────────────────
+
+export interface SoulTemplate {
+  id: string;
+  name: string;
+  slug: string;
+  category: string;
+  description: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
 }

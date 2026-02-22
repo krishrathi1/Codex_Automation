@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../lib/api';
+import { getSocket } from '../lib/socket';
 import type { Agent, ChatMessage } from '../types';
 
 export function Chat() {
@@ -11,15 +12,38 @@ export function Chat() {
   const [loading, setLoading] = useState(true);
   const [searchFilter, setSearchFilter] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const selectedAgentIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     api.agents.list().then(data => {
       setAgents(data);
       setLoading(false);
     }).catch(() => setLoading(false));
+
+    // Listen for real-time agent status updates
+    const socket = getSocket();
+    const handleUpdated = (data: { id: string; status?: string }) => {
+      if (data.id && data.status) {
+        setAgents(prev => prev.map(a => a.id === data.id ? { ...a, status: data.status! } : a));
+      }
+    };
+    const handleHeartbeat = (data: { id: string; status?: string }) => {
+      if (data.id) {
+        setAgents(prev => prev.map(a => a.id === data.id ? { ...a, status: data.status || 'ONLINE' } : a));
+      }
+    };
+    socket.on('agent:updated', handleUpdated);
+    socket.on('agent:status', handleUpdated);
+    socket.on('agent:heartbeat', handleHeartbeat);
+    return () => {
+      socket.off('agent:updated', handleUpdated);
+      socket.off('agent:status', handleUpdated);
+      socket.off('agent:heartbeat', handleHeartbeat);
+    };
   }, []);
 
   useEffect(() => {
+    selectedAgentIdRef.current = selectedAgentId;
     if (selectedAgentId) {
       loadHistory(selectedAgentId);
     }
@@ -41,28 +65,36 @@ export function Chat() {
   async function handleSend() {
     if (!input.trim() || !selectedAgentId || sending) return;
 
+    const agentIdAtSend = selectedAgentId;
     const userMessage: ChatMessage = { role: 'user', content: input.trim(), timestamp: new Date().toISOString() };
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setSending(true);
 
     try {
-      const response = await api.chat.send(selectedAgentId, userMessage.content);
+      const response = await api.chat.send(agentIdAtSend, userMessage.content);
       const assistantMessage: ChatMessage = {
         role: 'assistant',
         content: response.result || response.summary || 'No response',
         timestamp: new Date().toISOString(),
       };
-      setMessages(prev => [...prev, assistantMessage]);
+      // Only append response if still viewing the same agent
+      if (selectedAgentIdRef.current === agentIdAtSend) {
+        setMessages(prev => [...prev, assistantMessage]);
+      }
     } catch (err) {
       const errorMessage: ChatMessage = {
         role: 'assistant',
         content: `Error: ${(err as Error).message}`,
         timestamp: new Date().toISOString(),
       };
-      setMessages(prev => [...prev, errorMessage]);
+      if (selectedAgentIdRef.current === agentIdAtSend) {
+        setMessages(prev => [...prev, errorMessage]);
+      }
     } finally {
-      setSending(false);
+      if (selectedAgentIdRef.current === agentIdAtSend) {
+        setSending(false);
+      }
     }
   }
 
@@ -123,7 +155,12 @@ export function Chat() {
                   <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-surface-900 ${statusColors[agent.status] || statusColors.OFFLINE}`} />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-white truncate">{agent.displayName}</p>
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-sm font-medium text-white truncate">{agent.displayName}</p>
+                    {agent.agentToAgent && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-nexus-600/15 text-nexus-400 border border-nexus-500/20 font-medium shrink-0">A2A</span>
+                    )}
+                  </div>
                   <p className="text-xs text-gray-500 truncate">{agent.status.toLowerCase()}</p>
                 </div>
                 {agent.gatewayAgentId && (

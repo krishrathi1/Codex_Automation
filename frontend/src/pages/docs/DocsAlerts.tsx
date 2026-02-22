@@ -1,15 +1,17 @@
-import { useEffect } from 'react';
 import { DocSection } from './components/DocSection';
 import { CodeBlock } from './components/CodeBlock';
 import { EndpointBlock } from './components/EndpointBlock';
+import { SEO } from '../../components/SEO';
 
 export function DocsAlerts() {
-  useEffect(() => {
-    document.title = 'Alert Configuration - Nexus Docs';
-  }, []);
-
   return (
     <div>
+      <SEO
+        title="AI Agent Alert Configuration — Nexus by Blostem"
+        description="Set up monitoring rules and alerts for your AI agents. Detect issues in real-time with configurable thresholds, severity levels, and notifications in the Nexus AI agent platform."
+        canonical="https://nexus.blostem.com/docs/alerts"
+        keywords="AI agent alerts, agent monitoring, real-time alerts, AI agent notifications, autonomous agent monitoring, Blostem AI"
+      />
       <h1 className="text-4xl font-bold text-white mb-2">Alert Configuration</h1>
       <p className="text-gray-400 text-lg mb-10">
         Set up monitoring rules to detect issues and get notified in real time.

@@ -15,6 +15,8 @@ import { Alerts } from './pages/Alerts';
 import { SearchAudit } from './pages/SearchAudit';
 import { Login } from './pages/Login';
 import { Signup } from './pages/Signup';
+import { CheckEmail } from './pages/CheckEmail';
+import { VerifyEmail } from './pages/VerifyEmail';
 import { AgentCreate } from './pages/AgentCreate';
 import { Settings } from './pages/Settings';
 import { Gateways } from './pages/Gateways';
@@ -22,6 +24,10 @@ import { Chat } from './pages/Chat';
 import { Boards } from './pages/Boards';
 import { BoardDetail } from './pages/BoardDetail';
 import { Approvals } from './pages/Approvals';
+import { SkillsMarketplace } from './pages/SkillsMarketplace';
+import { SoulTemplates } from './pages/SoulTemplates';
+import { CustomFields } from './pages/CustomFields';
+import { Invitations } from './pages/Invitations';
 import { LandingPage } from './pages/landing/LandingPage';
 import { DocsLayout } from './pages/docs/DocsLayout';
 import { DocsGettingStarted } from './pages/docs/DocsGettingStarted';
@@ -63,6 +69,8 @@ export function App() {
       <Route path="/" element={<RootRedirect />} />
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
+      <Route path="/check-email" element={<CheckEmail />} />
+      <Route path="/verify-email" element={<VerifyEmail />} />
 
       {/* Documentation (public) */}
       <Route path="/docs" element={<DocsLayout />}>
@@ -97,6 +105,10 @@ export function App() {
           <Route path="/boards/:id" element={<BoardDetail />} />
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/chat" element={<Chat />} />
+          <Route path="/skills" element={<SkillsMarketplace />} />
+          <Route path="/soul-templates" element={<SoulTemplates />} />
+          <Route path="/custom-fields" element={<CustomFields />} />
+          <Route path="/invitations" element={<Invitations />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
       </Route>

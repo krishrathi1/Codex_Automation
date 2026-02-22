@@ -258,10 +258,10 @@ export function IntegrationSection() {
         {/* Section heading */}
         <div className="mb-16 text-center">
           <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            What You Can Build
+            Agentic Workflow Use Cases
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-lg text-gray-400">
-            Nexus is the control plane for any AI agent workflow
+            Nexus is the mission control for any enterprise AI agent workflow
           </p>
         </div>
 

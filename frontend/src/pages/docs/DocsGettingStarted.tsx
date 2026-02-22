@@ -1,14 +1,16 @@
-import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { DocSection } from './components/DocSection';
+import { SEO } from '../../components/SEO';
 
 export function DocsGettingStarted() {
-  useEffect(() => {
-    document.title = 'Getting Started with Nexus';
-  }, []);
-
   return (
     <div>
+      <SEO
+        title="Getting Started with Nexus — AI Agent Platform Documentation"
+        description="Learn how to set up Nexus, the AI agent orchestration platform by Blostem. Connect gateways, deploy autonomous AI agents, and start building agentic workflows in minutes."
+        canonical="https://nexus.blostem.com/docs"
+        keywords="AI agent setup, getting started AI agents, Nexus documentation, Blostem AI platform, agentic workflow tutorial, AI agent deployment guide"
+      />
       <h1 className="text-4xl font-bold text-white mb-2">Getting Started with Nexus</h1>
       <p className="text-gray-400 text-lg mb-10">
         Everything you need to set up your AI agent monitoring platform.

@@ -1,14 +1,16 @@
-import { useEffect } from 'react';
 import { DocSection } from './components/DocSection';
 import { EndpointBlock } from './components/EndpointBlock';
+import { SEO } from '../../components/SEO';
 
 export function DocsApiReference() {
-  useEffect(() => {
-    document.title = 'API Reference - Nexus Docs';
-  }, []);
-
   return (
     <div>
+      <SEO
+        title="API Reference — Nexus AI Agent Platform"
+        description="Complete REST API documentation for the Nexus AI agent orchestration platform. Endpoints for agents, boards, tasks, approvals, gateways, and more. Built by Blostem."
+        canonical="https://nexus.blostem.com/docs/api-reference"
+        keywords="AI agent API, REST API reference, agent orchestration API, Nexus API documentation, Blostem AI platform API"
+      />
       <h1 className="text-4xl font-bold text-white mb-2">API Reference</h1>
       <p className="text-gray-400 text-lg mb-10">
         Complete REST API documentation for the Nexus platform.

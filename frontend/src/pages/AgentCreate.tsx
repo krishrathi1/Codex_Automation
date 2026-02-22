@@ -1,15 +1,115 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import type { Agent, Gateway, McpServer, McpTool } from '@/types';
+import type { Agent, Gateway, McpServer, McpTool, LlmProvider, SoulTemplate, MarketplaceSkill, AgentSkill } from '@/types';
 
 interface McpServerWithTools extends McpServer {
   tools?: McpTool[];
   _loadingTools?: boolean;
   _expanded?: boolean;
 }
+
+// ── Emoji Picker ─────────────────────────────────────────
+const EMOJI_OPTIONS = [
+  { emoji: '\u{1F916}', label: 'Robot' },
+  { emoji: '\u{1F9E0}', label: 'Brain' },
+  { emoji: '\u{26A1}',  label: 'Zap' },
+  { emoji: '\u{1F680}', label: 'Rocket' },
+  { emoji: '\u{1F50D}', label: 'Search' },
+  { emoji: '\u{1F4BB}', label: 'Laptop' },
+  { emoji: '\u{1F6E0}\uFE0F', label: 'Tools' },
+  { emoji: '\u{2699}\uFE0F',  label: 'Gear' },
+  { emoji: '\u{1F4CA}', label: 'Chart' },
+  { emoji: '\u{1F3AF}', label: 'Target' },
+  { emoji: '\u{1F4DD}', label: 'Memo' },
+  { emoji: '\u{1F50E}', label: 'Magnify' },
+  { emoji: '\u{1F9D1}\u200D\u{1F4BB}', label: 'Dev' },
+  { emoji: '\u{1F4E1}', label: 'Satellite' },
+  { emoji: '\u{1F9EA}', label: 'Test Tube' },
+  { emoji: '\u{1F525}', label: 'Fire' },
+  { emoji: '\u{1F30D}', label: 'Globe' },
+  { emoji: '\u{1F512}', label: 'Lock' },
+  { emoji: '\u{1F4A1}', label: 'Idea' },
+  { emoji: '\u{1F4E6}', label: 'Package' },
+  { emoji: '\u{1F332}', label: 'Tree' },
+  { emoji: '\u{2B50}',  label: 'Star' },
+  { emoji: '\u{1F40D}', label: 'Snake' },
+  { emoji: '\u{1F431}', label: 'Cat' },
+];
+
+function EmojiPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    if (open) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={cn(
+          'w-full flex items-center gap-3 px-3 py-2 rounded-lg bg-surface-900 border text-sm transition-all',
+          open ? 'border-nexus-500/50' : 'border-white/10 hover:border-white/20'
+        )}
+      >
+        <span className="text-2xl leading-none w-8 h-8 flex items-center justify-center rounded-lg bg-surface-850">
+          {value || <span className="text-gray-600 text-base">?</span>}
+        </span>
+        <span className="text-gray-400 text-xs">{value ? 'Change avatar' : 'Pick an avatar'}</span>
+        <svg className={cn('w-3.5 h-3.5 text-gray-500 ml-auto transition-transform', open && 'rotate-180')} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1.5 left-0 w-full rounded-lg bg-surface-900 border border-white/10 shadow-xl shadow-black/40 p-2">
+          <div className="grid grid-cols-6 gap-1">
+            {EMOJI_OPTIONS.map(({ emoji, label }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => { onChange(emoji); setOpen(false); }}
+                title={label}
+                className={cn(
+                  'w-full aspect-square rounded-lg flex items-center justify-center text-xl hover:bg-white/10 transition-colors',
+                  value === emoji ? 'bg-nexus-600/20 ring-1 ring-nexus-500/40' : ''
+                )}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+          {value && (
+            <button
+              type="button"
+              onClick={() => { onChange(''); setOpen(false); }}
+              className="w-full mt-1.5 px-2 py-1.5 rounded text-[11px] text-gray-500 hover:text-gray-300 hover:bg-white/5 transition-all text-center"
+            >
+              Remove avatar
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const KNOWN_PROVIDERS = [
+  { id: 'openai', label: 'OpenAI', placeholder: 'sk-...' },
+  { id: 'anthropic', label: 'Anthropic', placeholder: 'sk-ant-...' },
+  { id: 'google', label: 'Google AI', placeholder: 'AIza...' },
+  { id: 'mistral', label: 'Mistral', placeholder: 'mis-...' },
+  { id: 'groq', label: 'Groq', placeholder: 'gsk_...' },
+  { id: 'openrouter', label: 'OpenRouter', placeholder: 'sk-or-...' },
+];
 
 function toSlug(name: string): string {
   return name
@@ -32,10 +132,25 @@ export function AgentCreate() {
   const [avatar, setAvatar] = useState('');
   const [heartbeatInterval, setHeartbeatInterval] = useState(30);
   const [enabled, setEnabled] = useState(true);
+  const [agentToAgent, setAgentToAgent] = useState(false);
   const [soulMd, setSoulMd] = useState('');
   const [nameManuallyEdited, setNameManuallyEdited] = useState(false);
   const [gatewayId, setGatewayId] = useState('');
   const [gateways, setGateways] = useState<Gateway[]>([]);
+
+  // LLM provider state
+  const [llmProviders, setLlmProviders] = useState<LlmProvider[]>([]);
+  const [llmLoading, setLlmLoading] = useState(true);
+  const [llmMode, setLlmMode] = useState<'BYOK' | 'PLATFORM'>('BYOK');
+  const [llmProvider, setLlmProvider] = useState('openai');
+  const [llmApiKey, setLlmApiKey] = useState('');
+  const [llmSaving, setLlmSaving] = useState(false);
+  const [llmMessage, setLlmMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [showLlmSetup, setShowLlmSetup] = useState(false);
+
+  // Advanced settings
+  const [showAdvanced, setShowAdvanced] = useState(isEditMode);
+  const [gatewayInfo, setGatewayInfo] = useState<{ hasDefaultConfig: boolean; gatewayCount: number } | null>(null);
 
   // MCP state
   const [mcpServers, setMcpServers] = useState<McpServerWithTools[]>([]);
@@ -47,6 +162,17 @@ export function AgentCreate() {
   const [refreshingServer, setRefreshingServer] = useState<string | null>(null);
   const [deletingServer, setDeletingServer] = useState<string | null>(null);
 
+  // Soul template state
+  const [soulTemplates, setSoulTemplates] = useState<SoulTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+
+  // Skills state
+  const [availableSkills, setAvailableSkills] = useState<MarketplaceSkill[]>([]);
+  const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(new Set());
+  const [agentSkills, setAgentSkills] = useState<AgentSkill[]>([]);
+  const [editingSkillId, setEditingSkillId] = useState<string | null>(null);
+  const [skillCustomizations, setSkillCustomizations] = useState<Record<string, { customName: string; customDescription: string }>>({});
+
   // General state
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -54,9 +180,19 @@ export function AgentCreate() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load gateways
+  // Load gateways, gateway defaults, and LLM providers
   useEffect(() => {
     api.gateways.list().then(setGateways).catch(() => {});
+    api.gateways.defaults().then(setGatewayInfo).catch(() => {});
+    api.soulTemplates.list().then(setSoulTemplates).catch(() => {});
+    api.skills.marketplace().then(setAvailableSkills).catch(() => {});
+    api.llmProviders.usage()
+      .then((data) => {
+        setLlmProviders(data.providers);
+        if (data.providers.length === 0) setShowLlmSetup(true);
+      })
+      .catch(() => {})
+      .finally(() => setLlmLoading(false));
   }, []);
 
   // Load agent data in edit mode
@@ -73,9 +209,27 @@ export function AgentCreate() {
         setAvatar(agent.avatar || '');
         setHeartbeatInterval(agent.heartbeatInterval);
         setEnabled(agent.enabled);
+        setAgentToAgent(agent.agentToAgent ?? false);
         setSoulMd(agent.soulMd || '');
         setGatewayId(agent.gatewayId || '');
+        setSelectedTemplateId(agent.soulTemplateId || '');
         setNameManuallyEdited(true);
+
+        // Load agent skills
+        if (agent.agentSkills) {
+          setAgentSkills(agent.agentSkills);
+          setSelectedSkillIds(new Set(agent.agentSkills.map((s: AgentSkill) => s.skillId)));
+          const customizations: Record<string, { customName: string; customDescription: string }> = {};
+          agent.agentSkills.forEach((s: AgentSkill) => {
+            if (s.customName || s.customDescription) {
+              customizations[s.skillId] = {
+                customName: s.customName || '',
+                customDescription: s.customDescription || '',
+              };
+            }
+          });
+          setSkillCustomizations(customizations);
+        }
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
@@ -109,6 +263,57 @@ export function AgentCreate() {
     setName(toSlug(value));
   };
 
+  // Soul template selection
+  const handleTemplateSelect = (templateId: string) => {
+    setSelectedTemplateId(templateId);
+    if (templateId) {
+      const template = soulTemplates.find(t => t.id === templateId);
+      if (template) {
+        setSoulMd(template.content);
+      }
+    }
+  };
+
+  // Skill toggle
+  const handleSkillToggle = (skillId: string) => {
+    setSelectedSkillIds(prev => {
+      const next = new Set(prev);
+      if (next.has(skillId)) {
+        next.delete(skillId);
+        if (editingSkillId === skillId) setEditingSkillId(null);
+      } else {
+        next.add(skillId);
+      }
+      return next;
+    });
+  };
+
+  // Save LLM provider
+  const handleSaveLlmProvider = async () => {
+    if (llmMode === 'BYOK' && !llmApiKey.trim()) {
+      setLlmMessage({ type: 'error', text: 'API key is required for BYOK mode' });
+      return;
+    }
+    setLlmSaving(true);
+    setLlmMessage(null);
+    try {
+      await api.llmProviders.upsert({
+        provider: llmProvider,
+        mode: llmMode,
+        ...(llmMode === 'BYOK' && { apiKey: llmApiKey.trim() }),
+      });
+      const data = await api.llmProviders.usage();
+      setLlmProviders(data.providers);
+      setLlmMessage({ type: 'success', text: `${KNOWN_PROVIDERS.find((p) => p.id === llmProvider)?.label || llmProvider} provider configured` });
+      setShowLlmSetup(false);
+      setLlmApiKey('');
+    } catch (err: unknown) {
+      setLlmMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to save provider' });
+    } finally {
+      setLlmSaving(false);
+    }
+  };
+
   // Form submit
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -119,7 +324,9 @@ export function AgentCreate() {
     setSaving(true);
     setError(null);
     try {
-      const data = {
+      // Only send gatewayId if user explicitly selected one (not auto-provisioned)
+      const shouldSendGateway = gatewayId && !(gatewayInfo?.hasDefaultConfig && gatewayInfo.gatewayCount <= 1 && !showAdvanced);
+      const data: Record<string, unknown> = {
         name: name.trim(),
         displayName: displayName.trim(),
         description: description.trim(),
@@ -127,14 +334,56 @@ export function AgentCreate() {
         avatar: avatar.trim() || undefined,
         heartbeatInterval,
         enabled,
+        agentToAgent,
         soulMd: soulMd.trim() || undefined,
-        gatewayId: gatewayId || undefined,
+        soulTemplateId: selectedTemplateId || null,
+        gatewayId: shouldSendGateway ? gatewayId : undefined,
       };
+      const skillIdsArray = Array.from(selectedSkillIds);
+
       if (isEditMode && id) {
         await api.agents.update(id, data);
+
+        // Sync skills: compute diff
+        const currentSkillIds = new Set(agentSkills.map(s => s.skillId));
+        // Remove deselected
+        for (const sid of currentSkillIds) {
+          if (!selectedSkillIds.has(sid)) {
+            await api.agents.removeSkill(id, sid);
+          }
+        }
+        // Add newly selected
+        const toAdd = skillIdsArray.filter(sid => !currentSkillIds.has(sid));
+        if (toAdd.length > 0) {
+          await api.agents.assignSkills(id, toAdd);
+        }
+        // Update customizations
+        for (const sid of selectedSkillIds) {
+          const custom = skillCustomizations[sid];
+          if (custom && (custom.customName || custom.customDescription)) {
+            await api.agents.updateSkill(id, sid, {
+              customName: custom.customName || null,
+              customDescription: custom.customDescription || null,
+            });
+          }
+        }
+
         navigate(`/agents/${id}`);
       } else {
+        data.skillIds = skillIdsArray;
         const created = (await api.agents.create(data)) as Agent;
+
+        // Update customizations for newly created agent
+        for (const sid of selectedSkillIds) {
+          const custom = skillCustomizations[sid];
+          if (custom && (custom.customName || custom.customDescription)) {
+            await api.agents.updateSkill(created.id, sid, {
+              customName: custom.customName || null,
+              customDescription: custom.customDescription || null,
+            });
+          }
+        }
+
         navigate(`/agents/${created.id}`);
       }
     } catch (err: unknown) {
@@ -294,9 +543,9 @@ export function AgentCreate() {
         <div className="flex gap-6">
           {/* Left column: Form + SOUL.md */}
           <div className={cn('flex flex-col gap-6', isEditMode ? 'w-2/3' : 'w-full max-w-3xl')}>
-            {/* Agent Form Card */}
+            {/* About Your Agent — Primary Fields */}
             <div className="rounded-xl border border-white/5 bg-surface-850 p-5">
-              <h3 className="text-sm font-semibold text-white mb-4">Agent Details</h3>
+              <h3 className="text-sm font-semibold text-white mb-4">About Your Agent</h3>
               <div className="grid grid-cols-2 gap-4">
                 {/* Display Name */}
                 <div className="col-span-2 sm:col-span-1">
@@ -313,20 +562,12 @@ export function AgentCreate() {
                   />
                 </div>
 
-                {/* Name (slug) */}
+                {/* Avatar Emoji Picker */}
                 <div className="col-span-2 sm:col-span-1">
                   <label className="block text-xs font-medium text-gray-400 mb-1.5">
-                    Name{' '}
-                    <span className="text-gray-600 font-normal">(identifier, lowercase + hyphens)</span>
+                    Avatar
                   </label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => handleNameChange(e.target.value)}
-                    placeholder="my-agent"
-                    className="w-full px-3 py-2 rounded-lg bg-surface-900 border border-white/10 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-nexus-500/50 font-mono"
-                    required
-                  />
+                  <EmojiPicker value={avatar} onChange={setAvatar} />
                 </div>
 
                 {/* Description */}
@@ -343,103 +584,442 @@ export function AgentCreate() {
                   />
                 </div>
 
-                {/* Workspace */}
-                <div className="col-span-2 sm:col-span-1">
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
-                    Workspace <span className="text-gray-600 font-normal">(optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={workspace}
-                    onChange={(e) => setWorkspace(e.target.value)}
-                    placeholder="/home/ubuntu/project"
-                    className="w-full px-3 py-2 rounded-lg bg-surface-900 border border-white/10 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-nexus-500/50 font-mono"
-                  />
-                </div>
-
-                {/* Gateway */}
-                <div className="col-span-2 sm:col-span-1">
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
-                    Gateway <span className="text-gray-600 font-normal">(OpenClaw instance)</span>
-                  </label>
-                  <select
-                    value={gatewayId}
-                    onChange={(e) => setGatewayId(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg bg-surface-900 border border-white/10 text-sm text-white focus:outline-none focus:border-nexus-500/50"
-                  >
-                    <option value="">No gateway</option>
-                    {gateways.map((gw) => (
-                      <option key={gw.id} value={gw.id}>
-                        {gw.name} {gw.status === 'ONLINE' ? '' : `(${gw.status.toLowerCase()})`}
-                      </option>
-                    ))}
-                  </select>
-                  {gateways.length === 0 && (
-                    <p className="text-[11px] text-gray-600 mt-1">
-                      No gateways configured.{' '}
-                      <Link to="/gateways" className="text-nexus-400 hover:text-nexus-300">
-                        Add one
-                      </Link>
-                    </p>
-                  )}
-                </div>
-
-                {/* Avatar */}
-                <div className="col-span-1">
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
-                    Avatar <span className="text-gray-600 font-normal">(emoji)</span>
-                  </label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="text"
-                      value={avatar}
-                      onChange={(e) => setAvatar(e.target.value)}
-                      placeholder="e.g. robot face emoji"
-                      maxLength={4}
-                      className="w-24 px-3 py-2 rounded-lg bg-surface-900 border border-white/10 text-sm text-white text-center placeholder-gray-500 focus:outline-none focus:border-nexus-500/50 text-lg"
-                    />
-                    {avatar && <span className="text-2xl">{avatar}</span>}
-                  </div>
-                </div>
-
-                {/* Heartbeat Interval */}
-                <div className="col-span-1">
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
-                    Heartbeat Interval <span className="text-gray-600 font-normal">(minutes)</span>
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={heartbeatInterval}
-                    onChange={(e) => setHeartbeatInterval(parseInt(e.target.value) || 1)}
-                    className="w-32 px-3 py-2 rounded-lg bg-surface-900 border border-white/10 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-nexus-500/50"
-                  />
-                </div>
-
-                {/* Enabled toggle */}
-                <div className="col-span-1 flex items-end pb-1">
-                  <label className="flex items-center gap-3 cursor-pointer">
+                {/* Agent-to-Agent Toggle */}
+                <div className="col-span-2">
+                  <div className="flex items-center justify-between px-4 py-3 rounded-lg bg-surface-900 border border-white/10">
+                    <div>
+                      <p className="text-sm font-medium text-white">Agent-to-Agent (A2A)</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Allow this agent to discover and communicate with other A2A-enabled agents
+                      </p>
+                    </div>
                     <button
                       type="button"
-                      onClick={() => setEnabled(!enabled)}
+                      onClick={() => setAgentToAgent(!agentToAgent)}
                       className={cn(
-                        'relative w-11 h-6 rounded-full transition-colors duration-200',
-                        enabled ? 'bg-emerald-500' : 'bg-gray-600'
+                        'relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0 ml-4',
+                        agentToAgent ? 'bg-nexus-500' : 'bg-gray-600'
                       )}
                     >
                       <div
                         className={cn(
                           'absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform duration-200',
-                          enabled ? 'translate-x-5.5' : 'translate-x-0.5'
+                          agentToAgent ? 'translate-x-5.5' : 'translate-x-0.5'
                         )}
                       />
                     </button>
-                    <span className="text-xs font-medium text-gray-400">
-                      {enabled ? 'Enabled' : 'Disabled'}
-                    </span>
-                  </label>
+                  </div>
                 </div>
               </div>
+
+              {/* Gateway warning — only when no auto-provisioning and no gateways */}
+              {gatewayInfo && !gatewayInfo.hasDefaultConfig && gatewayInfo.gatewayCount === 0 && (
+                <div className="mt-4 px-3 py-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-amber-400 text-xs">
+                  No agent connection available. Contact your admin or{' '}
+                  <Link to="/gateways" className="underline hover:text-amber-300">configure a gateway</Link>.
+                </div>
+              )}
+            </div>
+
+            {/* Advanced Settings — Collapsible */}
+            <div className="rounded-xl border border-white/5 bg-surface-850">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="w-full flex items-center justify-between px-5 py-4 text-sm font-medium text-gray-400 hover:text-gray-200 transition-all"
+              >
+                <span>Advanced Settings</span>
+                <svg
+                  className={cn('w-4 h-4 transition-transform', showAdvanced && 'rotate-180')}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {showAdvanced && (
+                <div className="px-5 pb-5 pt-0 grid grid-cols-2 gap-4 border-t border-white/5">
+                  {/* Internal ID (slug) */}
+                  <div className="col-span-2 sm:col-span-1">
+                    <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                      Internal ID{' '}
+                      <span className="text-gray-600 font-normal">(auto-generated)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={(e) => handleNameChange(e.target.value)}
+                      placeholder="my-agent"
+                      className="w-full px-3 py-2 rounded-lg bg-surface-900 border border-white/10 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-nexus-500/50 font-mono"
+                      required
+                    />
+                  </div>
+
+                  {/* Connection Gateway — hidden when auto-provisioned with 0-1 gateways */}
+                  {!(gatewayInfo?.hasDefaultConfig && gatewayInfo.gatewayCount <= 1) && (
+                    <div className="col-span-2 sm:col-span-1">
+                      <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                        Connection Gateway
+                      </label>
+                      <select
+                        value={gatewayId}
+                        onChange={(e) => setGatewayId(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg bg-surface-900 border border-white/10 text-sm text-white focus:outline-none focus:border-nexus-500/50"
+                      >
+                        <option value="">Auto (default)</option>
+                        {gateways.map((gw) => (
+                          <option key={gw.id} value={gw.id}>
+                            {gw.name} {gw.status === 'ONLINE' ? '' : `(${gw.status.toLowerCase()})`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Health Check Frequency */}
+                  <div className="col-span-1">
+                    <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                      Health Check Frequency <span className="text-gray-600 font-normal">(minutes)</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={heartbeatInterval}
+                      onChange={(e) => setHeartbeatInterval(parseInt(e.target.value) || 1)}
+                      className="w-32 px-3 py-2 rounded-lg bg-surface-900 border border-white/10 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-nexus-500/50"
+                    />
+                  </div>
+
+                  {/* Enabled toggle */}
+                  <div className="col-span-1 flex items-end pb-1">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <button
+                        type="button"
+                        onClick={() => setEnabled(!enabled)}
+                        className={cn(
+                          'relative w-11 h-6 rounded-full transition-colors duration-200',
+                          enabled ? 'bg-emerald-500' : 'bg-gray-600'
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            'absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform duration-200',
+                            enabled ? 'translate-x-5.5' : 'translate-x-0.5'
+                          )}
+                        />
+                      </button>
+                      <span className="text-xs font-medium text-gray-400">
+                        {enabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* LLM Configuration */}
+            <div className="rounded-xl border border-white/5 bg-surface-850 p-5">
+              <div className="flex items-center justify-between mb-1">
+                <h3 className="text-sm font-semibold text-white">LLM Configuration</h3>
+                {llmProviders.length > 0 && !showLlmSetup && (
+                  <button
+                    type="button"
+                    onClick={() => setShowLlmSetup(true)}
+                    className="px-3 py-1 rounded-lg text-xs font-medium bg-white/5 border border-white/10 text-gray-400 hover:bg-white/10 hover:text-gray-200 transition-all"
+                  >
+                    + Add Provider
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-gray-500 mb-4">
+                Choose how this agent accesses LLM services — bring your own API key or use platform credits
+              </p>
+
+              {/* Status message */}
+              {llmMessage && (
+                <div
+                  className={cn(
+                    'text-sm px-3 py-2 rounded-lg border mb-3',
+                    llmMessage.type === 'success'
+                      ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
+                      : 'text-red-400 bg-red-500/10 border-red-500/30'
+                  )}
+                >
+                  {llmMessage.text}
+                </div>
+              )}
+
+              {llmLoading ? (
+                <div className="text-gray-500 text-xs py-4 text-center">Loading LLM providers...</div>
+              ) : (
+                <>
+                  {/* Existing providers */}
+                  {llmProviders.length > 0 && (
+                    <div className="space-y-2 mb-3">
+                      {llmProviders.map((provider) => {
+                        const info = KNOWN_PROVIDERS.find((p) => p.id === provider.provider);
+                        return (
+                          <div
+                            key={provider.id}
+                            className="rounded-lg border border-white/5 bg-surface-900 px-3 py-2.5 flex items-center gap-3"
+                          >
+                            <div className="w-8 h-8 rounded-lg bg-surface-850 border border-white/5 flex items-center justify-center text-xs font-bold text-white shrink-0">
+                              {(info?.label || provider.provider).charAt(0).toUpperCase()}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium text-white">
+                                  {info?.label || provider.provider}
+                                </span>
+                                <span
+                                  className={cn(
+                                    'text-[10px] px-1.5 py-0.5 rounded font-medium uppercase border',
+                                    provider.mode === 'BYOK'
+                                      ? 'text-blue-400 bg-blue-500/10 border-blue-500/30'
+                                      : 'text-purple-400 bg-purple-500/10 border-purple-500/30'
+                                  )}
+                                >
+                                  {provider.mode}
+                                </span>
+                                {provider.isActive && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium uppercase text-emerald-400 bg-emerald-500/10 border border-emerald-500/30">
+                                    Active
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* No providers warning */}
+                  {llmProviders.length === 0 && !showLlmSetup && (
+                    <div className="text-center py-4 rounded-lg border border-amber-500/20 bg-amber-500/5 mb-3">
+                      <p className="text-amber-400 text-sm font-medium">No LLM provider configured</p>
+                      <p className="text-gray-500 text-xs mt-1">Set up a provider so your agent can use LLM services</p>
+                      <button
+                        type="button"
+                        onClick={() => setShowLlmSetup(true)}
+                        className="mt-3 px-4 py-1.5 rounded-lg text-xs font-medium bg-nexus-600 text-white hover:bg-nexus-500 transition-colors"
+                      >
+                        Configure Provider
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Add/Setup form */}
+                  {showLlmSetup && (
+                    <div className="rounded-lg border border-white/10 bg-surface-900 p-4">
+                      <div className="space-y-3">
+                        {/* Mode selection cards */}
+                        <div>
+                          <label className="block text-xs font-medium text-gray-400 mb-2">
+                            How should your agent access LLM services?
+                          </label>
+                          <div className="grid grid-cols-2 gap-3">
+                            <button
+                              type="button"
+                              onClick={() => setLlmMode('BYOK')}
+                              className={cn(
+                                'p-3 rounded-lg border text-left transition-all',
+                                llmMode === 'BYOK'
+                                  ? 'border-blue-500/50 bg-blue-500/10'
+                                  : 'border-white/10 bg-surface-850 hover:border-white/20'
+                              )}
+                            >
+                              <div className="flex items-center gap-2 mb-1.5">
+                                <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+                                </svg>
+                                <span className={cn('text-sm font-medium', llmMode === 'BYOK' ? 'text-blue-400' : 'text-gray-300')}>
+                                  Bring Your Own Key
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-gray-500">Use your own API key from any provider</p>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setLlmMode('PLATFORM')}
+                              className={cn(
+                                'p-3 rounded-lg border text-left transition-all',
+                                llmMode === 'PLATFORM'
+                                  ? 'border-purple-500/50 bg-purple-500/10'
+                                  : 'border-white/10 bg-surface-850 hover:border-white/20'
+                              )}
+                            >
+                              <div className="flex items-center gap-2 mb-1.5">
+                                <svg className="w-4 h-4 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z" />
+                                </svg>
+                                <span className={cn('text-sm font-medium', llmMode === 'PLATFORM' ? 'text-purple-400' : 'text-gray-300')}>
+                                  Platform Managed
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-gray-500">Use Nexus credits, billed per token</p>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Provider selection */}
+                        <div>
+                          <label className="block text-xs font-medium text-gray-400 mb-1.5">Provider</label>
+                          <select
+                            value={llmProvider}
+                            onChange={(e) => setLlmProvider(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg bg-surface-850 border border-white/10 text-sm text-white focus:outline-none focus:border-nexus-500/50"
+                          >
+                            {KNOWN_PROVIDERS.map((p) => {
+                              const alreadyConfigured = llmProviders.some((ep) => ep.provider === p.id);
+                              return (
+                                <option key={p.id} value={p.id} disabled={alreadyConfigured}>
+                                  {p.label} {alreadyConfigured ? '(configured)' : ''}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+
+                        {/* BYOK: API key input */}
+                        {llmMode === 'BYOK' && (
+                          <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1.5">API Key</label>
+                            <input
+                              type="password"
+                              value={llmApiKey}
+                              onChange={(e) => setLlmApiKey(e.target.value)}
+                              placeholder={KNOWN_PROVIDERS.find((p) => p.id === llmProvider)?.placeholder || 'Enter API key'}
+                              className="w-full px-3 py-2 rounded-lg bg-surface-850 border border-white/10 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-nexus-500/50"
+                            />
+                          </div>
+                        )}
+
+                        {/* Platform info */}
+                        {llmMode === 'PLATFORM' && (
+                          <p className="text-xs text-gray-500 bg-surface-850 p-3 rounded-lg border border-white/5">
+                            Platform-managed mode uses Nexus credits. Usage is billed per token at standard rates.
+                          </p>
+                        )}
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={handleSaveLlmProvider}
+                            disabled={llmSaving}
+                            className="px-4 py-2 rounded-lg text-sm font-medium bg-nexus-600 text-white hover:bg-nexus-500 transition-colors disabled:opacity-50"
+                          >
+                            {llmSaving ? 'Saving...' : 'Save Provider'}
+                          </button>
+                          {llmProviders.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => { setShowLlmSetup(false); setLlmMessage(null); }}
+                              className="px-4 py-2 rounded-lg text-sm font-medium bg-white/5 border border-white/10 text-gray-400 hover:bg-white/10 transition-all"
+                            >
+                              Cancel
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Skills Selection */}
+            <div className="rounded-xl border border-white/5 bg-surface-850 p-5">
+              <h3 className="text-sm font-semibold text-white mb-1">Skills</h3>
+              <p className="text-xs text-gray-500 mb-3">
+                Select skills from the marketplace to equip this agent
+              </p>
+              {availableSkills.length === 0 ? (
+                <p className="text-xs text-gray-600 py-4 text-center">
+                  No skills available.{' '}
+                  <Link to="/skills" className="text-nexus-400 hover:underline">Add some in the marketplace</Link>
+                </p>
+              ) : (
+                <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                  {availableSkills.map((skill) => {
+                    const isSelected = selectedSkillIds.has(skill.id);
+                    const isEditing = editingSkillId === skill.id;
+                    const riskColor = skill.risk === 'low' ? 'text-emerald-400 bg-emerald-500/10' :
+                      skill.risk === 'medium' ? 'text-amber-400 bg-amber-500/10' :
+                      'text-red-400 bg-red-500/10';
+                    return (
+                      <div key={skill.id} className={cn(
+                        'rounded-lg border px-3 py-2.5 transition-all',
+                        isSelected
+                          ? 'border-nexus-500/30 bg-nexus-500/5'
+                          : 'border-white/5 bg-surface-900 hover:border-white/10'
+                      )}>
+                        <div className="flex items-center gap-3 cursor-pointer" onClick={() => handleSkillToggle(skill.id)}>
+                          <div className={cn(
+                            'w-4 h-4 rounded border flex items-center justify-center shrink-0',
+                            isSelected ? 'bg-nexus-500 border-nexus-500' : 'border-white/20'
+                          )}>
+                            {isSelected && (
+                              <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-white">{skill.name}</span>
+                              <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium uppercase', riskColor)}>{skill.risk}</span>
+                              <span className="text-[10px] text-gray-600">{skill.category}</span>
+                            </div>
+                            <p className="text-xs text-gray-500 truncate">{skill.description || 'No description'}</p>
+                          </div>
+                          {isSelected && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setEditingSkillId(isEditing ? null : skill.id); }}
+                              className="px-2 py-1 rounded text-[11px] font-medium bg-white/5 border border-white/10 text-gray-400 hover:bg-white/10 hover:text-gray-200 transition-all"
+                            >
+                              {isEditing ? 'Done' : 'Customize'}
+                            </button>
+                          )}
+                        </div>
+                        {isSelected && isEditing && (
+                          <div className="mt-2 pt-2 border-t border-white/5 space-y-2">
+                            <div>
+                              <label className="block text-[11px] text-gray-500 mb-1">Custom Name (override)</label>
+                              <input
+                                type="text"
+                                value={skillCustomizations[skill.id]?.customName || ''}
+                                onChange={(e) => setSkillCustomizations(prev => ({
+                                  ...prev,
+                                  [skill.id]: { customName: e.target.value, customDescription: prev[skill.id]?.customDescription || '' }
+                                }))}
+                                placeholder={skill.name}
+                                className="w-full px-2.5 py-1.5 rounded bg-surface-850 border border-white/10 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] text-gray-500 mb-1">Custom Description (override)</label>
+                              <textarea
+                                value={skillCustomizations[skill.id]?.customDescription || ''}
+                                onChange={(e) => setSkillCustomizations(prev => ({
+                                  ...prev,
+                                  [skill.id]: { customName: prev[skill.id]?.customName || '', customDescription: e.target.value }
+                                }))}
+                                rows={2}
+                                placeholder={skill.description || 'Enter custom description'}
+                                className="w-full px-2.5 py-1.5 rounded bg-surface-850 border border-white/10 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50 resize-y"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {selectedSkillIds.size > 0 && (
+                <p className="text-[11px] text-gray-500 mt-2">{selectedSkillIds.size} skill{selectedSkillIds.size !== 1 ? 's' : ''} selected</p>
+              )}
             </div>
 
             {/* SOUL.md Editor */}
@@ -450,6 +1030,29 @@ export function AgentCreate() {
               <p className="text-xs text-gray-500 mb-3">
                 Agent personality and instructions
               </p>
+              {/* Soul Template Picker */}
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                  Start from Template <span className="text-gray-600 font-normal">(optional)</span>
+                </label>
+                <select
+                  value={selectedTemplateId}
+                  onChange={(e) => handleTemplateSelect(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-surface-900 border border-white/10 text-sm text-white focus:outline-none focus:border-nexus-500/50"
+                >
+                  <option value="">Blank — start from scratch</option>
+                  {soulTemplates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} ({t.category})
+                    </option>
+                  ))}
+                </select>
+                {selectedTemplateId && (
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Template content loaded. Customize it below.
+                  </p>
+                )}
+              </div>
               <textarea
                 value={soulMd}
                 onChange={(e) => setSoulMd(e.target.value)}

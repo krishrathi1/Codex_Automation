@@ -1,4 +1,7 @@
 import { prisma } from '../lib/prisma.js';
+import { trace, SpanStatusCode } from '@opentelemetry/api';
+import { logger } from '../lib/logger.js';
+const tracer = trace.getTracer('nexus-session');
 
 export async function getSessions(organizationId: string, params?: { agentId?: string; limit?: number }) {
   const { agentId, limit = 100 } = params ?? {};

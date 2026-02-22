@@ -6,6 +6,15 @@ const router = Router();
 // This router is mounted at both /api/tokens and /api/metrics.
 // We use req.baseUrl to determine which resource is being requested.
 
+// GET /dashboard — time-series analytics with KPIs
+router.get('/dashboard', async (req, res) => {
+  const range = req.query.range as string | undefined;
+  const boardId = req.query.boardId as string | undefined;
+  const groupId = req.query.groupId as string | undefined;
+  const dashboard = await metricsService.getDashboardMetrics(req.organizationId!, { range, boardId, groupId });
+  res.json(dashboard);
+});
+
 // GET / — list (tokens or metrics depending on mount point)
 router.get('/', async (req, res) => {
   if (req.baseUrl.endsWith('/tokens')) {

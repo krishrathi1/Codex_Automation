@@ -303,11 +303,11 @@ export function FeatureGrid() {
         {/* Section heading */}
         <div className="mb-16 text-center">
           <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            Built for AI Agent Operators
+            Enterprise AI Agent Management Features
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-lg text-gray-400">
             Everything you need to deploy, manage, and control autonomous AI
-            agents at scale.
+            agents at scale with enterprise-grade agentic workflows.
           </p>
         </div>
 

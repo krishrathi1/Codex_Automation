@@ -1,4 +1,4 @@
-import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, Gateway, GatewayHealth, ModelInfo, ChatHistory, ChatResponse, WorkspaceFile, LlmProvider, UsageCredit, Board, BoardGroup, Approval } from '../types';
+import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, Gateway, GatewayHealth, ModelInfo, ChatHistory, ChatResponse, WorkspaceFile, LlmProvider, UsageCredit, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate } from '../types';
 import { useAuthStore } from '../stores/auth-store';
 
 const BASE_URL = '/api';
@@ -31,8 +31,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
         headers: { ...headers, ...options?.headers },
       });
     } else {
+      // Clear auth state — ProtectedRoute will redirect to /login
+      // without a hard page reload (preserves SPA navigation)
       useAuthStore.getState().clearAuth();
-      window.location.href = '/login';
       throw new Error('Session expired');
     }
   }
@@ -59,9 +60,13 @@ async function requestPublic<T>(path: string, options?: RequestInit): Promise<T>
 export const api = {
   auth: {
     signup: (data: { email: string; password: string; name: string; orgName: string }) =>
-      requestPublic('/auth/signup', { method: 'POST', body: JSON.stringify(data) }),
+      requestPublic<{ user: { id: string; email: string; name: string }; requiresVerification: boolean }>('/auth/signup', { method: 'POST', body: JSON.stringify(data) }),
     login: (data: { email: string; password: string }) =>
       requestPublic('/auth/login', { method: 'POST', body: JSON.stringify(data) }),
+    verifyEmail: (token: string) =>
+      requestPublic<{ message: string }>('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) }),
+    resendVerification: (email: string) =>
+      requestPublic<{ message: string }>('/auth/resend-verification', { method: 'POST', body: JSON.stringify({ email }) }),
     refresh: () =>
       requestPublic('/auth/refresh', { method: 'POST' }),
     me: () => request('/auth/me'),
@@ -89,6 +94,15 @@ export const api = {
     update: (id: string, data: Record<string, unknown>) =>
       request(`/agents/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     delete: (id: string) => request(`/agents/${id}`, { method: 'DELETE' }),
+    toggleA2a: (id: string, enabled: boolean) =>
+      request<Agent>(`/agents/${id}/a2a`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
+    listSkills: (id: string) => request<AgentSkill[]>(`/agents/${id}/skills`),
+    assignSkills: (id: string, skillIds: string[]) =>
+      request<AgentSkill[]>(`/agents/${id}/skills`, { method: 'POST', body: JSON.stringify({ skillIds }) }),
+    updateSkill: (id: string, skillId: string, data: Record<string, unknown>) =>
+      request<AgentSkill>(`/agents/${id}/skills/${skillId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    removeSkill: (id: string, skillId: string) =>
+      request<void>(`/agents/${id}/skills/${skillId}`, { method: 'DELETE' }),
   },
   mcp: {
     list: (agentId: string) => request(`/agents/${agentId}/mcp-servers`),
@@ -199,6 +213,7 @@ export const api = {
     health: (id: string) => request<GatewayHealth>(`/gateways/${id}/health`),
     models: (id: string) => request<ModelInfo[]>(`/gateways/${id}/models`),
     sessions: (id: string) => request<unknown>(`/gateways/${id}/sessions`),
+    defaults: () => request<{ hasDefaultConfig: boolean; gatewayCount: number }>('/gateways/defaults'),
   },
   chat: {
     history: (agentId: string) => request<ChatHistory>(`/agents/${agentId}/chat/history`),
@@ -259,5 +274,94 @@ export const api = {
     delete: (id: string) => request<void>(`/llm-providers/${id}`, { method: 'DELETE' }),
     test: (id: string) => request<{ success: boolean; message: string }>(`/llm-providers/${id}/test`, { method: 'POST' }),
     usage: () => request<{ credit: UsageCredit | null; providers: LlmProvider[] }>('/llm-providers/usage'),
+    addCredit: (amountCents: number) =>
+      request<UsageCredit>('/llm-providers/credits', { method: 'POST', body: JSON.stringify({ amountCents }) }),
+  },
+
+  // ─── Mission Control Features ──────────────────────
+  tags: {
+    list: () => request<Tag[]>('/tags'),
+    create: (data: { name: string; color?: string; description?: string }) =>
+      request<Tag>('/tags', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: { name?: string; color?: string; description?: string }) =>
+      request<Tag>(`/tags/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    delete: (id: string) => request<void>(`/tags/${id}`, { method: 'DELETE' }),
+    assign: (taskId: string, tagIds: string[]) =>
+      request<TagAssignment[]>('/tags/assign', { method: 'POST', body: JSON.stringify({ taskId, tagIds }) }),
+  },
+  customFields: {
+    list: () => request<TaskCustomFieldDefinition[]>('/custom-fields'),
+    create: (data: { fieldKey: string; label: string; fieldType?: string; uiVisibility?: string; validationRegex?: string; defaultValue?: string }) =>
+      request<TaskCustomFieldDefinition>('/custom-fields', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: Record<string, unknown>) =>
+      request<TaskCustomFieldDefinition>(`/custom-fields/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    delete: (id: string) => request<void>(`/custom-fields/${id}`, { method: 'DELETE' }),
+    attach: (id: string, boardIds: string[]) =>
+      request<BoardTaskCustomField[]>(`/custom-fields/${id}/attach`, { method: 'POST', body: JSON.stringify({ boardIds }) }),
+    boardFields: (boardId: string) => request<BoardTaskCustomField[]>(`/custom-fields/boards/${boardId}`),
+    setValue: (taskId: string, definitionId: string, value: string) =>
+      request<TaskCustomFieldValue>('/custom-fields/values', { method: 'POST', body: JSON.stringify({ taskId, definitionId, value }) }),
+    getValues: (taskId: string) => request<TaskCustomFieldValue[]>(`/custom-fields/values/${taskId}`),
+  },
+  skills: {
+    marketplace: (gatewayId?: string) => request<MarketplaceSkill[]>(`/skills/marketplace${gatewayId ? `?gatewayId=${gatewayId}` : ''}`),
+    createSkill: (data: { name: string; description?: string; category?: string; risk?: string; sourceUrl?: string }) =>
+      request<MarketplaceSkill>('/skills/marketplace', { method: 'POST', body: JSON.stringify(data) }),
+    install: (skillId: string, gatewayId: string) =>
+      request('/skills/marketplace/' + skillId + '/install', { method: 'POST', body: JSON.stringify({ gatewayId }) }),
+    uninstall: (skillId: string, gatewayId: string) =>
+      request('/skills/marketplace/' + skillId + '/uninstall', { method: 'POST', body: JSON.stringify({ gatewayId }) }),
+    packs: () => request<SkillPack[]>('/skills/packs'),
+    createPack: (data: { name: string; description?: string; sourceUrl: string; branch?: string }) =>
+      request<SkillPack>('/skills/packs', { method: 'POST', body: JSON.stringify(data) }),
+    syncPack: (packId: string) =>
+      request('/skills/packs/' + packId + '/sync', { method: 'POST' }),
+  },
+  webhooks: {
+    list: (boardId: string) => request<BoardWebhook[]>(`/boards/${boardId}/webhooks`),
+    create: (boardId: string, data: { description?: string; agentId?: string; enabled?: boolean }) =>
+      request<BoardWebhook>(`/boards/${boardId}/webhooks`, { method: 'POST', body: JSON.stringify(data) }),
+    update: (boardId: string, webhookId: string, data: { description?: string; agentId?: string | null; enabled?: boolean }) =>
+      request<BoardWebhook>(`/boards/${boardId}/webhooks/${webhookId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    delete: (boardId: string, webhookId: string) =>
+      request<void>(`/boards/${boardId}/webhooks/${webhookId}`, { method: 'DELETE' }),
+    payloads: (boardId: string, webhookId: string, limit?: number) =>
+      request<BoardWebhookPayload[]>(`/boards/${boardId}/webhooks/${webhookId}/payloads${limit ? `?limit=${limit}` : ''}`),
+    payload: (boardId: string, webhookId: string, payloadId: string) =>
+      request<BoardWebhookPayload>(`/boards/${boardId}/webhooks/${webhookId}/payloads/${payloadId}`),
+  },
+  onboarding: {
+    start: (boardId: string) =>
+      request<BoardOnboardingSession>(`/boards/${boardId}/onboarding/start`, { method: 'POST' }),
+    message: (boardId: string, sessionId: string, content: string) =>
+      request<BoardOnboardingSession>(`/boards/${boardId}/onboarding/message`, { method: 'POST', body: JSON.stringify({ sessionId, content }) }),
+    get: (boardId: string) => request<BoardOnboardingSession | null>(`/boards/${boardId}/onboarding`),
+    confirm: (boardId: string, sessionId: string) =>
+      request<BoardOnboardingSession>(`/boards/${boardId}/onboarding/confirm`, { method: 'POST', body: JSON.stringify({ sessionId }) }),
+  },
+  boardGroupMemory: {
+    list: (groupId: string, limit?: number) =>
+      request<BoardGroupMemory[]>(`/board-groups/${groupId}/memory${limit ? `?limit=${limit}` : ''}`),
+    add: (groupId: string, data: { content: string; tags?: string[]; isChat?: boolean; source?: string }) =>
+      request<BoardGroupMemory>(`/board-groups/${groupId}/memory`, { method: 'POST', body: JSON.stringify(data) }),
+    delete: (groupId: string, memoryId: string) =>
+      request<void>(`/board-groups/${groupId}/memory/${memoryId}`, { method: 'DELETE' }),
+  },
+  soulTemplates: {
+    list: (category?: string) => request<SoulTemplate[]>(`/soul-templates${category ? `?category=${category}` : ''}`),
+    get: (id: string) => request<SoulTemplate>(`/soul-templates/${id}`),
+    create: (data: { name: string; category?: string; description?: string; content: string }) =>
+      request<SoulTemplate>('/soul-templates', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: Record<string, unknown>) =>
+      request<SoulTemplate>(`/soul-templates/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    delete: (id: string) => request<void>(`/soul-templates/${id}`, { method: 'DELETE' }),
+    search: (q: string) => request<SoulTemplate[]>(`/soul-templates/search?q=${encodeURIComponent(q)}`),
+  },
+  invites: {
+    list: () => request<OrgInvite[]>('/org/invites'),
+    create: (data: { invitedEmail: string; role?: string; allBoardsRead?: boolean; allBoardsWrite?: boolean }) =>
+      request<OrgInvite>('/org/invites', { method: 'POST', body: JSON.stringify(data) }),
+    revoke: (id: string) => request<void>(`/org/invites/${id}`, { method: 'DELETE' }),
+    accept: (token: string) => request('/org/invites/' + token + '/accept', { method: 'POST' }),
   },
 };

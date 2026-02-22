@@ -411,7 +411,19 @@ export function AgentControls() {
       </div>
 
       {agents.length === 0 && (
-        <div className="text-center text-gray-500 py-12">No agents found</div>
+        <div className="rounded-xl border border-dashed border-nexus-500/30 bg-nexus-500/5 p-12 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-nexus-600/20 flex items-center justify-center text-2xl text-nexus-400 mx-auto mb-3">+</div>
+          <h3 className="text-lg font-semibold text-white mb-2">No Agents Yet</h3>
+          <p className="text-sm text-gray-400 mb-5">
+            Create your first agent to start monitoring and controlling it from here.
+          </p>
+          <Link
+            to="/agents/new"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold bg-nexus-600 text-white hover:bg-nexus-500 transition-all"
+          >
+            Create Agent
+          </Link>
+        </div>
       )}
     </div>
   );

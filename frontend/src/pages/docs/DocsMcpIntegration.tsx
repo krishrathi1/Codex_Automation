@@ -1,15 +1,17 @@
-import { useEffect } from 'react';
 import { DocSection } from './components/DocSection';
 import { CodeBlock } from './components/CodeBlock';
 import { EndpointBlock } from './components/EndpointBlock';
+import { SEO } from '../../components/SEO';
 
 export function DocsMcpIntegration() {
-  useEffect(() => {
-    document.title = 'MCP Integration - Nexus Docs';
-  }, []);
-
   return (
     <div>
+      <SEO
+        title="MCP Integration — Connect AI Agent Tools to Nexus"
+        description="Integrate Model Context Protocol (MCP) servers with your AI agents. Connect external tools, data sources, and APIs to autonomous agents using Nexus by Blostem."
+        canonical="https://nexus.blostem.com/docs/mcp-integration"
+        keywords="MCP integration, Model Context Protocol, AI agent tools, AI agent data sources, tool binding, Nexus AI platform, Blostem"
+      />
       <h1 className="text-4xl font-bold text-white mb-2">MCP Integration</h1>
       <p className="text-gray-400 text-lg mb-10">
         Connect your agents to external tools and data sources using Model Context Protocol.

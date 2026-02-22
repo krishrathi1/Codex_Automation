@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import * as orgService from '../services/org.service.js';
+import * as inviteService from '../services/invite.service.js';
+import * as boardAccessService from '../services/board-access.service.js';
 import { requireRole } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 
@@ -76,6 +78,35 @@ router.delete('/members/:id', requireRole('OWNER', 'ADMIN'), async (req, res) =>
   }
 });
 
+// GET /members/:id — get single member with board access
+router.get('/members/:id', async (req, res) => {
+  try {
+    const member = await boardAccessService.getMemberWithAccess(req.params.id as string, req.organizationId!);
+    res.json(member);
+  } catch (e: any) {
+    return res.status(e.statusCode || 404).json({ error: e.message });
+  }
+});
+
+// PUT /members/:id/access — update member board access
+router.put('/members/:id/access', requireRole('OWNER', 'ADMIN'), async (req, res) => {
+  try {
+    const member = await boardAccessService.updateMemberAccess(
+      req.params.id as string,
+      req.organizationId!,
+      {
+        allBoardsRead: req.body.allBoardsRead ?? false,
+        allBoardsWrite: req.body.allBoardsWrite ?? false,
+        boardAccess: req.body.boardAccess ?? [],
+      },
+    );
+    req.app.get('io')?.to(`org:${req.organizationId}`).emit('member:accessUpdated', member);
+    res.json(member);
+  } catch (e: any) {
+    return res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
 // GET /api-keys — list API keys
 router.get('/api-keys', requireRole('OWNER', 'ADMIN'), async (req, res) => {
   const keys = await orgService.getApiKeys(req.organizationId!);
@@ -95,6 +126,43 @@ router.delete('/api-keys/:id', requireRole('OWNER', 'ADMIN'), async (req, res) =
     res.status(204).end();
   } catch (e: any) {
     return res.status(404).json({ error: e.message });
+  }
+});
+
+// ─── Invitations ─────────────────────────────────────────
+router.get('/invites', requireRole('OWNER', 'ADMIN'), async (req, res) => {
+  const invites = await inviteService.listInvites(req.organizationId!);
+  res.json(invites);
+});
+
+router.post('/invites', requireRole('OWNER', 'ADMIN'), async (req, res) => {
+  try {
+    const invite = await inviteService.createInvite(req.organizationId!, {
+      ...req.body,
+      createdByUserId: req.user?.id,
+    });
+    req.app.get('io')?.to(`org:${req.organizationId}`).emit('invite:created', invite);
+    res.status(201).json(invite);
+  } catch (e: any) {
+    if (e.code === 'P2002') {
+      return res.status(409).json({ error: 'An invite for this email already exists' });
+    }
+    return res.status(500).json({ error: 'Failed to create invite' });
+  }
+});
+
+router.delete('/invites/:id', requireRole('OWNER', 'ADMIN'), async (req, res) => {
+  await inviteService.revokeInvite(req.params.id as string, req.organizationId!);
+  res.status(204).end();
+});
+
+router.post('/invites/:token/accept', async (req, res) => {
+  try {
+    const member = await inviteService.acceptInvite(req.params.token as string, req.user!.id);
+    req.app.get('io')?.to(`org:${req.organizationId}`).emit('invite:accepted', member);
+    res.json(member);
+  } catch (e: any) {
+    return res.status(400).json({ error: e.message });
   }
 });
 

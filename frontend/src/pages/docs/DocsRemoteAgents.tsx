@@ -1,15 +1,17 @@
-import { useEffect } from 'react';
 import { DocSection } from './components/DocSection';
 import { CodeBlock } from './components/CodeBlock';
 import { EndpointBlock } from './components/EndpointBlock';
+import { SEO } from '../../components/SEO';
 
 export function DocsRemoteAgents() {
-  useEffect(() => {
-    document.title = 'Remote Agent Tracking - Nexus Docs';
-  }, []);
-
   return (
     <div>
+      <SEO
+        title="Remote AI Agent Tracking — Monitor Agents Anywhere"
+        description="Monitor AI agents running on external servers with heartbeats, activities, and metrics via REST API. Track distributed autonomous agents across infrastructure with Nexus by Blostem."
+        canonical="https://nexus.blostem.com/docs/remote-agents"
+        keywords="remote AI agent monitoring, distributed agent tracking, AI agent heartbeat, agent metrics, autonomous agent monitoring, Blostem AI"
+      />
       <h1 className="text-4xl font-bold text-white mb-2">Remote Agent Tracking</h1>
       <p className="text-gray-400 text-lg mb-10">
         Monitor agents running on external servers by sending heartbeats, activities, and metrics via the REST API.

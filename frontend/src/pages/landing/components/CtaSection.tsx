@@ -1,9 +1,9 @@
 import { Link } from 'react-router-dom';
-import { ArrowRight, CreditCard, Github, Server } from 'lucide-react';
+import { ArrowRight, CreditCard, ShieldCheck, Server } from 'lucide-react';
 
 const trustIndicators = [
   { icon: CreditCard, label: 'No credit card required' },
-  { icon: Github, label: 'Open source' },
+  { icon: ShieldCheck, label: 'Enterprise-grade security' },
   { icon: Server, label: 'Self-hosted option' },
 ];
 
@@ -25,12 +25,13 @@ export function CtaSection() {
       {/* Content */}
       <div className="relative z-10 mx-auto max-w-3xl text-center">
         <h2 className="animate-fade-in-up text-3xl font-bold tracking-tight text-white sm:text-5xl">
-          Ready to take control of your AI&nbsp;agents?
+          Start Building Agentic Workflows&nbsp;Today
         </h2>
 
         <p className="animate-fade-in-up-delay-1 mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-gray-400">
-          Connect your gateway, create your first agent, and start
-          orchestrating&nbsp;&mdash; all in under 5&nbsp;minutes.
+          Connect your gateway, deploy autonomous AI agents, and orchestrate
+          enterprise agentic workflows&nbsp;&mdash; all in under
+          5&nbsp;minutes.
         </p>
 
         {/* CTA Buttons */}

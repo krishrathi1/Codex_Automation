@@ -1,7 +1,28 @@
 import { prisma } from '../lib/prisma.js';
 import type { AgentStatus } from '@prisma/client';
 import { getGatewayClient } from '../openclaw/client.js';
+import { ensureDefaultGateway } from './gateway.service.js';
 import { logger } from '../lib/logger.js';
+import { trace, SpanStatusCode } from '@opentelemetry/api';
+
+// Map Nexus LLM provider names to OpenClaw model identifiers.
+// These must match models in the gateway's agents.defaults.models allowlist.
+const PROVIDER_MODEL_MAP: Record<string, string> = {
+  anthropic: 'anthropic/claude-sonnet-4-5-20250929',
+  openai: 'openai/gpt-4o',
+  google: 'google/gemini-2.0-flash',
+};
+
+async function resolveGatewayModel(organizationId: string): Promise<string | undefined> {
+  const provider = await prisma.llmProvider.findFirst({
+    where: { organizationId },
+    select: { provider: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  return provider ? PROVIDER_MODEL_MAP[provider.provider] : undefined;
+}
+
+const tracer = trace.getTracer('nexus-agent');
 
 export async function getAllAgents(organizationId: string) {
   return prisma.agent.findMany({
@@ -23,6 +44,10 @@ export async function getAgentById(id: string, organizationId: string) {
       },
       tasks: {
         orderBy: { updatedAt: 'desc' },
+      },
+      agentSkills: {
+        include: { skill: true },
+        orderBy: { createdAt: 'asc' },
       },
       _count: { select: { activities: true, tasks: true } },
     },
@@ -71,13 +96,24 @@ export async function createAgent(organizationId: string, data: {
   workspace?: string;
   avatar?: string;
   heartbeatInterval?: number;
+  heartbeatConfig?: Record<string, unknown>;
+  identityProfile?: Record<string, unknown>;
+  identityTemplate?: string;
   soulMd?: string;
+  soulTemplateId?: string;
   enabled?: boolean;
   gatewayId?: string;
 }) {
   // Get org slug for gateway agent naming
   const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { slug: true } });
   const gatewayAgentName = org ? `${org.slug}--${data.name}` : data.name;
+
+  // Auto-provision gateway if none specified
+  let resolvedGatewayId = data.gatewayId;
+  if (!resolvedGatewayId) {
+    const defaultId = await ensureDefaultGateway(organizationId);
+    if (defaultId) resolvedGatewayId = defaultId;
+  }
 
   // Create in DB first
   const agent = await prisma.agent.create({
@@ -89,19 +125,23 @@ export async function createAgent(organizationId: string, data: {
       workspace: data.workspace ?? '',
       avatar: data.avatar ?? null,
       heartbeatInterval: data.heartbeatInterval ?? 30,
+      heartbeatConfig: data.heartbeatConfig as any ?? undefined,
+      identityProfile: data.identityProfile as any ?? undefined,
+      identityTemplate: data.identityTemplate ?? null,
       soulMd: data.soulMd ?? null,
+      soulTemplateId: data.soulTemplateId ?? null,
       enabled: data.enabled ?? true,
-      gatewayId: data.gatewayId ?? null,
+      gatewayId: resolvedGatewayId ?? null,
     },
     include: {
       _count: { select: { activities: true, tasks: true } },
     },
   });
 
-  // If gateway is specified, create real OpenClaw agent
-  if (data.gatewayId) {
+  // If gateway is available, create real OpenClaw agent
+  if (resolvedGatewayId) {
     try {
-      const client = getGatewayClient(data.gatewayId);
+      const client = getGatewayClient(resolvedGatewayId);
       if (client && client.isConnected()) {
         const result = await client.rpc('agents.create', {
           name: gatewayAgentName,
@@ -109,12 +149,23 @@ export async function createAgent(organizationId: string, data: {
           emoji: data.avatar || undefined,
         }) as { agentId: string };
 
-        // Update DB with gateway agent ID
+        // Update DB with gateway agent ID and set status to IDLE (connected)
         await prisma.agent.update({
           where: { id: agent.id },
-          data: { gatewayAgentId: result.agentId },
+          data: { gatewayAgentId: result.agentId, status: 'IDLE' },
         });
         (agent as any).gatewayAgentId = result.agentId;
+        (agent as any).status = 'IDLE';
+
+        // Set model based on org's LLM provider so the gateway uses the right LLM
+        const gatewayModel = await resolveGatewayModel(organizationId);
+        if (gatewayModel) {
+          await client.rpc('agents.update', {
+            agentId: result.agentId,
+            model: gatewayModel,
+          });
+          logger.info({ gatewayAgentId: result.agentId, model: gatewayModel }, 'Set gateway agent model');
+        }
 
         // Set SOUL.md if provided
         if (data.soulMd) {
@@ -122,6 +173,15 @@ export async function createAgent(organizationId: string, data: {
             agentId: result.agentId,
             name: 'SOUL.md',
             content: data.soulMd,
+          });
+        }
+
+        // Set IDENTITY.md if provided
+        if (data.identityTemplate) {
+          await client.rpc('agents.files.set', {
+            agentId: result.agentId,
+            name: 'IDENTITY.md',
+            content: data.identityTemplate,
           });
         }
 
@@ -157,6 +217,72 @@ export async function deleteAgent(id: string, organizationId: string) {
   return prisma.agent.delete({ where: { id, organizationId } });
 }
 
+/**
+ * Sync agents that have a gatewayId but no gatewayAgentId (failed to provision initially).
+ * Called when a gateway (re)connects.
+ */
+export async function syncPendingAgents(gatewayId: string) {
+  const pending = await prisma.agent.findMany({
+    where: { gatewayId, gatewayAgentId: null },
+    include: { organization: { select: { slug: true } } },
+  });
+
+  if (pending.length === 0) return;
+
+  const client = getGatewayClient(gatewayId);
+  if (!client || !client.isConnected()) return;
+
+  for (const agent of pending) {
+    try {
+      const gatewayAgentName = agent.organization?.slug
+        ? `${agent.organization.slug}--${agent.name}`
+        : agent.name;
+
+      const result = await client.rpc('agents.create', {
+        name: gatewayAgentName,
+        workspace: agent.workspace || `~/.openclaw/agents/${gatewayAgentName}`,
+        emoji: agent.avatar || undefined,
+      }) as { agentId: string };
+
+      await prisma.agent.update({
+        where: { id: agent.id },
+        data: { gatewayAgentId: result.agentId, status: 'IDLE' },
+      });
+
+      // Set model based on org's LLM provider
+      const gatewayModel = await resolveGatewayModel(agent.organizationId);
+      if (gatewayModel) {
+        await client.rpc('agents.update', {
+          agentId: result.agentId,
+          model: gatewayModel,
+        });
+      }
+
+      // Set SOUL.md if present
+      if (agent.soulMd) {
+        await client.rpc('agents.files.set', {
+          agentId: result.agentId,
+          name: 'SOUL.md',
+          content: agent.soulMd,
+        });
+      }
+
+      // Set IDENTITY.md if present
+      if (agent.identityTemplate) {
+        await client.rpc('agents.files.set', {
+          agentId: result.agentId,
+          name: 'IDENTITY.md',
+          content: agent.identityTemplate,
+        });
+      }
+
+      logger.info({ agent: agent.name, gatewayAgentId: result.agentId }, 'Synced pending agent to gateway');
+    } catch (err) {
+      logger.warn({ agent: agent.name, err }, 'Failed to sync pending agent');
+    }
+  }
+}
+
 export async function updateAgent(id: string, organizationId: string, data: {
   name?: string;
   displayName?: string;
@@ -164,25 +290,36 @@ export async function updateAgent(id: string, organizationId: string, data: {
   workspace?: string;
   avatar?: string;
   heartbeatInterval?: number;
+  heartbeatConfig?: Record<string, unknown>;
+  identityProfile?: Record<string, unknown>;
+  identityTemplate?: string;
   soulMd?: string;
+  soulTemplateId?: string;
   enabled?: boolean;
   currentTask?: string;
   gatewayId?: string;
+  agentToAgent?: boolean;
 }) {
+  const updateData: Record<string, unknown> = {};
+  if (data.name !== undefined) updateData.name = data.name;
+  if (data.displayName !== undefined) updateData.displayName = data.displayName;
+  if (data.description !== undefined) updateData.description = data.description;
+  if (data.workspace !== undefined) updateData.workspace = data.workspace;
+  if (data.avatar !== undefined) updateData.avatar = data.avatar;
+  if (data.heartbeatInterval !== undefined) updateData.heartbeatInterval = data.heartbeatInterval;
+  if (data.heartbeatConfig !== undefined) updateData.heartbeatConfig = data.heartbeatConfig;
+  if (data.identityProfile !== undefined) updateData.identityProfile = data.identityProfile;
+  if (data.identityTemplate !== undefined) updateData.identityTemplate = data.identityTemplate;
+  if (data.soulMd !== undefined) updateData.soulMd = data.soulMd;
+  if (data.soulTemplateId !== undefined) updateData.soulTemplateId = data.soulTemplateId;
+  if (data.enabled !== undefined) updateData.enabled = data.enabled;
+  if (data.currentTask !== undefined) updateData.currentTask = data.currentTask;
+  if (data.gatewayId !== undefined) updateData.gatewayId = data.gatewayId;
+  if (data.agentToAgent !== undefined) updateData.agentToAgent = data.agentToAgent;
+
   const agent = await prisma.agent.update({
     where: { id, organizationId },
-    data: {
-      ...(data.name !== undefined && { name: data.name }),
-      ...(data.displayName !== undefined && { displayName: data.displayName }),
-      ...(data.description !== undefined && { description: data.description }),
-      ...(data.workspace !== undefined && { workspace: data.workspace }),
-      ...(data.avatar !== undefined && { avatar: data.avatar }),
-      ...(data.heartbeatInterval !== undefined && { heartbeatInterval: data.heartbeatInterval }),
-      ...(data.soulMd !== undefined && { soulMd: data.soulMd }),
-      ...(data.enabled !== undefined && { enabled: data.enabled }),
-      ...(data.currentTask !== undefined && { currentTask: data.currentTask }),
-      ...(data.gatewayId !== undefined && { gatewayId: data.gatewayId }),
-    },
+    data: updateData as any,
     include: {
       _count: { select: { activities: true, tasks: true } },
     },
@@ -208,6 +345,14 @@ export async function updateAgent(id: string, organizationId: string, data: {
             agentId: agent.gatewayAgentId,
             name: 'SOUL.md',
             content: data.soulMd || '',
+          });
+        }
+        // Update IDENTITY.md if changed
+        if (data.identityTemplate !== undefined) {
+          await client.rpc('agents.files.set', {
+            agentId: agent.gatewayAgentId,
+            name: 'IDENTITY.md',
+            content: data.identityTemplate || '',
           });
         }
       }

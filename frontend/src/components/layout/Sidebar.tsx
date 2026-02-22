@@ -21,13 +21,10 @@ const navSections = [
       { path: '/tasks', label: 'Task Board', icon: '\u25A6' },
       { path: '/topology', label: 'Network Graph', icon: '\u25C7' },
       { path: '/controls', label: 'Agent Controls', icon: '\u229E' },
-      { path: '/agents/new', label: 'Create Agent', icon: '\u002B' },
-    ],
-  },
-  {
-    label: 'Infrastructure',
-    items: [
       { path: '/gateways', label: 'Gateways', icon: '\u2302' },
+      { path: '/skills', label: 'Skills', icon: '\u26A1' },
+      { path: '/soul-templates', label: 'Soul Templates', icon: '\u2666' },
+      { path: '/custom-fields', label: 'Custom Fields', icon: '\u25A4' },
     ],
   },
   {
@@ -68,6 +65,24 @@ export function Sidebar() {
             <p className="text-[11px] text-gray-500 uppercase tracking-widest">Agent Monitor</p>
           </div>
         </div>
+      </div>
+
+      {/* Prominent Create Agent Button */}
+      <div className="px-3 pt-3 pb-1">
+        <NavLink
+          to="/agents/new"
+          className={({ isActive }) =>
+            cn(
+              'flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 w-full',
+              isActive
+                ? 'bg-nexus-600 text-white shadow-lg shadow-nexus-600/20'
+                : 'bg-nexus-600/15 text-nexus-400 border border-nexus-500/20 hover:bg-nexus-600/25 hover:text-nexus-300'
+            )
+          }
+        >
+          <span className="text-base leading-none">+</span>
+          Create Agent
+        </NavLink>
       </div>
 
       {/* Navigation */}

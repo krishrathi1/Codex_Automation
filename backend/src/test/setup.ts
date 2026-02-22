@@ -1,5 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { afterAll, beforeAll } from 'vitest';
+import bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 
 beforeAll(async () => {
   // Verify DB connection
@@ -16,6 +18,7 @@ afterAll(async () => {
  */
 export async function cleanupTestData(orgId: string) {
   // Delete in order respecting foreign key constraints
+  await prisma.approvalTaskLink.deleteMany({ where: { approval: { board: { organizationId: orgId } } } });
   await prisma.approval.deleteMany({ where: { board: { organizationId: orgId } } });
   await prisma.boardMemory.deleteMany({ where: { board: { organizationId: orgId } } });
   await prisma.taskDependency.deleteMany({
@@ -46,6 +49,16 @@ export async function cleanupTestData(orgId: string) {
   await prisma.llmProvider.deleteMany({ where: { organizationId: orgId } });
   await prisma.usageCredit.deleteMany({ where: { organizationId: orgId } });
   await prisma.orgApiKey.deleteMany({ where: { organizationId: orgId } });
+  await prisma.orgMemberBoardAccess.deleteMany({
+    where: { member: { organizationId: orgId } },
+  });
+  await prisma.orgInviteBoardAccess.deleteMany({
+    where: { invite: { organizationId: orgId } },
+  });
+  await prisma.orgInvite.deleteMany({ where: { organizationId: orgId } });
+  await prisma.emailVerification.deleteMany({
+    where: { user: { memberships: { some: { organizationId: orgId } } } },
+  });
   await prisma.refreshToken.deleteMany({
     where: { user: { memberships: { some: { organizationId: orgId } } } },
   });
@@ -60,17 +73,63 @@ export async function cleanupTestData(orgId: string) {
   await prisma.organization.deleteMany({ where: { id: orgId } });
 }
 
+const TEST_PASSWORD = 'TestPass123!';
+
 /**
- * Create a test user + org + membership, returns auth tokens and IDs.
+ * Create a pre-verified test user + org + membership, then login to get tokens.
+ * This bypasses the email verification flow so tests work without SMTP.
  */
 export async function createTestUser(suffix = '') {
-  const { signup } = await import('../services/auth.service.js');
   const ts = Date.now();
-  const result = await signup({
-    email: `test${suffix}-${ts}@nexus-test.local`,
-    password: 'TestPass123!',
-    name: `Test User ${suffix}`,
-    orgName: `Test Org ${suffix || ts}`,
+  const email = `test${suffix}-${ts}@nexus-test.local`;
+  const hashedPassword = await bcrypt.hash(TEST_PASSWORD, 4); // low rounds for speed
+
+  const slug = `test-org-${suffix || ts}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  let finalSlug = slug;
+  const existingOrg = await prisma.organization.findUnique({ where: { slug } });
+  if (existingOrg) {
+    finalSlug = `${slug}-${randomBytes(3).toString('hex')}`;
+  }
+
+  // Create user (pre-verified), org, and membership in a transaction
+  const { user, organization } = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        email,
+        password: hashedPassword,
+        name: `Test User ${suffix}`,
+        emailVerified: true,
+      },
+    });
+
+    const organization = await tx.organization.create({
+      data: {
+        name: `Test Org ${suffix || ts}`,
+        slug: finalSlug,
+      },
+    });
+
+    await tx.orgMember.create({
+      data: {
+        organizationId: organization.id,
+        userId: user.id,
+        role: 'OWNER',
+        allBoardsRead: true,
+        allBoardsWrite: true,
+      },
+    });
+
+    return { user, organization };
   });
-  return result;
+
+  // Login to get tokens
+  const { login } = await import('../services/auth.service.js');
+  const loginResult = await login({ email, password: TEST_PASSWORD });
+
+  return {
+    user: { id: user.id, email: user.email, name: user.name },
+    organization: { id: organization.id, name: organization.name, slug: organization.slug },
+    accessToken: loginResult.accessToken,
+    refreshToken: loginResult.refreshToken,
+  };
 }

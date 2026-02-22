@@ -77,6 +77,37 @@ enum ApprovalStatus {
   REJECTED
 }
 
+enum CustomFieldType {
+  TEXT
+  TEXT_LONG
+  INTEGER
+  DECIMAL
+  BOOLEAN
+  DATE
+  DATE_TIME
+  URL
+  JSON
+}
+
+enum CustomFieldVisibility {
+  ALWAYS
+  IF_SET
+  HIDDEN
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum OnboardingStatus {
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+}
+
 // ─── Organization & Auth ────────────────────────────────
 
 model Organization {
@@ -87,23 +118,29 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  members        OrgMember[]
-  agents         Agent[]
-  activities     Activity[]
-  tasks          Task[]
-  threads        Thread[]
-  sessions       Session[]
-  tokenUsages    TokenUsage[]
-  metrics        MetricSnapshot[]
-  alertRules     AlertRule[]
-  alertEvents    AlertEvent[]
-  commands       Command[]
-  apiKeys        OrgApiKey[]
-  gateways       Gateway[]
-  llmProviders   LlmProvider[]
-  usageCredit    UsageCredit?
-  boards         Board[]
-  boardGroups    BoardGroup[]
+  members              OrgMember[]
+  agents               Agent[]
+  activities           Activity[]
+  tasks                Task[]
+  threads              Thread[]
+  sessions             Session[]
+  tokenUsages          TokenUsage[]
+  metrics              MetricSnapshot[]
+  alertRules           AlertRule[]
+  alertEvents          AlertEvent[]
+  commands             Command[]
+  apiKeys              OrgApiKey[]
+  gateways             Gateway[]
+  llmProviders         LlmProvider[]
+  usageCredit          UsageCredit?
+  boards               Board[]
+  boardGroups          BoardGroup[]
+  tags                 Tag[]
+  customFieldDefs      TaskCustomFieldDefinition[]
+  marketplaceSkills    MarketplaceSkill[]
+  skillPacks           SkillPack[]
+  invites              OrgInvite[]
+  soulTemplates        SoulTemplate[]
 
   @@index([slug])
 }
@@ -115,12 +152,32 @@ model OrgMember {
   userId         String
   user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   role           OrgRole      @default(MEMBER)
+  allBoardsRead  Boolean      @default(false)
+  allBoardsWrite Boolean      @default(false)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
+
+  boardAccess OrgMemberBoardAccess[]
 
   @@unique([organizationId, userId])
   @@index([userId])
   @@index([organizationId])
+}
+
+model OrgMemberBoardAccess {
+  id        String    @id @default(uuid())
+  memberId  String
+  member    OrgMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  boardId   String
+  board     Board     @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  canRead   Boolean   @default(true)
+  canWrite  Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([memberId, boardId])
+  @@index([memberId])
+  @@index([boardId])
 }
 
 model OrgApiKey {
@@ -151,15 +208,29 @@ model RefreshToken {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String   @id @default(uuid())
+  email         String   @unique
+  password      String
+  name          String
+  emailVerified Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  memberships   OrgMember[]
-  refreshTokens RefreshToken[]
+  memberships        OrgMember[]
+  refreshTokens      RefreshToken[]
+  emailVerifications EmailVerification[]
+}
+
+model EmailVerification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
 }
 
 // ─── Core Models ────────────────────────────────────────
@@ -175,6 +246,9 @@ model Agent {
   status            AgentStatus  @default(IDLE)
   lastHeartbeat     DateTime?
   heartbeatInterval Int          @default(30)
+  heartbeatConfig   Json?
+  identityProfile   Json?
+  identityTemplate  String?      @db.Text
   currentTask       String?
   avatar            String?
   enabled           Boolean      @default(true)
@@ -186,6 +260,7 @@ model Agent {
   board             Board?       @relation(fields: [boardId], references: [id], onDelete: SetNull)
   isBoardLead       Boolean      @default(false)
   agentTokenHash    String?      @unique
+  agentToAgent      Boolean      @default(false)
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
 
@@ -200,6 +275,9 @@ model Agent {
   commands         Command[]
   mcpServers       McpServer[]
   approvals        Approval[]
+  webhooks         BoardWebhook[]
+  agentSkills      AgentSkill[]
+  soulTemplateId   String?
 
   @@unique([organizationId, name])
   @@index([organizationId])
@@ -236,19 +314,25 @@ model Task {
   priority       Priority   @default(MEDIUM)
   agentId        String?
   agent          Agent?     @relation(fields: [agentId], references: [id], onDelete: SetNull)
-  boardId        String?
-  board          Board?     @relation(fields: [boardId], references: [id], onDelete: SetNull)
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  boardId          String?
+  board            Board?     @relation(fields: [boardId], references: [id], onDelete: SetNull)
+  fingerprintHash  String?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
   approvals          Approval[]
+  approvalLinks      ApprovalTaskLink[]
   dependentOn        TaskDependency[] @relation("DependentOn")
   blocking           TaskDependency[] @relation("Blocking")
+  tags               TagAssignment[]
+  customFieldValues  TaskCustomFieldValue[]
+  fingerprint        TaskFingerprint?
 
   @@index([organizationId])
   @@index([status])
   @@index([agentId])
   @@index([boardId])
+  @@index([fingerprintHash])
 }
 
 // ─── Inter-Agent Communication ──────────────────────────
@@ -453,8 +537,9 @@ model Gateway {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  agents Agent[]
-  boards Board[]
+  agents          Agent[]
+  boards          Board[]
+  installedSkills GatewayInstalledSkill[]
 
   @@unique([organizationId, name])
   @@index([organizationId])
@@ -505,15 +590,23 @@ model Board {
   objective               String?
   successMetrics          Json?
   targetDate              DateTime?
-  maxAgents               Int          @default(3)
-  requireApprovalForDone  Boolean      @default(true)
-  createdAt               DateTime     @default(now())
-  updatedAt               DateTime     @updatedAt
+  maxAgents                            Int          @default(3)
+  requireApprovalForDone               Boolean      @default(true)
+  requireReviewBeforeDone              Boolean      @default(false)
+  blockStatusChangesWithPendingApproval Boolean     @default(false)
+  onlyLeadCanChangeStatus              Boolean      @default(false)
+  createdAt                            DateTime     @default(now())
+  updatedAt                            DateTime     @updatedAt
 
-  tasks     Task[]
-  agents    Agent[]
-  approvals Approval[]
-  memory    BoardMemory[]
+  tasks              Task[]
+  agents             Agent[]
+  approvals          Approval[]
+  memory             BoardMemory[]
+  webhooks           BoardWebhook[]
+  onboardingSessions BoardOnboardingSession[]
+  customFields       BoardTaskCustomField[]
+  memberAccess       OrgMemberBoardAccess[]
+  inviteAccess       OrgInviteBoardAccess[]
 
   @@unique([organizationId, slug])
   @@index([organizationId])
@@ -530,7 +623,8 @@ model BoardGroup {
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
-  boards Board[]
+  boards      Board[]
+  groupMemory BoardGroupMemory[]
 
   @@unique([organizationId, slug])
   @@index([organizationId])
@@ -539,22 +633,38 @@ model BoardGroup {
 // ─── Approvals ────────────────────────────────────────
 
 model Approval {
-  id          String         @id @default(uuid())
-  boardId     String
-  board       Board          @relation(fields: [boardId], references: [id], onDelete: Cascade)
-  taskId      String?
-  task        Task?          @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  agentId     String?
-  agent       Agent?         @relation(fields: [agentId], references: [id], onDelete: SetNull)
-  actionType  String
-  payload     Json?
-  confidence  Float?
-  status      ApprovalStatus @default(PENDING)
-  resolvedAt  DateTime?
-  createdAt   DateTime       @default(now())
+  id           String         @id @default(uuid())
+  boardId      String
+  board        Board          @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  taskId       String?
+  task         Task?          @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  agentId      String?
+  agent        Agent?         @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  actionType   String
+  payload      Json?
+  confidence   Float?
+  rubricScores Json?
+  status       ApprovalStatus @default(PENDING)
+  resolvedAt   DateTime?
+  createdAt    DateTime       @default(now())
+
+  taskLinks ApprovalTaskLink[]
 
   @@index([boardId])
   @@index([status])
+}
+
+model ApprovalTaskLink {
+  id         String   @id @default(uuid())
+  approvalId String
+  approval   Approval @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+  taskId     String
+  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([approvalId, taskId])
+  @@index([approvalId])
+  @@index([taskId])
 }
 
 // ─── Board Memory ─────────────────────────────────────
@@ -585,4 +695,298 @@ model TaskDependency {
   @@unique([dependentTaskId, blockingTaskId])
   @@index([dependentTaskId])
   @@index([blockingTaskId])
+}
+
+// ─── Tags ────────────────────────────────────────────
+
+model Tag {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  slug           String
+  color          String       @default("#6366f1")
+  description    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  assignments TagAssignment[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+}
+
+model TagAssignment {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  tagId     String
+  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([taskId, tagId])
+  @@index([taskId])
+  @@index([tagId])
+}
+
+// ─── Task Fingerprints ───────────────────────────────
+
+model TaskFingerprint {
+  id              String @id @default(uuid())
+  boardId         String
+  fingerprintHash String
+  taskId          String @unique
+  task            Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+
+  @@unique([boardId, fingerprintHash])
+  @@index([fingerprintHash])
+}
+
+// ─── Custom Fields ───────────────────────────────────
+
+model TaskCustomFieldDefinition {
+  id              String              @id @default(uuid())
+  organizationId  String
+  organization    Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  fieldKey        String
+  label           String
+  fieldType       CustomFieldType     @default(TEXT)
+  uiVisibility    CustomFieldVisibility @default(ALWAYS)
+  validationRegex String?
+  defaultValue    String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  boardFields BoardTaskCustomField[]
+  values      TaskCustomFieldValue[]
+
+  @@unique([organizationId, fieldKey])
+  @@index([organizationId])
+}
+
+model BoardTaskCustomField {
+  id           String                    @id @default(uuid())
+  boardId      String
+  board        Board                     @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  definitionId String
+  definition   TaskCustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime                  @default(now())
+
+  @@unique([boardId, definitionId])
+  @@index([boardId])
+  @@index([definitionId])
+}
+
+model TaskCustomFieldValue {
+  id           String                    @id @default(uuid())
+  taskId       String
+  task         Task                      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  definitionId String
+  definition   TaskCustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  value        String                    @db.Text
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+
+  @@unique([taskId, definitionId])
+  @@index([taskId])
+  @@index([definitionId])
+}
+
+// ─── Skills Marketplace ──────────────────────────────
+
+model MarketplaceSkill {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String       @default("")
+  category       String       @default("general")
+  risk           String       @default("low")
+  sourceUrl      String?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  installedOn  GatewayInstalledSkill[]
+  agentSkills  AgentSkill[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@index([category])
+}
+
+model SkillPack {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String       @default("")
+  sourceUrl      String
+  branch         String       @default("main")
+  metadata       Json?
+  lastSyncedAt   DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, sourceUrl])
+  @@index([organizationId])
+}
+
+model GatewayInstalledSkill {
+  id        String           @id @default(uuid())
+  gatewayId String
+  gateway   Gateway          @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+  skillId   String
+  skill     MarketplaceSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  createdAt DateTime         @default(now())
+
+  @@unique([gatewayId, skillId])
+  @@index([gatewayId])
+  @@index([skillId])
+}
+
+model AgentSkill {
+  id                String           @id @default(uuid())
+  agentId           String
+  agent             Agent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  skillId           String
+  skill             MarketplaceSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  customName        String?
+  customDescription String?
+  customConfig      Json?
+  enabled           Boolean          @default(true)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@unique([agentId, skillId])
+  @@index([agentId])
+  @@index([skillId])
+}
+
+// ─── Board Webhooks ──────────────────────────────────
+
+model BoardWebhook {
+  id          String   @id @default(uuid())
+  boardId     String
+  board       Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  agentId     String?
+  agent       Agent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  description String   @default("")
+  secret      String
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  payloads BoardWebhookPayload[]
+
+  @@index([boardId])
+  @@index([agentId])
+}
+
+model BoardWebhookPayload {
+  id          String   @id @default(uuid())
+  webhookId   String
+  webhook     BoardWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  payload     Json
+  headers     Json?
+  sourceIp    String?
+  contentType String?
+  receivedAt  DateTime @default(now())
+
+  @@index([webhookId])
+  @@index([receivedAt])
+}
+
+// ─── Board Onboarding ────────────────────────────────
+
+model BoardOnboardingSession {
+  id         String           @id @default(uuid())
+  boardId    String
+  board      Board            @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  sessionKey String           @unique @default(uuid())
+  status     OnboardingStatus @default(IN_PROGRESS)
+  messages   Json             @default("[]")
+  draftGoal  Json?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@index([boardId])
+  @@index([status])
+}
+
+// ─── Board Group Memory ──────────────────────────────
+
+model BoardGroupMemory {
+  id           String     @id @default(uuid())
+  boardGroupId String
+  boardGroup   BoardGroup @relation(fields: [boardGroupId], references: [id], onDelete: Cascade)
+  content      String     @db.Text
+  tags         Json?
+  isChat       Boolean    @default(false)
+  source       String?
+  createdAt    DateTime   @default(now())
+
+  @@index([boardGroupId])
+  @@index([createdAt])
+}
+
+// ─── Organization Invites ────────────────────────────
+
+model OrgInvite {
+  id               String       @id @default(uuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedEmail     String
+  token            String       @unique
+  role             OrgRole      @default(MEMBER)
+  status           InviteStatus @default(PENDING)
+  allBoardsRead    Boolean      @default(false)
+  allBoardsWrite   Boolean      @default(false)
+  createdByUserId  String?
+  acceptedByUserId String?
+  acceptedAt       DateTime?
+  expiresAt        DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  boardAccess OrgInviteBoardAccess[]
+
+  @@unique([organizationId, invitedEmail])
+  @@index([organizationId])
+  @@index([token])
+  @@index([status])
+}
+
+model OrgInviteBoardAccess {
+  id       String    @id @default(uuid())
+  inviteId String
+  invite   OrgInvite @relation(fields: [inviteId], references: [id], onDelete: Cascade)
+  boardId  String
+  board    Board     @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  canRead  Boolean   @default(true)
+  canWrite Boolean   @default(false)
+
+  @@unique([inviteId, boardId])
+  @@index([inviteId])
+  @@index([boardId])
+}
+
+// ─── Soul Templates ──────────────────────────────────
+
+model SoulTemplate {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  slug           String
+  category       String       @default("general")
+  description    String       @default("")
+  content        String       @db.Text
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+  @@index([category])
 }

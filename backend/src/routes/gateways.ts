@@ -8,6 +8,13 @@ router.get('/', async (req, res) => {
   res.json(gateways);
 });
 
+// Check if default gateway auto-provisioning is available
+router.get('/defaults', async (req, res) => {
+  const hasDefaultConfig = !!(process.env.DEFAULT_GATEWAY_URL && process.env.DEFAULT_GATEWAY_TOKEN);
+  const gateways = await gatewayService.getAllGateways(req.organizationId!);
+  res.json({ hasDefaultConfig, gatewayCount: gateways.length });
+});
+
 router.get('/:id', async (req, res) => {
   const gateway = await gatewayService.getGatewayById(req.params.id, req.organizationId!);
   if (!gateway) return res.status(404).json({ error: 'Gateway not found' });

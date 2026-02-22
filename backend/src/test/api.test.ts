@@ -1,6 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { prisma } from '../lib/prisma.js';
 import { cleanupTestData, createTestUser } from './setup.js';
+
+// Mock email sending so signup tests don't require SMTP
+vi.mock('../lib/email.js', () => ({
+  sendVerificationEmail: vi.fn().mockResolvedValue(undefined),
+}));
 
 // Import services
 import * as authService from '../services/auth.service.js';
@@ -51,7 +56,7 @@ describe('Nexus Backend Integration Tests', () => {
       }
     });
 
-    it('signup: creates user, org, membership, and returns tokens', async () => {
+    it('signup: creates user, org, membership, and requires email verification', async () => {
       const ts = Date.now();
       const result = await authService.signup({
         email: `auth-signup-${ts}@nexus-test.local`,
@@ -75,13 +80,8 @@ describe('Nexus Backend Integration Tests', () => {
       expect(result.organization.slug).toBeDefined();
       expect(result.organization.slug.length).toBeGreaterThan(0);
 
-      // Tokens are present
-      expect(result.accessToken).toBeDefined();
-      expect(typeof result.accessToken).toBe('string');
-      expect(result.accessToken.length).toBeGreaterThan(0);
-      expect(result.refreshToken).toBeDefined();
-      expect(typeof result.refreshToken).toBe('string');
-      expect(result.refreshToken.length).toBeGreaterThan(0);
+      // Signup now returns requiresVerification instead of tokens
+      expect(result.requiresVerification).toBe(true);
 
       // Verify the membership was created in the DB
       const membership = await prisma.orgMember.findFirst({
@@ -90,12 +90,16 @@ describe('Nexus Backend Integration Tests', () => {
       expect(membership).not.toBeNull();
       expect(membership!.role).toBe('OWNER');
 
-      // Verify the refresh token was stored (hashed) in the DB
-      const storedRefresh = await prisma.refreshToken.findFirst({
+      // Verify the user is NOT yet email-verified
+      const user = await prisma.user.findUnique({ where: { id: result.user.id } });
+      expect(user!.emailVerified).toBe(false);
+
+      // Verify a verification token was stored in the DB
+      const verificationToken = await prisma.emailVerification.findFirst({
         where: { userId: result.user.id },
       });
-      expect(storedRefresh).not.toBeNull();
-      expect(storedRefresh!.expiresAt.getTime()).toBeGreaterThan(Date.now());
+      expect(verificationToken).not.toBeNull();
+      expect(verificationToken!.expiresAt.getTime()).toBeGreaterThan(Date.now());
     });
 
     it('signup: rejects duplicate email with an error', async () => {
@@ -272,7 +276,8 @@ describe('Nexus Backend Integration Tests', () => {
       expect(agent.enabled).toBe(true);
       expect(agent.avatar).toBeNull();
       expect(agent.soulMd).toBeNull();
-      expect(agent.gatewayId).toBeNull();
+      // gatewayId may be auto-assigned if a default gateway exists
+      expect(agent.gatewayId === null || typeof agent.gatewayId === 'string').toBe(true);
       expect(agent.organizationId).toBe(orgId);
       expect(agent._count).toBeDefined();
       expect(agent._count.activities).toBe(0);

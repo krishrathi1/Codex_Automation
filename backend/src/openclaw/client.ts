@@ -38,7 +38,7 @@ export class GatewayClient {
   private ws: WebSocket | null = null;
   private options: GatewayClientOptions;
   private requestId = 0;
-  private pendingRequests = new Map<string, { resolve: (value: unknown) => void; reject: (reason: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private pendingRequests = new Map<string, { resolve: (value: unknown) => void; reject: (reason: Error) => void; timer: ReturnType<typeof setTimeout>; expectFinal?: boolean }>();
   private eventHandlers: EventHandler[] = [];
   private connected = false;
   private authenticated = false;
@@ -90,6 +90,17 @@ export class GatewayClient {
             } else if (frame.type === 'res') {
               const pending = this.pendingRequests.get(frame.id);
               if (pending) {
+                const payload = frame.payload as Record<string, unknown> | undefined;
+                // Two-phase response: if expectFinal and this is just the "accepted" ack,
+                // keep the handler registered and wait for the final response from the gateway.
+                if (pending.expectFinal && frame.ok && payload?.status === 'accepted') {
+                  clearTimeout(pending.timer);
+                  pending.timer = setTimeout(() => {
+                    this.pendingRequests.delete(frame.id);
+                    pending.reject(new Error(`RPC timeout waiting for agent result: ${frame.id}`));
+                  }, 120_000); // 2 minute timeout for LLM responses
+                  return;
+                }
                 clearTimeout(pending.timer);
                 this.pendingRequests.delete(frame.id);
                 if (frame.ok) {
@@ -182,6 +193,29 @@ export class GatewayClient {
       }, 30000);
 
       this.pendingRequests.set(id, { resolve, reject, timer });
+
+      const req: RpcRequest = { type: 'req', id, method, params };
+      this.ws.send(JSON.stringify(req));
+    });
+  }
+
+  /**
+   * Send an RPC that uses the OpenClaw two-phase response protocol.
+   * The gateway sends an immediate "accepted" ack, then a final response
+   * with the actual result after the agent finishes processing.
+   */
+  async rpcExpectFinal(method: string, params?: unknown, timeoutMs = 120_000): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        return reject(new Error('Not connected to gateway'));
+      }
+      const id = `nexus-${++this.requestId}`;
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        reject(new Error(`RPC timeout: ${method}`));
+      }, timeoutMs);
+
+      this.pendingRequests.set(id, { resolve, reject, timer, expectFinal: true });
 
       const req: RpcRequest = { type: 'req', id, method, params };
       this.ws.send(JSON.stringify(req));

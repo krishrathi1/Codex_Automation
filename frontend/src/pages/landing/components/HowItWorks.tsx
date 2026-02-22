@@ -207,10 +207,10 @@ export function HowItWorks() {
         {/* ── Section heading ── */}
         <div className="mb-20 text-center">
           <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            How It Works
+            How AI Agent Orchestration Works
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-lg text-gray-400">
-            From zero to full agent orchestration in minutes
+            From zero to full agentic workflow orchestration in minutes
           </p>
         </div>
 

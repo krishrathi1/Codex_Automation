@@ -1,14 +1,16 @@
-import { useEffect } from 'react';
 import { DocSection } from './components/DocSection';
 import { CodeBlock } from './components/CodeBlock';
+import { SEO } from '../../components/SEO';
 
 export function DocsOrganizations() {
-  useEffect(() => {
-    document.title = 'Organizations & Teams - Nexus Docs';
-  }, []);
-
   return (
     <div>
+      <SEO
+        title="Organizations & Teams — Enterprise AI Agent Management"
+        description="Manage teams with role-based access control for enterprise AI agent operations. Set up organizations, assign roles, and control access to your agent infrastructure with Nexus by Blostem."
+        canonical="https://nexus.blostem.com/docs/organizations"
+        keywords="enterprise AI agent management, team management, role-based access control, AI agent RBAC, multi-tenant AI platform, Blostem AI"
+      />
       <h1 className="text-4xl font-bold text-white mb-2">Organizations & Teams</h1>
       <p className="text-gray-400 text-lg mb-10">
         Manage your team, assign roles, and control access to your agent infrastructure.

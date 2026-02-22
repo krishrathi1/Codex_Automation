@@ -35,10 +35,19 @@ function clearRefreshCookie(res: any) {
 // Rate limiting for auth endpoints (brute force protection)
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // 10 attempts per window
+  max: 20, // 20 attempts per window
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many attempts, please try again later' },
+});
+
+// Separate, more permissive limiter for token refresh (called on every page load)
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 60, // 60 refreshes per window (generous for SPA usage)
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many refresh attempts, please try again later' },
 });
 
 const signupLimiter = rateLimit({
@@ -66,19 +75,55 @@ const loginSchema = z.object({
   password: z.string().min(1).max(128),
 });
 
+const verifyEmailSchema = z.object({
+  token: z.string().min(1),
+});
+
+const resendVerificationSchema = z.object({
+  email: z.string().email(),
+});
+
 // POST /signup
 router.post('/signup', signupLimiter, validate(signupSchema), async (req, res) => {
   try {
     const result = await authService.signup(req.body);
-    // Set refresh token as httpOnly cookie — never expose in response body
-    setRefreshCookie(res, result.refreshToken);
-    const { refreshToken: _rt, ...safeResult } = result;
-    res.status(201).json(safeResult);
+    // No tokens returned — user must verify email first
+    res.status(201).json(result);
   } catch (e: any) {
     if (e.message === 'Email already in use') {
       return res.status(409).json({ error: e.message });
     }
+    if (e.message === 'Failed to send verification email') {
+      return res.status(503).json({ error: 'Failed to send verification email. Please try again.' });
+    }
     return res.status(500).json({ error: 'Signup failed' });
+  }
+});
+
+// POST /verify-email
+router.post('/verify-email', authLimiter, validate(verifyEmailSchema), async (req, res) => {
+  try {
+    const result = await authService.verifyEmail(req.body.token);
+    res.json(result);
+  } catch (e: any) {
+    if (e.message === 'Invalid verification token') {
+      return res.status(400).json({ error: e.message });
+    }
+    if (e.message === 'Verification token has expired') {
+      return res.status(410).json({ error: e.message });
+    }
+    return res.status(500).json({ error: 'Verification failed' });
+  }
+});
+
+// POST /resend-verification
+router.post('/resend-verification', authLimiter, validate(resendVerificationSchema), async (req, res) => {
+  try {
+    const result = await authService.resendVerification(req.body.email);
+    res.json(result);
+  } catch {
+    // Always return success to avoid email enumeration
+    res.json({ message: 'If the email is registered, a verification link has been sent' });
   }
 });
 
@@ -91,12 +136,15 @@ router.post('/login', authLimiter, validate(loginSchema), async (req, res) => {
     const { refreshToken: _rt, ...safeResult } = result;
     res.json(safeResult);
   } catch (e: any) {
+    if (e.message === 'Email not verified') {
+      return res.status(403).json({ error: 'Email not verified', code: 'EMAIL_NOT_VERIFIED' });
+    }
     return res.status(401).json({ error: 'Invalid email or password' });
   }
 });
 
 // POST /refresh — reads refresh token from httpOnly cookie
-router.post('/refresh', authLimiter, async (req, res) => {
+router.post('/refresh', refreshLimiter, async (req, res) => {
   try {
     const refreshToken = req.cookies?.[REFRESH_COOKIE_NAME];
     if (!refreshToken) {
