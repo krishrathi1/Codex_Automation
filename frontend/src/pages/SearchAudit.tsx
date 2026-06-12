@@ -49,7 +49,7 @@ export function SearchAudit() {
   const [loading, setLoading] = useState(false);
   const [offset, setOffset] = useState(0);
   const limit = 50;
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     fetchAgents();

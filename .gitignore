@@ -28,6 +28,7 @@ vite.config.d.ts
 playwright-report/
 test-results/
 coverage/
+e2e/.auth/
 
 # JetBrains IDE
 .idea/

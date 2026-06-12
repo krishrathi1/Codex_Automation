@@ -6,7 +6,7 @@ const tracer = trace.getTracer('nexus-llm');
 
 // Map provider IDs to their platform env var names
 const PLATFORM_KEY_ENV: Record<string, string> = {
-  anthropic: 'PLATFORM_ANTHROPIC_API_KEY',
+  codex: 'CODEX_API_KEY',
   openai: 'PLATFORM_OPENAI_API_KEY',
   google: 'PLATFORM_GOOGLE_API_KEY',
   mistral: 'PLATFORM_MISTRAL_API_KEY',
@@ -16,10 +16,6 @@ const PLATFORM_KEY_ENV: Record<string, string> = {
 
 // Cost per token (in dollars) by model prefix — input/output pricing
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  'claude-3-opus':     { input: 15 / 1_000_000, output: 75 / 1_000_000 },
-  'claude-3.5-sonnet': { input: 3 / 1_000_000,  output: 15 / 1_000_000 },
-  'claude-3-sonnet':   { input: 3 / 1_000_000,  output: 15 / 1_000_000 },
-  'claude-3-haiku':    { input: 0.25 / 1_000_000, output: 1.25 / 1_000_000 },
   'gpt-4o':            { input: 2.5 / 1_000_000, output: 10 / 1_000_000 },
   'gpt-4o-mini':       { input: 0.15 / 1_000_000, output: 0.6 / 1_000_000 },
   'gpt-4-turbo':       { input: 10 / 1_000_000,  output: 30 / 1_000_000 },

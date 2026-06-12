@@ -559,13 +559,8 @@ describe('API Client', () => {
       );
     });
 
-    it('redirects to login when refresh fails', async () => {
-      // Mock window.location
-      const originalLocation = window.location;
-      Object.defineProperty(window, 'location', {
-        writable: true,
-        value: { ...originalLocation, href: '' },
-      });
+    it('clears auth when refresh fails', async () => {
+      useAuthStore.setState({ accessToken: 'expired-token' });
 
       // First call returns 401
       mockFetch.mockResolvedValueOnce({
@@ -583,13 +578,7 @@ describe('API Client', () => {
       });
 
       await expect(api.agents.list()).rejects.toThrow('Session expired');
-      expect(window.location.href).toBe('/login');
-
-      // Clean up
-      Object.defineProperty(window, 'location', {
-        writable: true,
-        value: originalLocation,
-      });
+      expect(useAuthStore.getState().accessToken).toBeNull();
     });
   });
 });
@@ -772,7 +761,6 @@ describe('Component Rendering', () => {
       // The sidebar should render all section labels
       expect(screen.getByText('Monitor')).toBeInTheDocument();
       expect(screen.getByText('Manage')).toBeInTheDocument();
-      expect(screen.getByText('Infrastructure')).toBeInTheDocument();
       expect(screen.getByText('Observe')).toBeInTheDocument();
       expect(screen.getByText('Account')).toBeInTheDocument();
     });

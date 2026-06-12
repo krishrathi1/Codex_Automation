@@ -55,7 +55,7 @@ export function Boards() {
 
   async function handleCreateBoard(data: CreateBoardData) {
     try {
-      const created = await api.boards.create(data);
+      const created = await api.boards.create({ ...data });
       setBoards(prev => [created as BoardWithGroup, ...prev]);
       setShowCreateModal(false);
     } catch (err) {

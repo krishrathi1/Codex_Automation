@@ -54,19 +54,22 @@ export function Gateways() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!formName.trim() || !formUrl.trim()) return;
+    if (!editId && !formToken.trim()) return;
     setSaving(true);
     try {
       const payload = {
         name: formName.trim(),
         url: formUrl.trim(),
-        ...(formToken.trim() && { token: formToken.trim() }),
         workspaceRoot: formWorkspaceRoot.trim() || undefined,
       };
       if (editId) {
-        const updated = await api.gateways.update(editId, payload);
+        const updated = await api.gateways.update(editId, {
+          ...payload,
+          ...(formToken.trim() && { token: formToken.trim() }),
+        });
         setGateways(prev => prev.map(g => g.id === editId ? updated : g));
       } else {
-        const created = await api.gateways.create(payload as Gateway);
+        const created = await api.gateways.create({ ...payload, token: formToken.trim() });
         setGateways(prev => [...prev, created]);
       }
       resetForm();
@@ -251,8 +254,8 @@ export function Gateways() {
                 <div className="mt-3 px-3 py-2 rounded-lg bg-surface-900 border border-white/5 text-xs text-gray-400">
                   <span className="text-emerald-400 font-medium">Healthy</span>
                   {' \u2022 '}
-                  Version: {healthChecks[gw.id]!.version || 'unknown'}
-                  {healthChecks[gw.id]!.uptime && ` \u2022 Uptime: ${Math.floor(healthChecks[gw.id]!.uptime / 60)}m`}
+                  Version: {String(healthChecks[gw.id]!.version || healthChecks[gw.id]!.details?.version || 'unknown')}
+                  {typeof (healthChecks[gw.id]!.uptime || healthChecks[gw.id]!.details?.uptime) === 'number' && ` \u2022 Uptime: ${Math.floor(((healthChecks[gw.id]!.uptime || healthChecks[gw.id]!.details!.uptime) as number) / 60)}m`}
                 </div>
               )}
               {healthChecks[gw.id] === null && gw.id in healthChecks && (

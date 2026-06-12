@@ -468,7 +468,7 @@ const marketplaceSkills = [
     description: 'Search the web for real-time information, documentation, and current events',
     category: 'research',
     risk: 'low',
-    sourceUrl: 'https://github.com/anthropics/claude-code',
+    sourceUrl: 'https://github.com/openai/codex',
   },
   {
     name: 'GitHub Integration',

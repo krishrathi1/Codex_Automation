@@ -155,7 +155,16 @@ export function Timeline() {
   const fetchData = useCallback(async () => {
     try {
       const result = await api.sessions.timeline();
-      setData(result);
+      setData({
+        ...result,
+        timeline: result.timeline.map(row => ({
+          agent: row.agent as TimelineAgent,
+          sessions: row.sessions.map(session => ({
+            ...session,
+            agent: row.agent as TimelineAgent,
+          })),
+        })),
+      });
       setError(null);
     } catch (e) {
       setError('Failed to load timeline data');

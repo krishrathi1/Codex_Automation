@@ -253,6 +253,8 @@ export interface Gateway {
 export interface GatewayHealth {
   status: string;
   connected: boolean;
+  version?: string;
+  uptime?: number;
   details?: Record<string, unknown>;
 }
 

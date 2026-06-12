@@ -39,6 +39,7 @@ import boardGroupMemoryRoutes from './routes/board-group-memory.js';
 import boardMemoryRoutes from './routes/board-memory.js';
 import soulTemplateRoutes from './routes/soul-templates.js';
 import { connectAllGateways, setSocketIO } from './services/gateway.service.js';
+import { isCodexRuntimeEnabled } from './services/codex-agent.service.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -170,10 +171,14 @@ prisma.agent.updateMany({
   if (count > 0) logger.info({ count }, 'Reset stuck ONLINE agents to IDLE on startup');
 }).catch(() => {});
 
-// Connect to all gateways on startup
-connectAllGateways().catch(err => {
-  logger.warn({ err }, 'Gateway connection errors on startup');
-});
+// Connect to all gateways on startup unless Codex SDK is the selected runtime.
+if (isCodexRuntimeEnabled()) {
+  logger.info('Codex SDK runtime enabled; skipping gateway auto-connect');
+} else {
+  connectAllGateways().catch(err => {
+    logger.warn({ err }, 'Gateway connection errors on startup');
+  });
+}
 
 httpServer.listen(PORT, () => {
   logger.info({ port: PORT }, 'Nexus backend running');

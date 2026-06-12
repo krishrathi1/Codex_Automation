@@ -31,7 +31,7 @@ const faqs: FaqItem[] = [
   {
     question: 'What LLM models does Nexus support?',
     answer:
-      'Nexus supports 700+ LLM models through its gateway integration, including models from OpenAI (GPT-4o, GPT-4), Anthropic (Claude), Google (Gemini), Mistral, Groq, and OpenRouter. You can use Bring Your Own Key (BYOK) to connect your existing API keys, or use platform-managed keys with a usage credits system. Each agent can be configured with a different model based on its specialization.',
+      'Nexus uses the locally installed Codex CLI runtime for agent work. Agents run under the project workflow session and use the user authentication already available through the local Codex CLI, so Nexus does not ask for provider API keys during agent setup.',
   },
   {
     question: 'How does AI agent orchestration work in Nexus?',

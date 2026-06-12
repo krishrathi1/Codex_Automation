@@ -3,7 +3,7 @@ import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import type { Agent, Gateway, McpServer, McpTool, LlmProvider, SoulTemplate, MarketplaceSkill, AgentSkill, AgentIntegration, ChannelType } from '@/types';
+import type { Agent, Gateway, McpServer, McpTool, SoulTemplate, MarketplaceSkill, AgentSkill, AgentIntegration, ChannelType } from '@/types';
 
 interface McpServerWithTools extends McpServer {
   tools?: McpTool[];
@@ -102,15 +102,6 @@ function EmojiPicker({ value, onChange }: { value: string; onChange: (v: string)
   );
 }
 
-const KNOWN_PROVIDERS = [
-  { id: 'openai', label: 'OpenAI', placeholder: 'sk-...' },
-  { id: 'anthropic', label: 'Anthropic', placeholder: 'sk-ant-...' },
-  { id: 'google', label: 'Google AI', placeholder: 'AIza...' },
-  { id: 'mistral', label: 'Mistral', placeholder: 'mis-...' },
-  { id: 'groq', label: 'Groq', placeholder: 'gsk_...' },
-  { id: 'openrouter', label: 'OpenRouter', placeholder: 'sk-or-...' },
-];
-
 function toSlug(name: string): string {
   return name
     .toLowerCase()
@@ -132,21 +123,11 @@ export function AgentCreate() {
   const [avatar, setAvatar] = useState('');
   const [heartbeatInterval, setHeartbeatInterval] = useState(30);
   const [enabled, setEnabled] = useState(true);
-  const [agentToAgent, setAgentToAgent] = useState(false);
+  const [agentToAgent, setAgentToAgent] = useState(true);
   const [soulMd, setSoulMd] = useState('');
   const [nameManuallyEdited, setNameManuallyEdited] = useState(false);
   const [gatewayId, setGatewayId] = useState('');
   const [gateways, setGateways] = useState<Gateway[]>([]);
-
-  // LLM provider state
-  const [llmProviders, setLlmProviders] = useState<LlmProvider[]>([]);
-  const [llmLoading, setLlmLoading] = useState(true);
-  const [llmMode, setLlmMode] = useState<'BYOK' | 'PLATFORM'>('BYOK');
-  const [llmProvider, setLlmProvider] = useState('openai');
-  const [llmApiKey, setLlmApiKey] = useState('');
-  const [llmSaving, setLlmSaving] = useState(false);
-  const [llmMessage, setLlmMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [showLlmSetup, setShowLlmSetup] = useState(false);
 
   // Advanced settings
   const [showAdvanced, setShowAdvanced] = useState(isEditMode);
@@ -189,19 +170,12 @@ export function AgentCreate() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load gateways, gateway defaults, and LLM providers
+  // Load gateways, gateway defaults, and agent setup data
   useEffect(() => {
     api.gateways.list().then(setGateways).catch(() => {});
     api.gateways.defaults().then(setGatewayInfo).catch(() => {});
     api.soulTemplates.list().then(setSoulTemplates).catch(() => {});
     api.skills.marketplace().then(setAvailableSkills).catch(() => {});
-    api.llmProviders.usage()
-      .then((data) => {
-        setLlmProviders(data.providers);
-        if (data.providers.length === 0) setShowLlmSetup(true);
-      })
-      .catch(() => {})
-      .finally(() => setLlmLoading(false));
   }, []);
 
   // Load agent data in edit mode
@@ -346,32 +320,6 @@ export function AgentCreate() {
       }
       return next;
     });
-  };
-
-  // Save LLM provider
-  const handleSaveLlmProvider = async () => {
-    if (llmMode === 'BYOK' && !llmApiKey.trim()) {
-      setLlmMessage({ type: 'error', text: 'API key is required for BYOK mode' });
-      return;
-    }
-    setLlmSaving(true);
-    setLlmMessage(null);
-    try {
-      await api.llmProviders.upsert({
-        provider: llmProvider,
-        mode: llmMode,
-        ...(llmMode === 'BYOK' && { apiKey: llmApiKey.trim() }),
-      });
-      const data = await api.llmProviders.usage();
-      setLlmProviders(data.providers);
-      setLlmMessage({ type: 'success', text: `${KNOWN_PROVIDERS.find((p) => p.id === llmProvider)?.label || llmProvider} provider configured` });
-      setShowLlmSetup(false);
-      setLlmApiKey('');
-    } catch (err: unknown) {
-      setLlmMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to save provider' });
-    } finally {
-      setLlmSaving(false);
-    }
   };
 
   // Form submit
@@ -782,217 +730,6 @@ export function AgentCreate() {
                     </label>
                   </div>
                 </div>
-              )}
-            </div>
-
-            {/* LLM Configuration */}
-            <div className="rounded-xl border border-white/5 bg-surface-850 p-5">
-              <div className="flex items-center justify-between mb-1">
-                <h3 className="text-sm font-semibold text-white">LLM Configuration</h3>
-                {llmProviders.length > 0 && !showLlmSetup && (
-                  <button
-                    type="button"
-                    onClick={() => setShowLlmSetup(true)}
-                    className="px-3 py-1 rounded-lg text-xs font-medium bg-white/5 border border-white/10 text-gray-400 hover:bg-white/10 hover:text-gray-200 transition-all"
-                  >
-                    + Add Provider
-                  </button>
-                )}
-              </div>
-              <p className="text-xs text-gray-500 mb-4">
-                Choose how this agent accesses LLM services — bring your own API key or use platform credits
-              </p>
-
-              {/* Status message */}
-              {llmMessage && (
-                <div
-                  className={cn(
-                    'text-sm px-3 py-2 rounded-lg border mb-3',
-                    llmMessage.type === 'success'
-                      ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
-                      : 'text-red-400 bg-red-500/10 border-red-500/30'
-                  )}
-                >
-                  {llmMessage.text}
-                </div>
-              )}
-
-              {llmLoading ? (
-                <div className="text-gray-500 text-xs py-4 text-center">Loading LLM providers...</div>
-              ) : (
-                <>
-                  {/* Existing providers */}
-                  {llmProviders.length > 0 && (
-                    <div className="space-y-2 mb-3">
-                      {llmProviders.map((provider) => {
-                        const info = KNOWN_PROVIDERS.find((p) => p.id === provider.provider);
-                        return (
-                          <div
-                            key={provider.id}
-                            className="rounded-lg border border-white/5 bg-surface-900 px-3 py-2.5 flex items-center gap-3"
-                          >
-                            <div className="w-8 h-8 rounded-lg bg-surface-850 border border-white/5 flex items-center justify-center text-xs font-bold text-white shrink-0">
-                              {(info?.label || provider.provider).charAt(0).toUpperCase()}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium text-white">
-                                  {info?.label || provider.provider}
-                                </span>
-                                <span
-                                  className={cn(
-                                    'text-[10px] px-1.5 py-0.5 rounded font-medium uppercase border',
-                                    provider.mode === 'BYOK'
-                                      ? 'text-blue-400 bg-blue-500/10 border-blue-500/30'
-                                      : 'text-purple-400 bg-purple-500/10 border-purple-500/30'
-                                  )}
-                                >
-                                  {provider.mode}
-                                </span>
-                                {provider.isActive && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium uppercase text-emerald-400 bg-emerald-500/10 border border-emerald-500/30">
-                                    Active
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* No providers warning */}
-                  {llmProviders.length === 0 && !showLlmSetup && (
-                    <div className="text-center py-4 rounded-lg border border-amber-500/20 bg-amber-500/5 mb-3">
-                      <p className="text-amber-400 text-sm font-medium">No LLM provider configured</p>
-                      <p className="text-gray-500 text-xs mt-1">Set up a provider so your agent can use LLM services</p>
-                      <button
-                        type="button"
-                        onClick={() => setShowLlmSetup(true)}
-                        className="mt-3 px-4 py-1.5 rounded-lg text-xs font-medium bg-nexus-600 text-white hover:bg-nexus-500 transition-colors"
-                      >
-                        Configure Provider
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Add/Setup form */}
-                  {showLlmSetup && (
-                    <div className="rounded-lg border border-white/10 bg-surface-900 p-4">
-                      <div className="space-y-3">
-                        {/* Mode selection cards */}
-                        <div>
-                          <label className="block text-xs font-medium text-gray-400 mb-2">
-                            How should your agent access LLM services?
-                          </label>
-                          <div className="grid grid-cols-2 gap-3">
-                            <button
-                              type="button"
-                              onClick={() => setLlmMode('BYOK')}
-                              className={cn(
-                                'p-3 rounded-lg border text-left transition-all',
-                                llmMode === 'BYOK'
-                                  ? 'border-blue-500/50 bg-blue-500/10'
-                                  : 'border-white/10 bg-surface-850 hover:border-white/20'
-                              )}
-                            >
-                              <div className="flex items-center gap-2 mb-1.5">
-                                <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
-                                </svg>
-                                <span className={cn('text-sm font-medium', llmMode === 'BYOK' ? 'text-blue-400' : 'text-gray-300')}>
-                                  Bring Your Own Key
-                                </span>
-                              </div>
-                              <p className="text-[11px] text-gray-500">Use your own API key from any provider</p>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setLlmMode('PLATFORM')}
-                              className={cn(
-                                'p-3 rounded-lg border text-left transition-all',
-                                llmMode === 'PLATFORM'
-                                  ? 'border-purple-500/50 bg-purple-500/10'
-                                  : 'border-white/10 bg-surface-850 hover:border-white/20'
-                              )}
-                            >
-                              <div className="flex items-center gap-2 mb-1.5">
-                                <svg className="w-4 h-4 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z" />
-                                </svg>
-                                <span className={cn('text-sm font-medium', llmMode === 'PLATFORM' ? 'text-purple-400' : 'text-gray-300')}>
-                                  Platform Managed
-                                </span>
-                              </div>
-                              <p className="text-[11px] text-gray-500">Use Nexus credits, billed per token</p>
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Provider selection */}
-                        <div>
-                          <label className="block text-xs font-medium text-gray-400 mb-1.5">Provider</label>
-                          <select
-                            value={llmProvider}
-                            onChange={(e) => setLlmProvider(e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg bg-surface-850 border border-white/10 text-sm text-white focus:outline-none focus:border-nexus-500/50"
-                          >
-                            {KNOWN_PROVIDERS.map((p) => {
-                              const alreadyConfigured = llmProviders.some((ep) => ep.provider === p.id);
-                              return (
-                                <option key={p.id} value={p.id} disabled={alreadyConfigured}>
-                                  {p.label} {alreadyConfigured ? '(configured)' : ''}
-                                </option>
-                              );
-                            })}
-                          </select>
-                        </div>
-
-                        {/* BYOK: API key input */}
-                        {llmMode === 'BYOK' && (
-                          <div>
-                            <label className="block text-xs font-medium text-gray-400 mb-1.5">API Key</label>
-                            <input
-                              type="password"
-                              value={llmApiKey}
-                              onChange={(e) => setLlmApiKey(e.target.value)}
-                              placeholder={KNOWN_PROVIDERS.find((p) => p.id === llmProvider)?.placeholder || 'Enter API key'}
-                              className="w-full px-3 py-2 rounded-lg bg-surface-850 border border-white/10 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-nexus-500/50"
-                            />
-                          </div>
-                        )}
-
-                        {/* Platform info */}
-                        {llmMode === 'PLATFORM' && (
-                          <p className="text-xs text-gray-500 bg-surface-850 p-3 rounded-lg border border-white/5">
-                            Platform-managed mode uses Nexus credits. Usage is billed per token at standard rates.
-                          </p>
-                        )}
-
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={handleSaveLlmProvider}
-                            disabled={llmSaving}
-                            className="px-4 py-2 rounded-lg text-sm font-medium bg-nexus-600 text-white hover:bg-nexus-500 transition-colors disabled:opacity-50"
-                          >
-                            {llmSaving ? 'Saving...' : 'Save Provider'}
-                          </button>
-                          {llmProviders.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => { setShowLlmSetup(false); setLlmMessage(null); }}
-                              className="px-4 py-2 rounded-lg text-sm font-medium bg-white/5 border border-white/10 text-gray-400 hover:bg-white/10 transition-all"
-                            >
-                              Cancel
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </>
               )}
             </div>
 

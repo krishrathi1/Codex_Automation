@@ -2,13 +2,13 @@ import { prisma } from '../lib/prisma.js';
 import type { AgentStatus } from '@prisma/client';
 import { getGatewayClient } from '../openclaw/client.js';
 import { ensureDefaultGateway } from './gateway.service.js';
+import { isCodexRuntimeEnabled } from './codex-agent.service.js';
 import { logger } from '../lib/logger.js';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 
 // Map Nexus LLM provider names to OpenClaw model identifiers.
 // These must match models in the gateway's agents.defaults.models allowlist.
 const PROVIDER_MODEL_MAP: Record<string, string> = {
-  anthropic: 'anthropic/claude-sonnet-4-5-20250929',
   openai: 'openai/gpt-4o',
   google: 'google/gemini-2.0-flash',
 };
@@ -23,6 +23,37 @@ async function resolveGatewayModel(organizationId: string): Promise<string | und
 }
 
 const tracer = trace.getTracer('nexus-agent');
+
+type RuntimeIdentityProfile = Record<string, unknown> & {
+  activeWorkflowSessionId?: string;
+  agentRuntime?: string;
+  workflowSessionPolicy?: string;
+};
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+async function getRuntimeIdentityProfile(organizationId: string): Promise<RuntimeIdentityProfile> {
+  const org = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { settings: true },
+  });
+  const settings = objectRecord(org?.settings);
+  const activeWorkflowSessionId =
+    typeof settings.activeWorkflowSessionId === 'string' ? settings.activeWorkflowSessionId : undefined;
+
+  return {
+    activeWorkflowSessionId,
+    agentRuntime: typeof settings.activeAgentRuntime === 'string' ? settings.activeAgentRuntime : 'codex-cli',
+    workflowSessionPolicy:
+      typeof settings.workflowSessionPolicy === 'string'
+        ? settings.workflowSessionPolicy
+        : 'single-session-for-agents-and-workflows',
+  };
+}
 
 export async function getAllAgents(organizationId: string) {
   return prisma.agent.findMany({
@@ -110,10 +141,15 @@ export async function createAgent(organizationId: string, data: {
   // Get org slug for gateway agent naming
   const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { slug: true } });
   const gatewayAgentName = org ? `${org.slug}--${data.name}` : data.name;
+  const runtimeIdentityProfile = await getRuntimeIdentityProfile(organizationId);
+  const identityProfile = {
+    ...objectRecord(data.identityProfile),
+    ...runtimeIdentityProfile,
+  };
 
   // Auto-provision gateway if none specified
   let resolvedGatewayId = data.gatewayId;
-  if (!resolvedGatewayId) {
+  if (!resolvedGatewayId && !isCodexRuntimeEnabled()) {
     const defaultId = await ensureDefaultGateway(organizationId);
     if (defaultId) resolvedGatewayId = defaultId;
   }
@@ -129,12 +165,13 @@ export async function createAgent(organizationId: string, data: {
       avatar: data.avatar ?? null,
       heartbeatInterval: data.heartbeatInterval ?? 30,
       heartbeatConfig: data.heartbeatConfig as any ?? undefined,
-      identityProfile: data.identityProfile as any ?? undefined,
+      identityProfile: identityProfile as any,
       identityTemplate: data.identityTemplate ?? null,
       soulMd: data.soulMd ?? null,
       soulTemplateId: data.soulTemplateId ?? null,
       enabled: data.enabled ?? true,
       gatewayId: resolvedGatewayId ?? null,
+      agentToAgent: true,
     },
     include: {
       _count: { select: { activities: true, tasks: true } },
@@ -303,6 +340,13 @@ export async function updateAgent(id: string, organizationId: string, data: {
   gatewayId?: string;
   agentToAgent?: boolean;
 }) {
+  const existingAgent = await prisma.agent.findFirst({
+    where: { id, organizationId },
+    select: { identityProfile: true },
+  });
+  if (!existingAgent) throw new Error('Agent not found');
+
+  const runtimeIdentityProfile = await getRuntimeIdentityProfile(organizationId);
   const updateData: Record<string, unknown> = {};
   if (data.name !== undefined) updateData.name = data.name;
   if (data.displayName !== undefined) updateData.displayName = data.displayName;
@@ -311,7 +355,11 @@ export async function updateAgent(id: string, organizationId: string, data: {
   if (data.avatar !== undefined) updateData.avatar = data.avatar;
   if (data.heartbeatInterval !== undefined) updateData.heartbeatInterval = data.heartbeatInterval;
   if (data.heartbeatConfig !== undefined) updateData.heartbeatConfig = data.heartbeatConfig;
-  if (data.identityProfile !== undefined) updateData.identityProfile = data.identityProfile;
+  updateData.identityProfile = {
+    ...objectRecord(existingAgent.identityProfile),
+    ...objectRecord(data.identityProfile),
+    ...runtimeIdentityProfile,
+  };
   if (data.identityTemplate !== undefined) updateData.identityTemplate = data.identityTemplate;
   if (data.soulMd !== undefined) updateData.soulMd = data.soulMd;
   if (data.soulTemplateId !== undefined) updateData.soulTemplateId = data.soulTemplateId;

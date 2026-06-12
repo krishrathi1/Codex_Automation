@@ -10,15 +10,9 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { provider, mode, apiKey } = req.body;
-  if (!provider || !mode) {
-    return res.status(400).json({ error: 'provider and mode are required' });
-  }
-  const result = await llmService.upsertProvider(req.organizationId!, { provider, mode, apiKey });
-  // Strip apiKey from response
-  const { apiKey: _key, ...safe } = result as any;
-  req.app.get('io')?.to(`org:${req.organizationId}`).emit('llm:updated', safe);
-  res.json(safe);
+  res.status(410).json({
+    error: 'LLM provider configuration is disabled. Nexus uses the local Codex CLI runtime and existing codex login authentication.',
+  });
 });
 
 router.delete('/:id', async (req, res) => {

@@ -284,9 +284,9 @@ function AgentControlCard({ agent, onCommandSent }: { agent: Agent; onCommandSen
                       >
                         {cmd.type}
                       </span>
-                      {cmd.payload && (cmd.payload as Record<string, unknown>).message && (
+                      {typeof cmd.payload?.message === 'string' && (
                         <span className="text-xs text-gray-500 truncate max-w-[160px]">
-                          {String((cmd.payload as Record<string, unknown>).message)}
+                          {cmd.payload.message}
                         </span>
                       )}
                     </div>

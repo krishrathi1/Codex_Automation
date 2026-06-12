@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../lib/api';
 import { getSocket } from '../lib/socket';
-import type { Agent, ChatMessage } from '../types';
+import type { Agent, AgentStatus, ChatMessage } from '../types';
 
 export function Chat() {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -22,12 +22,12 @@ export function Chat() {
 
     // Listen for real-time agent status updates
     const socket = getSocket();
-    const handleUpdated = (data: { id: string; status?: string }) => {
+    const handleUpdated = (data: { id: string; status?: AgentStatus }) => {
       if (data.id && data.status) {
         setAgents(prev => prev.map(a => a.id === data.id ? { ...a, status: data.status! } : a));
       }
     };
-    const handleHeartbeat = (data: { id: string; status?: string }) => {
+    const handleHeartbeat = (data: { id: string; status?: AgentStatus }) => {
       if (data.id) {
         setAgents(prev => prev.map(a => a.id === data.id ? { ...a, status: data.status || 'ONLINE' } : a));
       }

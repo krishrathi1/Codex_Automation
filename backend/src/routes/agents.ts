@@ -1,16 +1,126 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { randomUUID } from 'crypto';
 import * as agentService from '../services/agent.service.js';
 import * as agentSkillService from '../services/agent-skill.service.js';
 import * as integrationService from '../services/integration.service.js';
 import * as activityService from '../services/activity.service.js';
 import * as llmProviderService from '../services/llm-provider.service.js';
+import * as codexAgentService from '../services/codex-agent.service.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { getGatewayClient } from '../openclaw/client.js';
-import type { AgentStatus, ChannelType } from '@prisma/client';
+import type { Agent as PrismaAgent, AgentStatus, ChannelType } from '@prisma/client';
 
 const router = Router();
+
+async function handleCodexChat(req: Request, res: Response, agent: PrismaAgent) {
+  const message = req.body.message as string;
+  if (!message) {
+    return res.status(400).json({ error: 'message is required' });
+  }
+
+  if (!codexAgentService.isCodexSdkConfigured()) {
+    return res.status(503).json({ error: 'Codex SDK is not configured. Set CODEX_API_KEY or OPENAI_API_KEY in backend/.env, or connect a gateway.' });
+  }
+
+  const chatSession = await prisma.session.create({
+    data: {
+      organizationId: req.organizationId!,
+      agentId: agent.id,
+      type: 'MESSAGE',
+      status: 'RUNNING',
+      summary: `Codex chat: ${message.slice(0, 120)}`,
+    },
+  });
+
+  await prisma.agent.update({ where: { id: agent.id }, data: { status: 'ONLINE' } });
+  req.app.get('io')?.to(`org:${req.organizationId}`).emit('agent:updated', { id: agent.id, status: 'ONLINE' });
+
+  const startedAt = Date.now();
+  try {
+    const result = await codexAgentService.sendCodexAgentMessage({
+      agent,
+      message,
+    });
+
+    await activityService.createActivity(req.organizationId!, {
+      agentId: agent.id,
+      type: 'MESSAGE',
+      message: `Codex chat message sent to ${agent.displayName}`,
+      metadata: { runtime: 'codex', runId: result.runId, codexThreadId: result.codexThreadId },
+    });
+
+    res.json({
+      status: result.status,
+      result: result.result,
+      runId: result.runId,
+      runtime: 'codex',
+    });
+
+    const responseTimeMs = result.durationMs ?? (Date.now() - startedAt);
+    const usage = codexAgentService.usageToTokenCounts(result.usage);
+    if (usage) {
+      llmProviderService.recordTokenUsage({
+        organizationId: req.organizationId!,
+        agentId: agent.id,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        model: result.model,
+        mode: 'BYOK',
+      }).catch(() => {});
+    }
+
+    await prisma.agent.update({ where: { id: agent.id }, data: { status: 'IDLE' } }).catch(() => {});
+    req.app.get('io')?.to(`org:${req.organizationId}`).emit('agent:updated', { id: agent.id, status: 'IDLE' });
+
+    prisma.session.update({
+      where: { id: chatSession.id },
+      data: {
+        status: result.status === 'finished' ? 'COMPLETED' : 'FAILED',
+        endedAt: new Date(),
+        durationMs: responseTimeMs,
+        summary: `Codex chat: ${message.slice(0, 120)}`,
+        ...(usage && { tokensUsed: usage.inputTokens + usage.outputTokens }),
+      },
+    }).catch(() => {});
+    prisma.metricSnapshot.create({
+      data: {
+        organizationId: req.organizationId!,
+        agentId: agent.id,
+        responseTimeMs,
+        success: result.status === 'finished',
+        toolName: 'codex-chat',
+      },
+    }).catch(() => {});
+  } catch (err) {
+    const responseTimeMs = Date.now() - startedAt;
+    const errorMessage = (err as Error).message;
+    prisma.session.update({
+      where: { id: chatSession.id },
+      data: {
+        status: 'FAILED',
+        endedAt: new Date(),
+        durationMs: responseTimeMs,
+        summary: `Codex chat failed: ${errorMessage.slice(0, 120)}`,
+      },
+    }).catch(() => {});
+    prisma.metricSnapshot.create({
+      data: {
+        organizationId: req.organizationId!,
+        agentId: agent.id,
+        responseTimeMs,
+        success: false,
+        errorMessage,
+        toolName: 'codex-chat',
+      },
+    }).catch(() => {});
+    await prisma.agent.update({ where: { id: agent.id }, data: { status: 'IDLE' } }).catch(() => {});
+    req.app.get('io')?.to(`org:${req.organizationId}`).emit('agent:updated', { id: agent.id, status: 'IDLE' });
+
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: errorMessage });
+  }
+}
 
 router.get('/', async (req, res) => {
   const agents = await agentService.getAllAgents(req.organizationId!);
@@ -158,8 +268,17 @@ router.post('/:id/chat', async (req, res) => {
       where: { id: req.params.id, organizationId: req.organizationId! },
     });
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+    if (
+      codexAgentService.isCodexRuntimeEnabled() ||
+      (!agent.gatewayId && codexAgentService.isCodexSdkConfigured()) ||
+      codexAgentService.isCodexThreadId(agent.gatewayAgentId)
+    ) {
+      return handleCodexChat(req, res, agent);
+    }
+
     if (!agent.gatewayId || !agent.gatewayAgentId) {
-      return res.status(400).json({ error: 'Agent not connected to a gateway' });
+      return res.status(400).json({ error: 'Agent not connected to a gateway. Set CODEX_API_KEY or OPENAI_API_KEY to use Codex instead.' });
     }
 
     const client = getGatewayClient(agent.gatewayId);
@@ -493,6 +612,14 @@ router.get('/:id/chat/history', async (req, res) => {
       where: { id: req.params.id, organizationId: req.organizationId! },
     });
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    if (codexAgentService.isCodexThreadId(agent.gatewayAgentId)) {
+      try {
+        const messages = await codexAgentService.getCodexAgentMessages(agent, Number(req.query.limit) || 50);
+        return res.json({ sessionKey: agent.gatewayAgentId, messages });
+      } catch {
+        return res.json({ sessionKey: agent.gatewayAgentId, messages: [] });
+      }
+    }
     if (!agent.gatewayId || !agent.gatewayAgentId) {
       return res.json({ sessionKey: '', messages: [] });
     }

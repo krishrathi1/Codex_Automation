@@ -1,6 +1,7 @@
+import type { ReactNode } from 'react';
 import { useAgentStore } from '../../stores/agent-store';
 
-export function Header({ title, subtitle }: { title: string; subtitle?: string }) {
+export function Header({ title, subtitle, action }: { title: string; subtitle?: string; action?: ReactNode }) {
   const stats = useAgentStore((s) => s.stats);
 
   return (
@@ -9,6 +10,8 @@ export function Header({ title, subtitle }: { title: string; subtitle?: string }
         <h2 className="text-2xl font-bold text-white">{title}</h2>
         {subtitle && <p className="text-sm text-gray-500 mt-0.5">{subtitle}</p>}
       </div>
+      <div className="flex items-center gap-4">
+      {action}
       {stats && (
         <div className="flex items-center gap-4 text-sm">
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
@@ -24,6 +27,7 @@ export function Header({ title, subtitle }: { title: string; subtitle?: string }
           </div>
         </div>
       )}
+      </div>
     </header>
   );
 }

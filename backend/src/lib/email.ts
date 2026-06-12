@@ -14,8 +14,21 @@ const transporter = nodemailer.createTransport({
 const FROM_ADDRESS = process.env.SMTP_FROM || 'Nexus <noreply@nexus.local>';
 const APP_URL = process.env.APP_URL || 'http://localhost:5174';
 
+function shouldSkipEmailDelivery() {
+  const isProduction = process.env.NODE_ENV === 'production';
+  const host = process.env.SMTP_HOST || '';
+  const hasAuth = Boolean(process.env.SMTP_USER && process.env.SMTP_PASS);
+
+  return !isProduction && (!host || host === 'smtp.example.com' || !hasAuth);
+}
+
 export async function sendVerificationEmail(email: string, token: string): Promise<void> {
   const verifyUrl = `${APP_URL}/verify-email?token=${token}`;
+
+  if (shouldSkipEmailDelivery()) {
+    logger.warn({ email, verifyUrl }, 'SMTP not configured; skipping verification email in development');
+    return;
+  }
 
   const html = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">

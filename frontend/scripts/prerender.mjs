@@ -110,8 +110,8 @@ async function prerender() {
       const url = `http://localhost:${PORT}${route}`;
 
       await page.goto(url, {
-        waitUntil: 'networkidle0',
-        timeout: 15000,
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
       });
 
       // Wait a bit for React to finish rendering
@@ -148,6 +148,10 @@ async function prerender() {
   console.log(
     `\n[prerender] Done: ${successCount}/${ROUTES.length} routes pre-rendered.`
   );
+
+  if (successCount !== ROUTES.length) {
+    process.exitCode = 1;
+  }
 }
 
 prerender().catch((err) => {

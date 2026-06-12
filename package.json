@@ -6,7 +6,9 @@
     "frontend"
   ],
   "scripts": {
+    "predev": "npm run db:generate -w backend",
     "dev": "concurrently \"npm run dev -w backend\" \"npm run dev -w frontend\"",
+    "prebuild": "npm run db:generate -w backend",
     "build": "npm run build -w backend && npm run build -w frontend"
   },
   "devDependencies": {
