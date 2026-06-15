@@ -6,7 +6,7 @@ import { SEO } from '../components/SEO';
 
 export function Login() {
   const navigate = useNavigate();
-  const { login, isLoading, error } = useAuthStore();
+  const { login, devLogin, isLoading, error } = useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
@@ -38,6 +38,18 @@ export function Login() {
       setResendStatus('Verification email sent! Check your inbox.');
     } catch {
       setResendStatus('Failed to resend. Please try again.');
+    }
+  };
+
+  const handleDevLogin = async () => {
+    setLocalError(null);
+    setEmailNotVerified(false);
+    setResendStatus(null);
+    try {
+      await devLogin();
+      navigate('/dashboard', { replace: true });
+    } catch (err: any) {
+      setLocalError(err.message);
     }
   };
 
@@ -136,6 +148,17 @@ export function Login() {
                 'Sign in'
               )}
             </button>
+
+            {import.meta.env.DEV && (
+              <button
+                type="button"
+                onClick={handleDevLogin}
+                disabled={isLoading}
+                className="w-full border border-nexus-500/30 bg-nexus-500/10 hover:bg-nexus-500/15 disabled:opacity-50 disabled:cursor-not-allowed text-nexus-300 font-medium py-2.5 rounded-lg transition-colors duration-200"
+              >
+                Use local admin
+              </button>
+            )}
           </form>
         </div>
 

@@ -14,6 +14,7 @@ interface AuthState {
   error: string | null;
 
   login: (email: string, password: string) => Promise<void>;
+  devLogin: () => Promise<void>;
   signup: (email: string, password: string, name: string, orgName: string) => Promise<void>;
   logout: () => Promise<void>;
   initialize: () => Promise<void>;
@@ -45,6 +46,33 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
       const data = await res.json();
       // Refresh token is in httpOnly cookie (not in response body)
+      set({
+        user: data.user,
+        organization: data.organization,
+        orgRole: data.role,
+        accessToken: data.accessToken,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+    } catch (e: any) {
+      set({ error: e.message, isLoading: false });
+      throw e;
+    }
+  },
+
+  devLogin: async () => {
+    set({ error: null, isLoading: true });
+    try {
+      const res = await fetch('/api/auth/dev-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: 'Development login failed' }));
+        throw new Error(data.error || 'Development login failed');
+      }
+      const data = await res.json();
       set({
         user: data.user,
         organization: data.organization,

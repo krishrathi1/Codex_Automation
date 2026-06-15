@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { Header } from '../components/layout/Header';
 import { api } from '@/lib/api';
+import { getSocket } from '@/lib/socket';
 import { timeAgo } from '@/lib/utils';
 
 // ─── Types ─────────────────────────────────────────────
@@ -11,13 +13,41 @@ interface GraphNode {
   displayName: string;
   avatar: string | null;
   status: string;
+  kind?: string;
+  currentTask?: string | null;
+  codexSessionId?: string;
+  activeRunIds?: string[];
+  taskIds?: string[];
 }
 
 interface GraphEdge {
   source: string;
   target: string;
+  kind?: 'admin_agent' | 'admin_mother' | 'agent_agent' | 'mother_observation' | 'system';
+  label?: string;
   messageCount: number;
   lastMessage: string;
+  threadIds?: string[];
+  codexSessionIds?: string[];
+  sessionIds?: string[];
+  activeRunIds?: string[];
+  taskIds?: string[];
+  recentMessages?: Array<{
+    id: string;
+    role?: string;
+    content: string;
+    createdAt: string;
+    threadId: string;
+    codexSessionId?: string;
+    nexusSessionId?: string;
+    requestId?: string;
+  }>;
+  observationLinks?: Array<{
+    type: 'task' | 'session' | 'context';
+    id: string;
+    label: string;
+    status?: string;
+  }>;
 }
 
 interface SimNode extends GraphNode {
@@ -43,6 +73,13 @@ const STATUS_COLORS: Record<string, string> = {
   IDLE: '#f59e0b',
   OFFLINE: '#6b7280',
   ERROR: '#ef4444',
+};
+const EDGE_COLORS: Record<string, string> = {
+  admin_agent: '#3b8eff',
+  admin_mother: '#a78bfa',
+  agent_agent: '#10b981',
+  mother_observation: '#f59e0b',
+  system: '#64748b',
 };
 
 const REPULSION = 8000;
@@ -261,14 +298,126 @@ function DetailPanel({
   );
 }
 
+function EdgeDetailPanel({
+  edge,
+  nodeMap,
+  onClose,
+}: {
+  edge: GraphEdge;
+  nodeMap: Map<string, SimNode>;
+  onClose: () => void;
+}) {
+  const source = nodeMap.get(edge.source);
+  const target = nodeMap.get(edge.target);
+  const color = EDGE_COLORS[edge.kind || 'system'] ?? EDGE_COLORS.system;
+  const chips = [
+    { label: 'Codex', values: edge.codexSessionIds ?? [] },
+    { label: 'Sessions', values: edge.sessionIds ?? [] },
+    { label: 'Active runs', values: edge.activeRunIds ?? [] },
+    { label: 'Tasks', values: edge.taskIds ?? [] },
+    { label: 'Threads', values: edge.threadIds ?? [] },
+  ].filter(item => item.values.length > 0);
+
+  return (
+    <div className="absolute right-0 top-0 h-full w-96 bg-surface-900 border-l border-white/5 z-20 overflow-y-auto animate-slide-in">
+      <button
+        onClick={onClose}
+        className="absolute top-4 right-4 text-gray-500 hover:text-white transition-colors text-lg"
+      >
+        x
+      </button>
+
+      <div className="px-6 pt-6 pb-4 border-b border-white/5">
+        <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Connection</div>
+        <h3 className="text-lg font-bold text-white">
+          {source?.displayName || edge.source} {'->'} {target?.displayName || edge.target}
+        </h3>
+        <div className="mt-3 flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+          <span className="text-sm font-medium" style={{ color }}>{edge.label || edge.kind || 'System'}</span>
+          <span className="text-xs text-gray-600">Last {timeAgo(edge.lastMessage)}</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 px-6 py-4 border-b border-white/5">
+        <div className="bg-white/5 rounded-lg px-3 py-2">
+          <div className="text-xs text-gray-500">Messages</div>
+          <div className="text-lg font-bold text-white font-mono">{edge.messageCount}</div>
+        </div>
+        <div className="bg-white/5 rounded-lg px-3 py-2">
+          <div className="text-xs text-gray-500">Observations</div>
+          <div className="text-lg font-bold text-white font-mono">{edge.observationLinks?.length ?? 0}</div>
+        </div>
+      </div>
+
+      {chips.length > 0 && (
+        <div className="px-6 py-4 border-b border-white/5">
+          <h4 className="text-xs text-gray-500 uppercase tracking-wider mb-3">Runtime Links</h4>
+          <div className="space-y-3">
+            {chips.map(item => (
+              <div key={item.label}>
+                <div className="text-xs text-gray-500 mb-1">{item.label}</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {item.values.slice(0, 6).map(value => (
+                    <span key={value} className="rounded bg-white/5 px-2 py-1 text-[11px] font-mono text-gray-300">
+                      {value.slice(0, 8)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(edge.observationLinks?.length ?? 0) > 0 && (
+        <div className="px-6 py-4 border-b border-white/5">
+          <h4 className="text-xs text-gray-500 uppercase tracking-wider mb-3">Mother Chat Links</h4>
+          <div className="space-y-2">
+            {edge.observationLinks!.map(link => (
+              <div key={`${link.type}-${link.id}`} className="rounded-lg bg-white/5 px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm text-white truncate">{link.label}</span>
+                  {link.status && <span className="text-[10px] uppercase text-gray-500">{link.status}</span>}
+                </div>
+                <div className="text-[11px] text-gray-600 mt-1">{link.type}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="px-6 py-4">
+        <h4 className="text-xs text-gray-500 uppercase tracking-wider mb-3">Recent Messages</h4>
+        <div className="space-y-2">
+          {(edge.recentMessages ?? []).map(message => (
+            <div key={message.id} className="rounded-lg bg-white/5 px-3 py-2">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="text-[11px] uppercase text-gray-500">{message.role || 'message'}</span>
+                <span className="text-[11px] text-gray-600">{timeAgo(message.createdAt)}</span>
+              </div>
+              <div className="text-sm text-gray-300 leading-relaxed">{message.content}</div>
+            </div>
+          ))}
+          {(edge.recentMessages ?? []).length === 0 && (
+            <div className="text-sm text-gray-500 py-2">No message samples for this connection.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ────────────────────────────────────
 
 export function Topology() {
   const [rawNodes, setRawNodes] = useState<GraphNode[]>([]);
   const [rawEdges, setRawEdges] = useState<GraphEdge[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<SimNode | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<GraphEdge | null>(null);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -276,31 +425,53 @@ export function Topology() {
   const nodesRef = useRef<SimNode[]>([]);
   const particlesRef = useRef<Particle[]>([]);
   const animFrameRef = useRef<number>(0);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sizeRef = useRef({ width: 900, height: 600 });
   const [, forceRender] = useState(0);
 
+  const fetchGraph = useCallback(async (showLoading = false) => {
+    if (showLoading) setLoading(true);
+    setRefreshing(true);
+    try {
+      const data = await api.threads.graph();
+      setRawNodes(data.nodes);
+      setRawEdges(data.edges);
+      setSelectedEdge(prev => {
+        if (!prev) return prev;
+        return data.edges.find(edge => edge.source === prev.source && edge.target === prev.target && edge.kind === prev.kind) || null;
+      });
+      setError(null);
+    } catch (e) {
+      setError('Failed to load network graph');
+      console.error(e);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  const scheduleGraphRefresh = useCallback(() => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      fetchGraph().catch(() => {});
+    }, 500);
+  }, [fetchGraph]);
+
   // Fetch graph data
   useEffect(() => {
-    let cancelled = false;
-    async function fetch() {
-      try {
-        const data = await api.threads.graph();
-        if (cancelled) return;
-        setRawNodes(data.nodes);
-        setRawEdges(data.edges);
-        setError(null);
-      } catch (e) {
-        if (!cancelled) {
-          setError('Failed to load network graph');
-          console.error(e);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    fetch();
-    return () => { cancelled = true; };
-  }, []);
+    fetchGraph(true).catch(() => {});
+  }, [fetchGraph]);
+
+  // Live updates from chat, Mother Chat, tasks, and agent state changes
+  useEffect(() => {
+    const socket = getSocket();
+    const events = ['agent:chat:event', 'mother-chat:event', 'agent:updated', 'agent:status', 'task:update', 'task:delete'];
+    events.forEach(eventName => socket.on(eventName, scheduleGraphRefresh));
+    return () => {
+      events.forEach(eventName => socket.off(eventName, scheduleGraphRefresh));
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    };
+  }, [scheduleGraphRefresh]);
 
   // Initialize simulation when data arrives
   useEffect(() => {
@@ -376,6 +547,7 @@ export function Topology() {
   // Click handler
   const handleNodeClick = useCallback(
     (node: SimNode) => {
+      setSelectedEdge(null);
       setSelectedNode((prev) => (prev?.id === node.id ? null : node));
     },
     []
@@ -412,7 +584,21 @@ export function Topology() {
 
   return (
     <div>
-      <Header title="Network Graph" subtitle="Agent communication topology" />
+      <Header
+        title="Network Graph"
+        subtitle="Agent communication topology"
+        action={
+          <button
+            type="button"
+            onClick={() => fetchGraph().catch(() => {})}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-surface-850 text-gray-400 transition-colors hover:text-white"
+            title="Refresh graph"
+            aria-label="Refresh graph"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+          </button>
+        }
+      />
 
       {/* Legend */}
       <div className="flex items-center gap-6 mb-4">
@@ -424,8 +610,16 @@ export function Topology() {
             </div>
           ))}
         </div>
+        <div className="flex items-center gap-4">
+          {Object.entries(EDGE_COLORS).map(([kind, color]) => (
+            <div key={kind} className="flex items-center gap-1.5">
+              <div className="w-5 h-[2px] rounded" style={{ backgroundColor: color }} />
+              <span className="text-xs text-gray-500">{kind.replace(/_/g, ' ')}</span>
+            </div>
+          ))}
+        </div>
         <div className="text-xs text-gray-600 ml-auto">
-          Edge thickness = message frequency | Node size = activity level
+          Arrow = direction | Edge thickness = message frequency | Node size = activity level
         </div>
       </div>
 
@@ -454,6 +648,20 @@ export function Topology() {
                 <feMergeNode in="SourceGraphic" />
               </feMerge>
             </filter>
+            {Object.entries(EDGE_COLORS).map(([kind, color]) => (
+              <marker
+                key={kind}
+                id={`arrow-${kind}`}
+                markerWidth="8"
+                markerHeight="8"
+                refX="7"
+                refY="4"
+                orient="auto"
+                markerUnits="strokeWidth"
+              >
+                <path d="M 0 0 L 8 4 L 0 8 z" fill={color} />
+              </marker>
+            ))}
           </defs>
           <rect width={width} height={height} fill="url(#grid)" />
 
@@ -464,7 +672,14 @@ export function Topology() {
             if (!source || !target) return null;
 
             const thickness = 1 + (edge.messageCount / maxEdgeCount) * 5;
+            const kind = edge.kind || 'system';
+            const color = EDGE_COLORS[kind] ?? EDGE_COLORS.system;
+            const isSelectedEdge =
+              selectedEdge?.source === edge.source &&
+              selectedEdge?.target === edge.target &&
+              selectedEdge?.kind === edge.kind;
             const isHighlighted =
+              isSelectedEdge ||
               hoveredNode === edge.source ||
               hoveredNode === edge.target ||
               selectedNode?.id === edge.source ||
@@ -472,14 +687,22 @@ export function Topology() {
 
             return (
               <line
-                key={`edge-${i}`}
+                key={`edge-${edge.source}-${edge.target}-${edge.kind || 'system'}-${i}`}
                 x1={source.x}
                 y1={source.y}
                 x2={target.x}
                 y2={target.y}
-                stroke={isHighlighted ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)'}
+                stroke={isHighlighted ? color : 'rgba(255,255,255,0.08)'}
                 strokeWidth={thickness}
                 strokeLinecap="round"
+                markerEnd={`url(#arrow-${kind})`}
+                className="cursor-pointer transition-all duration-200"
+                opacity={isHighlighted ? 0.85 : 0.35}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setSelectedNode(null);
+                  setSelectedEdge(edge);
+                }}
               />
             );
           })}
@@ -598,6 +821,13 @@ export function Topology() {
             edges={rawEdges}
             allNodes={nodes}
             onClose={() => setSelectedNode(null)}
+          />
+        )}
+        {selectedEdge && (
+          <EdgeDetailPanel
+            edge={selectedEdge}
+            nodeMap={nodeMap}
+            onClose={() => setSelectedEdge(null)}
           />
         )}
 

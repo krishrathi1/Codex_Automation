@@ -181,8 +181,31 @@ export interface Command {
 export interface CommEdge {
   source: string;
   target: string;
+  kind?: 'admin_agent' | 'admin_mother' | 'agent_agent' | 'mother_observation' | 'system';
+  label?: string;
   messageCount: number;
   lastMessage: string;
+  threadIds?: string[];
+  codexSessionIds?: string[];
+  sessionIds?: string[];
+  activeRunIds?: string[];
+  taskIds?: string[];
+  recentMessages?: Array<{
+    id: string;
+    role?: string;
+    content: string;
+    createdAt: string;
+    threadId: string;
+    codexSessionId?: string;
+    nexusSessionId?: string;
+    requestId?: string;
+  }>;
+  observationLinks?: Array<{
+    type: 'task' | 'session' | 'context';
+    id: string;
+    label: string;
+    status?: string;
+  }>;
 }
 
 // Organization & Auth
@@ -268,9 +291,12 @@ export interface ModelInfo {
 
 // Chat
 export interface ChatMessage {
+  id?: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp?: string;
+  requestId?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ChatHistory {
@@ -282,6 +308,123 @@ export interface ChatResponse {
   status: string;
   result?: string;
   summary?: string;
+  runtime?: string;
+  sessionId?: string;
+  codexSessionId?: string | null;
+  usage?: Record<string, unknown> | null;
+}
+
+export interface MotherChatContext {
+  generatedAt: string;
+  counts: {
+    agents: number;
+    runningSessions: number;
+    activeTasks: number;
+    recentMessages: number;
+    recentActivities: number;
+    recentErrors: number;
+    pendingApprovals: number;
+    tokensInWindow: number;
+  };
+  agents: Array<{
+    id: string;
+    name: string;
+    displayName: string;
+    status: AgentStatus;
+    enabled: boolean;
+    currentTask: string | null;
+    lastHeartbeat: string | null;
+    boardId: string | null;
+    codexSessionId: string | null;
+    updatedAt: string;
+  }>;
+  sessions: Array<{
+    id: string;
+    agent: string;
+    type: string;
+    status: string;
+    summary: string | null;
+    startedAt: string;
+    endedAt: string | null;
+    durationMs: number | null;
+    tokensUsed: number | null;
+  }>;
+  messages: Array<{
+    id: string;
+    from: string;
+    to: string;
+    content: string;
+    createdAt: string;
+  }>;
+  activities: Array<{
+    id: string;
+    agent: string;
+    type: ActivityType;
+    message: string;
+    createdAt: string;
+  }>;
+  tasks: Array<{
+    id: string;
+    title: string;
+    status: TaskStatus;
+    priority: Priority;
+    agent: string;
+    board: string | null;
+    updatedAt: string;
+  }>;
+  tokenUsage: Array<{
+    id: string;
+    agent: string;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cost: number;
+    createdAt: string;
+  }>;
+  errors: Array<{
+    source: string;
+    agent: string;
+    message: string;
+    createdAt: string;
+  }>;
+  approvals: Array<{
+    id: string;
+    status: ApprovalStatus;
+    actionType: string;
+    agent: string | null;
+    task: string | null;
+    board: string;
+    createdAt: string;
+  }>;
+}
+
+export interface MotherChatDiagnostics {
+  agentRuntime: string;
+  configuredCommand: {
+    envName: string;
+    value: string;
+    expandedValue: string;
+    mustBeFilePath: boolean;
+  } | null;
+  expectedMacosCommand: string;
+  selectedCommand: string | null;
+  cwd: string;
+  sandbox: string;
+  skipGitRepoCheck: boolean;
+  dangerouslyBypassApprovalsAndSandbox: boolean;
+  installation: {
+    ok: boolean;
+    command: string | null;
+    version?: string;
+    details: string;
+  };
+  authentication: {
+    ok: boolean;
+    command: string | null;
+    details: string;
+  };
+  loggedIn: boolean;
 }
 
 // Workspace Files

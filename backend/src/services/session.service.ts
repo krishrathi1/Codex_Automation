@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { logger } from '../lib/logger.js';
 const tracer = trace.getTracer('nexus-session');
+const SYSTEM_AGENT_NAMES = ['__mother_chat__'];
 
 export async function getSessions(organizationId: string, params?: { agentId?: string; limit?: number }) {
   const { agentId, limit = 100 } = params ?? {};
@@ -28,6 +29,7 @@ export async function getTimelineData(organizationId: string) {
     where: {
       organizationId,
       startedAt: { gte: fourHoursAgo },
+      agent: { name: { notIn: SYSTEM_AGENT_NAMES } },
     },
     orderBy: { startedAt: 'asc' },
     include: {
@@ -57,7 +59,7 @@ export async function getTimelineData(organizationId: string) {
 
   // Also include agents that have no sessions in the window (so all rows show)
   const allAgents = await prisma.agent.findMany({
-    where: { organizationId },
+    where: { organizationId, name: { notIn: SYSTEM_AGENT_NAMES } },
     select: { id: true, name: true, displayName: true, avatar: true, status: true },
     orderBy: { name: 'asc' },
   });

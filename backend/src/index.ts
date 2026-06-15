@@ -38,8 +38,10 @@ import onboardingRoutes from './routes/onboarding.js';
 import boardGroupMemoryRoutes from './routes/board-group-memory.js';
 import boardMemoryRoutes from './routes/board-memory.js';
 import soulTemplateRoutes from './routes/soul-templates.js';
+import motherChatRoutes from './routes/mother-chat.js';
 import { connectAllGateways, setSocketIO } from './services/gateway.service.js';
-import { isCodexRuntimeEnabled } from './services/codex-agent.service.js';
+import { isCodexCliRuntimeEnabled } from './services/codex-cli.service.js';
+import { ensureDevelopmentAdminUser } from './services/dev-admin.service.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -136,6 +138,7 @@ app.use('/api/boards', requireAuth, onboardingRoutes);
 app.use('/api/board-groups', requireAuth, boardGroupMemoryRoutes);
 app.use('/api/boards', requireAuth, boardMemoryRoutes);
 app.use('/api/soul-templates', requireAuth, soulTemplateRoutes);
+app.use('/api/mother-chat', requireAuth, motherChatRoutes);
 
 // Global error handler for unhandled async errors in routes
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -162,24 +165,33 @@ app.set('io', io);
 // Share Socket.io with gateway service for event forwarding
 setSocketIO(io);
 
-// Reset any agents stuck as ONLINE from a previous crash (no agent can be
-// actively processing when the server just started)
-prisma.agent.updateMany({
-  where: { status: 'ONLINE' },
-  data: { status: 'IDLE' },
-}).then(({ count }) => {
-  if (count > 0) logger.info({ count }, 'Reset stuck ONLINE agents to IDLE on startup');
-}).catch(() => {});
+async function start() {
+  await ensureDevelopmentAdminUser();
 
-// Connect to all gateways on startup unless Codex SDK is the selected runtime.
-if (isCodexRuntimeEnabled()) {
-  logger.info('Codex SDK runtime enabled; skipping gateway auto-connect');
-} else {
-  connectAllGateways().catch(err => {
-    logger.warn({ err }, 'Gateway connection errors on startup');
+  // Reset any agents stuck as ONLINE from a previous crash (no agent can be
+  // actively processing when the server just started)
+  await prisma.agent.updateMany({
+    where: { status: 'ONLINE' },
+    data: { status: 'IDLE' },
+  }).then(({ count }) => {
+    if (count > 0) logger.info({ count }, 'Reset stuck ONLINE agents to IDLE on startup');
+  });
+
+  // Connect to all gateways on startup unless local Codex CLI is the selected runtime.
+  if (isCodexCliRuntimeEnabled()) {
+    logger.info('Codex CLI runtime enabled; skipping gateway auto-connect');
+  } else {
+    connectAllGateways().catch(err => {
+      logger.warn({ err }, 'Gateway connection errors on startup');
+    });
+  }
+
+  httpServer.listen(PORT, () => {
+    logger.info({ port: PORT }, 'Nexus backend running');
   });
 }
 
-httpServer.listen(PORT, () => {
-  logger.info({ port: PORT }, 'Nexus backend running');
+start().catch((err) => {
+  logger.error({ err }, 'Nexus backend failed to start');
+  process.exit(1);
 });

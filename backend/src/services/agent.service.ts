@@ -2,9 +2,10 @@ import { prisma } from '../lib/prisma.js';
 import type { AgentStatus } from '@prisma/client';
 import { getGatewayClient } from '../openclaw/client.js';
 import { ensureDefaultGateway } from './gateway.service.js';
-import { isCodexRuntimeEnabled } from './codex-agent.service.js';
+import { isCodexCliRuntimeEnabled } from './codex-cli.service.js';
 import { logger } from '../lib/logger.js';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
+import { ADMIN_AGENT_NAME } from './system-agent.service.js';
 
 // Map Nexus LLM provider names to OpenClaw model identifiers.
 // These must match models in the gateway's agents.defaults.models allowlist.
@@ -12,6 +13,7 @@ const PROVIDER_MODEL_MAP: Record<string, string> = {
   openai: 'openai/gpt-4o',
   google: 'google/gemini-2.0-flash',
 };
+const SYSTEM_AGENT_NAMES = ['__mother_chat__', ADMIN_AGENT_NAME];
 
 async function resolveGatewayModel(organizationId: string): Promise<string | undefined> {
   const provider = await prisma.llmProvider.findFirst({
@@ -57,7 +59,7 @@ async function getRuntimeIdentityProfile(organizationId: string): Promise<Runtim
 
 export async function getAllAgents(organizationId: string) {
   return prisma.agent.findMany({
-    where: { organizationId },
+    where: { organizationId, name: { notIn: SYSTEM_AGENT_NAMES } },
     orderBy: { name: 'asc' },
     include: {
       _count: { select: { activities: true, tasks: true } },
@@ -107,12 +109,13 @@ export async function recordHeartbeat(id: string, organizationId: string) {
 }
 
 export async function getAgentStats(organizationId: string) {
+  const visibleAgents = { organizationId, name: { notIn: SYSTEM_AGENT_NAMES } };
   const [total, online, idle, offline, error] = await Promise.all([
-    prisma.agent.count({ where: { organizationId } }),
-    prisma.agent.count({ where: { organizationId, status: 'ONLINE' } }),
-    prisma.agent.count({ where: { organizationId, status: 'IDLE' } }),
-    prisma.agent.count({ where: { organizationId, status: 'OFFLINE' } }),
-    prisma.agent.count({ where: { organizationId, status: 'ERROR' } }),
+    prisma.agent.count({ where: visibleAgents }),
+    prisma.agent.count({ where: { ...visibleAgents, status: 'ONLINE' } }),
+    prisma.agent.count({ where: { ...visibleAgents, status: 'IDLE' } }),
+    prisma.agent.count({ where: { ...visibleAgents, status: 'OFFLINE' } }),
+    prisma.agent.count({ where: { ...visibleAgents, status: 'ERROR' } }),
   ]);
   const recentActivities = await prisma.activity.count({
     where: { organizationId, createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) } },
@@ -149,7 +152,7 @@ export async function createAgent(organizationId: string, data: {
 
   // Auto-provision gateway if none specified
   let resolvedGatewayId = data.gatewayId;
-  if (!resolvedGatewayId && !isCodexRuntimeEnabled()) {
+  if (!resolvedGatewayId && !isCodexCliRuntimeEnabled()) {
     const defaultId = await ensureDefaultGateway(organizationId);
     if (defaultId) resolvedGatewayId = defaultId;
   }

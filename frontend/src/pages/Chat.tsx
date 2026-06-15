@@ -13,6 +13,18 @@ export function Chat() {
   const [searchFilter, setSearchFilter] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const selectedAgentIdRef = useRef<string | null>(null);
+  const streamedResponseRequestsRef = useRef<Record<string, boolean>>({});
+
+  type AgentChatSocketEvent = {
+    agentId: string;
+    type: 'response' | 'activity' | 'tool_call' | 'tool_result' | 'terminal_output' | 'file_read' | 'file_write' | 'status_update' | 'response_end' | 'error';
+    content?: string;
+    requestId?: string | null;
+    sessionId?: string;
+    nexusSessionId?: string;
+    codexSessionId?: string | null;
+    timestamp?: string;
+  };
 
   useEffect(() => {
     api.agents.list().then(data => {
@@ -32,13 +44,72 @@ export function Chat() {
         setAgents(prev => prev.map(a => a.id === data.id ? { ...a, status: data.status || 'ONLINE' } : a));
       }
     };
+    const handleChatEvent = (event: AgentChatSocketEvent) => {
+      if (event.agentId !== selectedAgentIdRef.current) return;
+
+      const requestKey = event.requestId || event.nexusSessionId || event.sessionId || `codex-${Date.now()}`;
+      const timestamp = event.timestamp || new Date().toISOString();
+
+      if (event.type === 'response' && event.content) {
+        const content = event.content;
+        streamedResponseRequestsRef.current[requestKey] = true;
+        setMessages(prev => {
+          const existingIndex = prev.findIndex(message => message.role === 'assistant' && message.requestId === requestKey);
+          if (existingIndex >= 0) {
+            const next = [...prev];
+            const existing = next[existingIndex];
+            next[existingIndex] = {
+              ...existing,
+              content: existing.content ? `${existing.content}\n${content}` : content,
+              timestamp,
+            };
+            return next;
+          }
+
+          return [
+            ...prev,
+            {
+              id: `assistant-${requestKey}`,
+              role: 'assistant',
+              content,
+              timestamp,
+              requestId: requestKey,
+            },
+          ];
+        });
+        setSending(false);
+        return;
+      }
+
+      if (event.type === 'error') {
+        streamedResponseRequestsRef.current[requestKey] = true;
+        setMessages(prev => [
+          ...prev,
+          {
+            id: `error-${requestKey}`,
+            role: 'assistant',
+            content: `Error: ${event.content || 'Codex CLI request failed'}`,
+            timestamp,
+            requestId: requestKey,
+          },
+        ]);
+        setSending(false);
+        return;
+      }
+
+      if (event.type === 'response_end') {
+        setSending(false);
+      }
+    };
     socket.on('agent:updated', handleUpdated);
     socket.on('agent:status', handleUpdated);
     socket.on('agent:heartbeat', handleHeartbeat);
+    socket.on('agent:chat:event', handleChatEvent);
     return () => {
       socket.off('agent:updated', handleUpdated);
       socket.off('agent:status', handleUpdated);
       socket.off('agent:heartbeat', handleHeartbeat);
+      socket.off('agent:chat:event', handleChatEvent);
     };
   }, []);
 
@@ -66,29 +137,43 @@ export function Chat() {
     if (!input.trim() || !selectedAgentId || sending) return;
 
     const agentIdAtSend = selectedAgentId;
-    const userMessage: ChatMessage = { role: 'user', content: input.trim(), timestamp: new Date().toISOString() };
+    const requestId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `chat-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    streamedResponseRequestsRef.current[requestId] = false;
+    const userMessage: ChatMessage = {
+      id: `user-${requestId}`,
+      role: 'user',
+      content: input.trim(),
+      timestamp: new Date().toISOString(),
+      requestId,
+    };
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setSending(true);
 
     try {
-      const response = await api.chat.send(agentIdAtSend, userMessage.content);
+      const response = await api.chat.send(agentIdAtSend, userMessage.content, requestId);
       const assistantMessage: ChatMessage = {
+        id: `assistant-${requestId}`,
         role: 'assistant',
         content: response.result || response.summary || 'No response',
         timestamp: new Date().toISOString(),
+        requestId,
       };
       // Only append response if still viewing the same agent
-      if (selectedAgentIdRef.current === agentIdAtSend) {
+      if (selectedAgentIdRef.current === agentIdAtSend && !streamedResponseRequestsRef.current[requestId]) {
         setMessages(prev => [...prev, assistantMessage]);
       }
     } catch (err) {
-      const errorMessage: ChatMessage = {
-        role: 'assistant',
-        content: `Error: ${(err as Error).message}`,
-        timestamp: new Date().toISOString(),
-      };
-      if (selectedAgentIdRef.current === agentIdAtSend) {
+      if (selectedAgentIdRef.current === agentIdAtSend && !streamedResponseRequestsRef.current[requestId]) {
+        const errorMessage: ChatMessage = {
+          id: `error-${requestId}`,
+          role: 'assistant',
+          content: `Error: ${(err as Error).message}`,
+          timestamp: new Date().toISOString(),
+          requestId,
+        };
         setMessages(prev => [...prev, errorMessage]);
       }
     } finally {
@@ -163,9 +248,7 @@ export function Chat() {
                   </div>
                   <p className="text-xs text-gray-500 truncate">{agent.status.toLowerCase()}</p>
                 </div>
-                {agent.gatewayAgentId && (
-                  <div className="w-2 h-2 rounded-full bg-nexus-500" title="Connected to Gateway" />
-                )}
+                <div className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium shrink-0" title="Local Codex CLI runtime">CLI</div>
               </button>
             ))
           )}
@@ -184,7 +267,7 @@ export function Chat() {
               <div>
                 <h2 className="text-white font-semibold">{selectedAgent.displayName}</h2>
                 <p className="text-xs text-gray-500">
-                  {selectedAgent.gatewayAgentId ? 'Connected to Gateway' : 'Not connected to Gateway'}
+                  Local Codex CLI runtime
                   {selectedAgent.status === 'ONLINE' && ' \u2022 Online'}
                 </p>
               </div>
@@ -197,9 +280,6 @@ export function Chat() {
                   <div className="text-center">
                     <div className="text-4xl mb-3">{selectedAgent.avatar || '\u{1F916}'}</div>
                     <p className="text-gray-400">Start a conversation with {selectedAgent.displayName}</p>
-                    {!selectedAgent.gatewayAgentId && (
-                      <p className="text-xs text-amber-500 mt-2">This agent is not connected to a Gateway. Connect it first to chat.</p>
-                    )}
                   </div>
                 </div>
               )}
@@ -240,14 +320,14 @@ export function Chat() {
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder={selectedAgent.gatewayAgentId ? 'Type a message...' : 'Connect agent to a gateway first'}
-                  disabled={!selectedAgent.gatewayAgentId || sending}
+                  placeholder="Type a message for Codex CLI..."
+                  disabled={sending}
                   rows={1}
                   className="flex-1 px-4 py-2.5 bg-surface-850 border border-white/10 rounded-xl text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500 resize-none disabled:opacity-50"
                 />
                 <button
                   onClick={handleSend}
-                  disabled={!input.trim() || !selectedAgent.gatewayAgentId || sending}
+                  disabled={!input.trim() || sending}
                   className="px-5 py-2.5 bg-nexus-600 hover:bg-nexus-500 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Send

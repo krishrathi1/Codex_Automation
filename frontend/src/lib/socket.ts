@@ -6,8 +6,11 @@ export function getSocket(): Socket {
   if (!socket) {
     socket = io('/', {
       autoConnect: false,
+      transports: ['websocket'],
       reconnection: true,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 5000,
     });
   }
   return socket;

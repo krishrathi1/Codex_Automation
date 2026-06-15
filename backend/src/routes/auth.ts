@@ -4,6 +4,11 @@ import rateLimit from 'express-rate-limit';
 import * as authService from '../services/auth.service.js';
 import { validate } from '../middleware/validate.js';
 import { requireAuth } from '../middleware/auth.js';
+import {
+  ensureDevelopmentAdminUser,
+  getDevelopmentAdminCredentials,
+  isDevelopmentAdminBootstrapEnabled,
+} from '../services/dev-admin.service.js';
 import type { CookieOptions } from 'express';
 
 const router = Router();
@@ -30,6 +35,15 @@ function clearRefreshCookie(res: any) {
     sameSite: 'strict' as const,
     path: '/api/auth',
   });
+}
+
+function isDatabaseUnavailableError(error: any): boolean {
+  const message = String(error?.message ?? '');
+  return (
+    error?.name === 'PrismaClientInitializationError' ||
+    error?.code === 'P1001' ||
+    message.includes("Can't reach database server")
+  );
 }
 
 // Rate limiting for auth endpoints (brute force protection)
@@ -139,7 +153,44 @@ router.post('/login', authLimiter, validate(loginSchema), async (req, res) => {
     if (e.message === 'Email not verified') {
       return res.status(403).json({ error: 'Email not verified', code: 'EMAIL_NOT_VERIFIED' });
     }
+    if (isDatabaseUnavailableError(e)) {
+      return res.status(503).json({
+        error: 'Database unavailable. Start PostgreSQL and try again.',
+        code: 'DATABASE_UNAVAILABLE',
+      });
+    }
     return res.status(401).json({ error: 'Invalid email or password' });
+  }
+});
+
+// POST /dev-login — local development recovery login.
+// This route is never available in production and can be disabled with
+// DISABLE_DEV_ADMIN_BOOTSTRAP=true.
+router.post('/dev-login', async (_req, res) => {
+  if (!isDevelopmentAdminBootstrapEnabled()) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  try {
+    await ensureDevelopmentAdminUser();
+    const { email, password } = getDevelopmentAdminCredentials();
+    const result = await authService.login({ email, password });
+    setRefreshCookie(res, result.refreshToken);
+    const { refreshToken: _rt, ...safeResult } = result;
+    res.json({
+      ...safeResult,
+      devLogin: true,
+    });
+  } catch (e: any) {
+    if (isDatabaseUnavailableError(e)) {
+      return res.status(503).json({
+        error: 'Database unavailable. Start PostgreSQL and try again.',
+        code: 'DATABASE_UNAVAILABLE',
+      });
+    }
+    return res.status(500).json({
+      error: e?.message || 'Development admin login failed',
+    });
   }
 });
 

@@ -1,7 +1,26 @@
-import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, Gateway, GatewayHealth, ModelInfo, ChatHistory, ChatResponse, WorkspaceFile, LlmProvider, UsageCredit, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate } from '../types';
+import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, Gateway, GatewayHealth, ModelInfo, ChatHistory, ChatResponse, MotherChatContext, MotherChatDiagnostics, WorkspaceFile, LlmProvider, UsageCredit, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate, CommEdge } from '../types';
 import { useAuthStore } from '../stores/auth-store';
 
 const BASE_URL = '/api';
+
+async function readApiError(res: Response) {
+  const fallback = `API error: ${res.status} ${res.statusText}`;
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    const data = await res.json().catch(() => null) as { error?: unknown; message?: unknown; details?: unknown } | null;
+    const message = typeof data?.error === 'string'
+      ? data.error
+      : typeof data?.message === 'string'
+        ? data.message
+        : typeof data?.details === 'string'
+          ? data.details
+          : null;
+    return message || fallback;
+  }
+
+  const text = await res.text().catch(() => '');
+  return text.trim() || fallback;
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const { accessToken } = useAuthStore.getState();
@@ -38,7 +57,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     }
   }
 
-  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(await readApiError(res));
   if (res.status === 204) return undefined as T;
   return res.json();
 }
@@ -51,8 +70,7 @@ async function requestPublic<T>(path: string, options?: RequestInit): Promise<T>
     ...options,
   });
   if (!res.ok) {
-    const data = await res.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(data.error || `API error: ${res.status}`);
+    throw new Error(await readApiError(res));
   }
   return res.json();
 }
@@ -157,7 +175,7 @@ export const api = {
   threads: {
     list: () => request<Thread[]>('/threads'),
     get: (id: string) => request<Thread>(`/threads/${id}`),
-    graph: () => request<{ nodes: Array<{ id: string; name: string; displayName: string; avatar: string | null; status: string }>; edges: Array<{ source: string; target: string; messageCount: number; lastMessage: string }> }>('/threads/graph'),
+    graph: () => request<{ nodes: Array<{ id: string; name: string; displayName: string; avatar: string | null; status: string; kind?: string; currentTask?: string | null; codexSessionId?: string; activeRunIds?: string[]; taskIds?: string[] }>; edges: CommEdge[] }>('/threads/graph'),
   },
   sessions: {
     list: (params?: { agentId?: string; limit?: number }) => {
@@ -228,8 +246,15 @@ export const api = {
   },
   chat: {
     history: (agentId: string) => request<ChatHistory>(`/agents/${agentId}/chat/history`),
-    send: (agentId: string, message: string) =>
-      request<ChatResponse>(`/agents/${agentId}/chat`, { method: 'POST', body: JSON.stringify({ message }) }),
+    send: (agentId: string, message: string, requestId?: string) =>
+      request<ChatResponse>(`/agents/${agentId}/chat`, { method: 'POST', body: JSON.stringify({ message, requestId }) }),
+  },
+  motherChat: {
+    context: () => request<MotherChatContext>('/mother-chat/context'),
+    diagnostics: () => request<MotherChatDiagnostics>('/mother-chat/diagnostics'),
+    history: () => request<ChatHistory>('/mother-chat/history'),
+    send: (message: string, requestId?: string) =>
+      request<ChatResponse>('/mother-chat/message', { method: 'POST', body: JSON.stringify({ message, requestId }) }),
   },
   files: {
     list: (agentId: string) => request<WorkspaceFile[]>(`/agents/${agentId}/files`),

@@ -21,6 +21,7 @@ import { AgentCreate } from './pages/AgentCreate';
 import { Settings } from './pages/Settings';
 import { Gateways } from './pages/Gateways';
 import { Chat } from './pages/Chat';
+import { MotherChat } from './pages/MotherChat';
 import { Boards } from './pages/Boards';
 import { BoardDetail } from './pages/BoardDetail';
 import { Approvals } from './pages/Approvals';
@@ -104,6 +105,7 @@ export function App() {
           <Route path="/boards" element={<Boards />} />
           <Route path="/boards/:id" element={<BoardDetail />} />
           <Route path="/approvals" element={<Approvals />} />
+          <Route path="/mother-chat" element={<MotherChat />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/skills" element={<SkillsMarketplace />} />
           <Route path="/soul-templates" element={<SoulTemplates />} />

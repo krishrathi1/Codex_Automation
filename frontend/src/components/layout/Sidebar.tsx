@@ -8,6 +8,7 @@ const navSections = [
     items: [
       { path: '/dashboard', label: 'Dashboard', icon: '\u25C8' },
       { path: '/activity', label: 'Activity Feed', icon: '\u25C9' },
+      { path: '/mother-chat', label: 'Mother Chat', icon: '\u25B6' },
       { path: '/chat', label: 'Chat', icon: '\u25EC' },
       { path: '/comms', label: 'Communications', icon: '\u25CE' },
       { path: '/timeline', label: 'Timeline', icon: '\u25AC' },
