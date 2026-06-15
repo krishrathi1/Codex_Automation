@@ -13,10 +13,16 @@ export default defineConfig({
   server: {
     port: 5174,
     proxy: {
-      '/api': 'http://127.0.0.1:4000',
+      '/api': {
+        target: 'http://127.0.0.1:4000',
+        changeOrigin: true,
+        timeout: 16 * 60 * 1000,
+        proxyTimeout: 16 * 60 * 1000,
+      },
       '/socket.io': {
         target: 'http://127.0.0.1:4000',
         ws: true,
+        changeOrigin: true,
       },
     },
   },

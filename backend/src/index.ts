@@ -40,12 +40,18 @@ import boardMemoryRoutes from './routes/board-memory.js';
 import soulTemplateRoutes from './routes/soul-templates.js';
 import motherChatRoutes from './routes/mother-chat.js';
 import { connectAllGateways, setSocketIO } from './services/gateway.service.js';
-import { isCodexCliRuntimeEnabled } from './services/codex-cli.service.js';
+import { getCodexCliDiagnostics, isCodexCliRuntimeEnabled } from './services/codex-cli.service.js';
 import { ensureDevelopmentAdminUser } from './services/dev-admin.service.js';
 
 const app = express();
 const httpServer = createServer(app);
 const PORT = process.env.PORT || 4000;
+const HOST = process.env.BACKEND_HOST || process.env.HOST || '127.0.0.1';
+const REQUEST_TIMEOUT_MS = Number(process.env.BACKEND_REQUEST_TIMEOUT_MS || 16 * 60 * 1000);
+
+httpServer.requestTimeout = REQUEST_TIMEOUT_MS;
+httpServer.headersTimeout = REQUEST_TIMEOUT_MS + 5_000;
+httpServer.keepAliveTimeout = 65_000;
 
 // Trust first proxy (nginx/Cloudflare) — required for correct rate limiting & secure cookies
 app.set('trust proxy', 1);
@@ -179,15 +185,33 @@ async function start() {
 
   // Connect to all gateways on startup unless local Codex CLI is the selected runtime.
   if (isCodexCliRuntimeEnabled()) {
-    logger.info('Codex CLI runtime enabled; skipping gateway auto-connect');
+    const diagnostics = await getCodexCliDiagnostics();
+    const logPayload = {
+      selectedCommand: diagnostics.selectedCommand,
+      configuredCommand: diagnostics.configuredCommand,
+      expectedMacosCommand: diagnostics.expectedMacosCommand,
+      installationOk: diagnostics.installation.ok,
+      authenticationOk: diagnostics.authentication.ok,
+      authDetails: diagnostics.authentication.details,
+      sandbox: diagnostics.sandbox,
+      skipGitRepoCheck: diagnostics.skipGitRepoCheck,
+    };
+    if (diagnostics.installation.ok && diagnostics.authentication.ok) {
+      logger.info(logPayload, 'Codex CLI runtime enabled; skipping gateway auto-connect');
+    } else {
+      logger.warn({
+        ...logPayload,
+        installationDetails: diagnostics.installation.details,
+      }, 'Codex CLI runtime check failed; chat requests will return diagnostics until fixed');
+    }
   } else {
     connectAllGateways().catch(err => {
       logger.warn({ err }, 'Gateway connection errors on startup');
     });
   }
 
-  httpServer.listen(PORT, () => {
-    logger.info({ port: PORT }, 'Nexus backend running');
+  httpServer.listen(Number(PORT), HOST, () => {
+    logger.info({ host: HOST, port: PORT }, 'Nexus backend running');
   });
 }
 

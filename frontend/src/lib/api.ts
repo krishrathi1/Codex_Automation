@@ -276,6 +276,27 @@ export const api = {
     update: (id: string, data: Record<string, unknown>) =>
       request<Board>(`/boards/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/boards/${id}`, { method: 'DELETE' }),
+    startCollaboration: (id: string, data: {
+      goal?: string;
+      agents?: Array<{
+        agentId?: string;
+        name?: string;
+        displayName?: string;
+        role?: string;
+        work?: string;
+        avatar?: string;
+        isLead?: boolean;
+      }>;
+    }) =>
+      request<{ board: Board; goal: string; agents: Agent[]; tasks: Task[]; thread: Thread; messages: Message[] }>(
+        `/boards/${id}/collaboration/start`,
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
+    dispatchToAgents: (id: string, data: { query: string; priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' }) =>
+      request<{ board: Board; query: string; agents: Agent[]; tasks: Task[]; thread: Thread; messages: Message[] }>(
+        `/boards/${id}/collaboration/dispatch`,
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
     addAgent: (id: string, data: { agentId: string; isLead?: boolean }) =>
       request<Agent>(`/boards/${id}/agents`, { method: 'POST', body: JSON.stringify(data) }),
     removeAgent: (id: string, agentId: string) =>

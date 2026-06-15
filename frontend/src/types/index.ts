@@ -363,9 +363,13 @@ export interface MotherChatContext {
   }>;
   messages: Array<{
     id: string;
+    threadId?: string;
     from: string;
     to: string;
     content: string;
+    conversationKind?: string | null;
+    boardId?: string | null;
+    taskIds?: string[];
     createdAt: string;
   }>;
   activities: Array<{

@@ -5,8 +5,10 @@ import {
   Bot,
   CheckCircle2,
   Clock3,
+  ClipboardCheck,
   Database,
   FolderKanban,
+  GitBranch,
   Plus,
   RefreshCw,
   Send,
@@ -28,6 +30,19 @@ type MotherChatSocketEvent = {
   codexSessionId?: string | null;
   boardId?: string | null;
   timestamp?: string;
+};
+
+type StartA2AAgentDraft = {
+  displayName: string;
+  role: string;
+  work: string;
+  avatar: string;
+  isLead?: boolean;
+};
+
+type StartA2APayload = {
+  goal: string;
+  agents: StartA2AAgentDraft[];
 };
 
 const statusClasses: Record<string, string> = {
@@ -60,6 +75,147 @@ function StatTile({ label, value, icon: Icon }: { label: string; value: string |
   );
 }
 
+function StartA2AModal({
+  boardName,
+  defaultGoal,
+  starting,
+  onCancel,
+  onSubmit,
+}: {
+  boardName: string;
+  defaultGoal: string;
+  starting: boolean;
+  onCancel: () => void;
+  onSubmit: (payload: StartA2APayload) => void;
+}) {
+  const [goal, setGoal] = useState(defaultGoal);
+  const [agents, setAgents] = useState<StartA2AAgentDraft[]>([
+    {
+      displayName: 'Backend Ops Engineer',
+      role: 'Backend operations',
+      work: 'Check backend health, database state, Codex CLI runtime, sessions, and API blockers.',
+      avatar: 'B',
+      isLead: true,
+    },
+    {
+      displayName: 'Frontend QA Engineer',
+      role: 'Frontend QA',
+      work: 'Test login, production group UI, scoped Mother Chat, sub-agent creation, and visible layout issues.',
+      avatar: 'Q',
+      isLead: false,
+    },
+  ]);
+
+  function updateAgent(index: number, field: keyof StartA2AAgentDraft, value: string) {
+    setAgents(prev => prev.map((agent, agentIndex) => (
+      agentIndex === index ? { ...agent, [field]: value } : agent
+    )));
+  }
+
+  function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!goal.trim() || starting) return;
+    onSubmit({
+      goal: goal.trim(),
+      agents: agents.map((agent, index) => ({
+        ...agent,
+        displayName: agent.displayName.trim(),
+        role: agent.role.trim(),
+        work: agent.work.trim(),
+        avatar: agent.avatar.trim() || String(index + 1),
+        isLead: index === 0,
+      })),
+    });
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <form onSubmit={handleSubmit} className="w-full max-w-3xl rounded-xl border border-white/10 bg-surface-900 shadow-2xl">
+        <div className="border-b border-white/5 px-5 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-300">
+              <GitBranch className="h-4 w-4" />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-white">Start agent-to-agent work</h2>
+              <p className="text-xs text-gray-500">{boardName}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="max-h-[70vh] space-y-4 overflow-y-auto p-5">
+          <label className="block">
+            <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500">Shared Goal</span>
+            <textarea
+              value={goal}
+              onChange={event => setGoal(event.target.value)}
+              rows={3}
+              className="w-full resize-none rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white placeholder-gray-600 focus:border-nexus-500 focus:outline-none"
+            />
+          </label>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            {agents.map((agent, index) => (
+              <div key={index} className="rounded-lg border border-white/5 bg-surface-850 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-white">Agent {index + 1}</h3>
+                  {index === 0 && <span className="rounded bg-nexus-500/10 px-2 py-0.5 text-[10px] font-medium text-nexus-300">Lead</span>}
+                </div>
+                <div className="space-y-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-gray-500">Display name</span>
+                    <input
+                      value={agent.displayName}
+                      onChange={event => updateAgent(index, 'displayName', event.target.value)}
+                      className="w-full rounded-lg border border-white/10 bg-surface-950 px-3 py-2 text-sm text-white focus:border-nexus-500 focus:outline-none"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-gray-500">Role</span>
+                    <input
+                      value={agent.role}
+                      onChange={event => updateAgent(index, 'role', event.target.value)}
+                      className="w-full rounded-lg border border-white/10 bg-surface-950 px-3 py-2 text-sm text-white focus:border-nexus-500 focus:outline-none"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-gray-500">Assigned work</span>
+                    <textarea
+                      value={agent.work}
+                      onChange={event => updateAgent(index, 'work', event.target.value)}
+                      rows={4}
+                      className="w-full resize-none rounded-lg border border-white/10 bg-surface-950 px-3 py-2 text-sm text-white focus:border-nexus-500 focus:outline-none"
+                    />
+                  </label>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-3 border-t border-white/5 px-5 py-4">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={starting}
+            className="rounded-lg border border-white/10 px-4 py-2 text-sm text-gray-300 transition-colors hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={starting || !goal.trim()}
+            className="inline-flex items-center gap-2 rounded-lg bg-nexus-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-nexus-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <GitBranch className="h-4 w-4" />
+            {starting ? 'Starting...' : 'Start A2A'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 export function MotherChat() {
   const { boardId } = useParams<{ boardId?: string }>();
   const scopedBoardId = boardId || undefined;
@@ -68,6 +224,9 @@ export function MotherChat() {
   const [input, setInput] = useState('what are my agents doing?');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [dispatchingAll, setDispatchingAll] = useState(false);
+  const [startingA2A, setStartingA2A] = useState(false);
+  const [showA2AStarter, setShowA2AStarter] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamedResponseRequestsRef = useRef<Record<string, boolean>>({});
@@ -155,10 +314,22 @@ export function MotherChat() {
         loadContext().catch(() => {});
       }
     };
+    const handleBoardA2AStarted = (event: { board?: { id?: string } }) => {
+      if (!scopedBoardId || event.board?.id !== scopedBoardId) return;
+      loadContext().catch(() => {});
+    };
+    const handleBoardTaskDispatch = (event: { board?: { id?: string } }) => {
+      if (!scopedBoardId || event.board?.id !== scopedBoardId) return;
+      loadContext().catch(() => {});
+    };
 
     socket.on('mother-chat:event', handleMotherChatEvent);
+    socket.on('board:a2aStarted', handleBoardA2AStarted);
+    socket.on('board:taskDispatch', handleBoardTaskDispatch);
     return () => {
       socket.off('mother-chat:event', handleMotherChatEvent);
+      socket.off('board:a2aStarted', handleBoardA2AStarted);
+      socket.off('board:taskDispatch', handleBoardTaskDispatch);
     };
   }, [scopedBoardId]);
 
@@ -167,11 +338,19 @@ export function MotherChat() {
   }, [messages]);
 
   async function handleSend() {
-    if (!input.trim() || sending) return;
+    if (!input.trim() || sending || dispatchingAll) return;
 
     const requestId = newRequestId();
     streamedResponseRequestsRef.current[requestId] = false;
     const content = input.trim();
+    const dispatchCommand = scopedBoardId
+      ? content.match(/^\/(?:assign|assign-all|task-all)\s+(.+)/i)
+      : null;
+    if (dispatchCommand?.[1]) {
+      await handleDispatchAll(dispatchCommand[1]);
+      return;
+    }
+
     setMessages(prev => [
       ...prev,
       {
@@ -220,6 +399,80 @@ export function MotherChat() {
     }
   }
 
+  async function handleDispatchAll(queryOverride?: string) {
+    if (!scopedBoardId || dispatchingAll) return;
+    const query = (queryOverride ?? input).trim();
+    if (!query) return;
+
+    const requestId = newRequestId();
+    setMessages(prev => [
+      ...prev,
+      {
+        id: `dispatch-user-${requestId}`,
+        role: 'user',
+        content: `Assign all agents: ${query}`,
+        timestamp: new Date().toISOString(),
+        requestId,
+      },
+    ]);
+    setInput('');
+    setDispatchingAll(true);
+    setError(null);
+
+    try {
+      const response = await api.boards.dispatchToAgents(scopedBoardId, { query });
+      const taskRows = response.tasks.map(task => {
+        const agent = response.agents.find(item => item.id === task.agentId);
+        return `- ${agent?.displayName || 'Agent'}: ${task.title} (${task.id})`;
+      });
+      setMessages(prev => [
+        ...prev,
+        {
+          id: `dispatch-assistant-${requestId}`,
+          role: 'assistant',
+          content: [
+            `Assigned the query to ${response.agents.length} agents in ${response.board.name}.`,
+            '',
+            ...taskRows,
+          ].join('\n'),
+          timestamp: new Date().toISOString(),
+          requestId,
+        },
+      ]);
+      await loadContext();
+    } catch (err) {
+      setMessages(prev => [
+        ...prev,
+        {
+          id: `dispatch-error-${requestId}`,
+          role: 'assistant',
+          content: `Error: ${(err as Error).message}`,
+          timestamp: new Date().toISOString(),
+          requestId,
+        },
+      ]);
+      setError((err as Error).message);
+    } finally {
+      setDispatchingAll(false);
+    }
+  }
+
+  async function handleStartA2A(payload: StartA2APayload) {
+    if (!scopedBoardId || startingA2A) return;
+    setStartingA2A(true);
+    setError(null);
+
+    try {
+      await api.boards.startCollaboration(scopedBoardId, payload);
+      setShowA2AStarter(false);
+      await loadContext();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setStartingA2A(false);
+    }
+  }
+
   function handleKeyDown(event: React.KeyboardEvent) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -232,6 +485,9 @@ export function MotherChat() {
   const pageSubtitle = scopedBoard
     ? scopedBoard.objective || scopedBoard.description || 'Production group context'
     : 'Local Codex CLI with Nexus DB context';
+  const agentConversations = (context?.messages ?? [])
+    .filter(message => message.conversationKind === 'agent_agent' || message.from !== message.to)
+    .slice(-6);
 
   return (
     <div className="flex h-screen -mx-8 bg-surface-950">
@@ -266,6 +522,16 @@ export function MotherChat() {
                 Manage
               </Link>
             </div>
+
+            <button
+              type="button"
+              onClick={() => setShowA2AStarter(true)}
+              disabled={startingA2A}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <GitBranch className="h-3.5 w-3.5" />
+              {startingA2A ? 'Starting A2A...' : 'Start A2A'}
+            </button>
 
             <section>
               <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
@@ -389,14 +655,25 @@ export function MotherChat() {
               value={input}
               onChange={event => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={sending}
+              disabled={sending || dispatchingAll}
               rows={2}
               placeholder={scopedBoard ? `Ask about ${scopedBoard.name}...` : 'Ask Mother Chat...'}
               className="min-h-[48px] flex-1 resize-none rounded-xl border border-white/10 bg-surface-850 px-4 py-3 text-sm text-white placeholder-gray-600 focus:border-nexus-500 focus:outline-none disabled:opacity-50"
             />
+            {scopedBoardId && (
+              <button
+                onClick={() => handleDispatchAll()}
+                disabled={!input.trim() || sending || dispatchingAll}
+                className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 text-sm font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Assign all agents"
+              >
+                <ClipboardCheck className="h-4 w-4" />
+                <span className="hidden sm:inline">{dispatchingAll ? 'Assigning...' : 'Assign all'}</span>
+              </button>
+            )}
             <button
               onClick={handleSend}
-              disabled={!input.trim() || sending}
+              disabled={!input.trim() || sending || dispatchingAll}
               className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-nexus-600 text-white transition-colors hover:bg-nexus-500 disabled:cursor-not-allowed disabled:opacity-50"
               title="Send"
             >
@@ -441,6 +718,27 @@ export function MotherChat() {
           </section>
 
           <section>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Agent Conversations</h3>
+            <div className="space-y-2">
+              {agentConversations.map(message => (
+                <div key={message.id} className="rounded-lg border border-emerald-500/10 bg-emerald-500/5 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-sm text-white">{message.from}{' -> '}{message.to}</p>
+                    <span className="shrink-0 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-gray-400">
+                      {new Date(message.createdAt).toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-3 text-xs leading-5 text-gray-400">{message.content}</p>
+                  {message.taskIds && message.taskIds.length > 0 && (
+                    <p className="mt-1 text-[10px] text-emerald-300/70">{message.taskIds.length} linked tasks</p>
+                  )}
+                </div>
+              ))}
+              {context && agentConversations.length === 0 && <p className="text-sm text-gray-500">No agent conversations</p>}
+            </div>
+          </section>
+
+          <section>
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Recent Work</h3>
             <div className="space-y-2">
               {(context?.sessions ?? []).slice(0, 6).map(session => (
@@ -470,6 +768,16 @@ export function MotherChat() {
           </section>
         </div>
       </aside>
+
+      {showA2AStarter && scopedBoardId && (
+        <StartA2AModal
+          boardName={scopedBoard?.name || 'Production Group'}
+          defaultGoal={scopedBoard?.objective || `Validate ${scopedBoard?.name || 'this production group'} and report readiness.`}
+          starting={startingA2A}
+          onCancel={() => setShowA2AStarter(false)}
+          onSubmit={handleStartA2A}
+        />
+      )}
     </div>
   );
 }

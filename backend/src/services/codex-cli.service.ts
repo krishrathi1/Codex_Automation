@@ -14,6 +14,7 @@ const MACOS_CODEX_APP_COMMAND = '/Applications/Codex.app/Contents/Resources/code
 const SESSION_ID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const CODEX_CLI_RUNTIME_VALUES = new Set(['codex-cli', 'codex']);
 const DEFAULT_OPERATION_TIMEOUT_MS = 15 * 60 * 1000;
+const runningCodexAgentRuns = new Set<string>();
 
 type JsonRecord = Record<string, unknown>;
 
@@ -329,19 +330,6 @@ export async function resolveCodexCommand() {
     if (configured.mustBeFilePath) {
       const result = resolveConfiguredExecutablePathResult(configured.envName, configured.expandedValue);
       if (result.ok) return result.command;
-
-      if (isExecutable(MACOS_CODEX_APP_COMMAND)) {
-        logger.warn(
-          {
-            configuredEnv: configured.envName,
-            configuredValue: configured.value,
-            fallbackCommand: MACOS_CODEX_APP_COMMAND,
-            warning: result.warning,
-          },
-          'Ignoring invalid Codex CLI path and falling back to macOS Codex app executable',
-        );
-        return MACOS_CODEX_APP_COMMAND;
-      }
 
       throw diagnosticError(result.warning, 503);
     }
@@ -881,6 +869,16 @@ export async function sendCodexCliAgentMessage(options: SendCodexCliAgentMessage
     throw diagnosticError('message is required', 400);
   }
 
+  const agentRunKey = `${options.organizationId}:${options.agent.id}`;
+  if (runningCodexAgentRuns.has(agentRunKey)) {
+    throw diagnosticError(
+      `Codex CLI is already processing a message for ${options.agent.displayName}. Wait for that response to finish before sending another message.`,
+      409,
+    );
+  }
+  runningCodexAgentRuns.add(agentRunKey);
+
+  try {
   const installation = await validateInstallation();
   if (!installation.ok || !installation.command) {
     throw diagnosticError(`Codex CLI installation check failed: ${installation.details}`, 503);
@@ -1092,6 +1090,9 @@ export async function sendCodexCliAgentMessage(options: SendCodexCliAgentMessage
       event: errorEvent,
     });
     throw err;
+  }
+  } finally {
+    runningCodexAgentRuns.delete(agentRunKey);
   }
 }
 

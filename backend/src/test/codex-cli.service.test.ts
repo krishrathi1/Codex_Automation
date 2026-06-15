@@ -131,11 +131,14 @@ describe('codex-cli service helpers', () => {
     });
   });
 
-  it('falls back to the macOS app executable when CODEX_CLI_PATH points at a directory', async () => {
+  it('rejects CODEX_CLI_PATH when it points at a directory', async () => {
     process.env.CODEX_CLI_PATH = '/Applications/';
     delete process.env.CODEX_COMMAND;
 
-    await expect(resolveCodexCommand()).resolves.toBe(
+    await expect(resolveCodexCommand()).rejects.toThrow(
+      'The configured path is a directory, not the Codex executable',
+    );
+    await expect(resolveCodexCommand()).rejects.toThrow(
       '/Applications/Codex.app/Contents/Resources/codex',
     );
   });

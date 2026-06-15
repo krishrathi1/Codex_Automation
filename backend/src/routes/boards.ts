@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as boardService from '../services/board.service.js';
+import * as collaborationService from '../services/board-collaboration.service.js';
 
 const router = Router();
 
@@ -71,6 +72,81 @@ router.delete('/:id', async (req, res) => {
   await boardService.deleteBoard(req.params.id, req.organizationId!);
   req.app.get('io')?.to(`org:${req.organizationId}`).emit('board:deleted', { id: req.params.id });
   res.status(204).end();
+});
+
+// Board-scoped agent-to-agent starter
+router.post('/:id/collaboration/start', async (req, res) => {
+  try {
+    const result = await collaborationService.startBoardAgentCollaboration(
+      req.organizationId!,
+      req.params.id,
+      req.body,
+    );
+    const io = req.app.get('io');
+    const room = `org:${req.organizationId}`;
+
+    for (const agent of result.agents) {
+      io?.to(room).emit('agent:updated', agent);
+    }
+    for (const task of result.tasks) {
+      io?.to(room).emit('task:update', task);
+    }
+    for (const message of result.messages) {
+      io?.to(room).emit('thread:message', { threadId: result.thread.id, message });
+    }
+
+    io?.to(room).emit('agent:message', {
+      sourceAgent: { id: result.agents[0].id, name: result.agents[0].displayName },
+      targetAgent: { id: result.agents[1].id, name: result.agents[1].displayName },
+      message: result.messages[0]?.content || result.goal,
+      threadId: result.thread.id,
+      boardId: result.board.id,
+      timestamp: new Date().toISOString(),
+    });
+    io?.to(room).emit('board:a2aStarted', result);
+
+    res.status(201).json(result);
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/:id/collaboration/dispatch', async (req, res) => {
+  try {
+    const result = await collaborationService.dispatchBoardTaskToAgents(
+      req.organizationId!,
+      req.params.id,
+      req.body,
+    );
+    const io = req.app.get('io');
+    const room = `org:${req.organizationId}`;
+
+    for (const agent of result.agents) {
+      io?.to(room).emit('agent:updated', agent);
+    }
+    for (const task of result.tasks) {
+      io?.to(room).emit('task:update', task);
+    }
+    for (const message of result.messages) {
+      io?.to(room).emit('thread:message', { threadId: result.thread.id, message });
+    }
+
+    io?.to(room).emit('board:taskDispatch', result);
+    io?.to(room).emit('agent:message', {
+      sourceAgent: { id: result.agents[0].id, name: result.agents[0].displayName },
+      targetAgent: { id: 'all', name: 'All agents' },
+      message: result.query,
+      threadId: result.thread.id,
+      boardId: result.board.id,
+      timestamp: new Date().toISOString(),
+    });
+
+    res.status(201).json(result);
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
 });
 
 // Board agent management

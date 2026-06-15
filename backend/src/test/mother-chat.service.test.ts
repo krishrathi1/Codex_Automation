@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { cleanupTestData, createTestUser } from './setup.js';
 import { buildMotherChatContext, MOTHER_CHAT_AGENT_NAME } from '../services/mother-chat.service.js';
 import { getThreadCodexSessionId } from '../services/codex-cli.service.js';
+import { dispatchBoardTaskToAgents, startBoardAgentCollaboration } from '../services/board-collaboration.service.js';
 
 describe('mother-chat service', () => {
   let orgId: string;
@@ -25,7 +26,10 @@ describe('mother-chat service', () => {
         description: 'Handles work',
         status: 'ONLINE',
         currentTask: 'Review active tasks',
-        identityProfile: { codexCliSessionId: '0199a213-81c0-7800-8aa1-bbab2a035a53' },
+        identityProfile: {
+          agentRuntime: 'codex-cli',
+          activeWorkflowSessionId: '0199a213-81c0-7800-8aa1-bbab2a035a53',
+        },
       },
     });
 
@@ -103,7 +107,14 @@ describe('mother-chat service', () => {
     expect(context.counts.activeTasks).toBe(1);
     expect(context.counts.recentErrors).toBe(1);
     expect(context.counts.tokensInWindow).toBe(15);
+    expect(context.agents[0]).toMatchObject({
+      runtimeConnected: true,
+      effectiveCodexSessionId: '0199a213-81c0-7800-8aa1-bbab2a035a53',
+      activeWorkflowSessionId: '0199a213-81c0-7800-8aa1-bbab2a035a53',
+    });
     expect(contextText).toContain('Worker Agent');
+    expect(contextText).toContain('runtimeConnected=yes');
+    expect(contextText).toContain('effectiveCodexSessionId=0199a213-81c0-7800-8aa1-bbab2a035a53');
     expect(contextText).not.toContain(MOTHER_CHAT_AGENT_NAME);
   });
 
@@ -216,6 +227,144 @@ describe('mother-chat service', () => {
     expect(context.tasks.map(item => item.title)).toEqual(['Alpha smoke test']);
     expect(contextText).toContain('Alpha Production');
     expect(contextText).not.toContain('Beta Production');
+  });
+
+  it('starts two-agent board collaboration and keeps Mother Chat scopes isolated', async () => {
+    const alphaBoard = await prisma.board.create({
+      data: {
+        organizationId: orgId,
+        name: 'A2A Alpha Production',
+        slug: `a2a-alpha-production-${Date.now()}`,
+        description: 'A2A alpha release room',
+        objective: 'Validate alpha production readiness',
+      },
+    });
+    const betaBoard = await prisma.board.create({
+      data: {
+        organizationId: orgId,
+        name: 'A2A Beta Production',
+        slug: `a2a-beta-production-${Date.now()}`,
+        description: 'A2A beta release room',
+      },
+    });
+
+    const result = await startBoardAgentCollaboration(orgId, alphaBoard.id, {
+      goal: 'A2A Alpha launch readiness',
+      agents: [
+        {
+          displayName: 'A2A Backend Ops',
+          role: 'Backend operations',
+          work: 'Check backend health, database state, Codex CLI runtime, and API blockers.',
+          avatar: 'B',
+          isLead: true,
+        },
+        {
+          displayName: 'A2A Frontend QA',
+          role: 'Frontend QA',
+          work: 'Test login, production group UI, scoped Mother Chat, and layout regressions.',
+          avatar: 'Q',
+        },
+      ],
+    });
+
+    expect(result.agents).toHaveLength(2);
+    expect(result.tasks).toHaveLength(2);
+    expect(result.messages).toHaveLength(3);
+    expect(result.agents.every(agent => agent.boardId === alphaBoard.id && agent.agentToAgent)).toBe(true);
+    expect(result.tasks.every(task => task.boardId === alphaBoard.id && task.status === 'IN_PROGRESS')).toBe(true);
+
+    const persistedMessages = await prisma.message.findMany({
+      where: { threadId: result.thread.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(persistedMessages).toHaveLength(3);
+    expect(persistedMessages.every(message => {
+      const metadata = message.metadata as Record<string, unknown>;
+      return metadata.boardId === alphaBoard.id
+        && metadata.conversationKind === 'agent_agent'
+        && metadata.edgeSemantic === 'agent_to_agent';
+    })).toBe(true);
+
+    const alphaContext = await buildMotherChatContext(orgId, { boardId: alphaBoard.id });
+    const betaContext = await buildMotherChatContext(orgId, { boardId: betaBoard.id });
+
+    expect(alphaContext.context.agents.map(agent => agent.displayName).sort()).toEqual([
+      'A2A Backend Ops',
+      'A2A Frontend QA',
+    ]);
+    expect(alphaContext.context.tasks.map(task => task.title).sort()).toEqual([
+      'Check backend health, database state, Codex CLI runtime, and API blockers.',
+      'Test login, production group UI, scoped Mother Chat, and layout regressions.',
+    ]);
+    expect(alphaContext.context.messages.map(message => message.content).join('\n')).toContain('A2A Alpha launch readiness');
+    expect(betaContext.context.messages.map(message => message.content).join('\n')).not.toContain('A2A Alpha launch readiness');
+    expect(betaContext.context.agents).toHaveLength(0);
+  });
+
+  it('dispatches one chat query to every board agent so no enabled agent remains idle', async () => {
+    const alphaBoard = await prisma.board.create({
+      data: {
+        organizationId: orgId,
+        name: 'Dispatch Alpha Production',
+        slug: `dispatch-alpha-production-${Date.now()}`,
+        description: 'Dispatch alpha release room',
+        objective: 'Keep every production agent busy',
+      },
+    });
+    const betaBoard = await prisma.board.create({
+      data: {
+        organizationId: orgId,
+        name: 'Dispatch Beta Production',
+        slug: `dispatch-beta-production-${Date.now()}`,
+        description: 'Dispatch beta release room',
+      },
+    });
+
+    await startBoardAgentCollaboration(orgId, alphaBoard.id, {
+      goal: 'Prepare dispatch room',
+      agents: [
+        {
+          displayName: 'Dispatch Backend Ops',
+          role: 'Backend operations',
+          work: 'Wait for dispatch.',
+          avatar: 'B',
+          isLead: true,
+        },
+        {
+          displayName: 'Dispatch Frontend QA',
+          role: 'Frontend QA',
+          work: 'Wait for dispatch.',
+          avatar: 'Q',
+        },
+      ],
+    });
+
+    await prisma.agent.updateMany({
+      where: { organizationId: orgId, boardId: alphaBoard.id },
+      data: { status: 'IDLE', currentTask: null },
+    });
+
+    const query = 'Run the complete release audit and report blockers.';
+    const result = await dispatchBoardTaskToAgents(orgId, alphaBoard.id, { query });
+
+    expect(result.agents).toHaveLength(2);
+    expect(result.tasks).toHaveLength(2);
+    expect(result.messages).toHaveLength(2);
+    expect(result.tasks.every(task => task.status === 'IN_PROGRESS' && task.title === query)).toBe(true);
+
+    const updatedAgents = await prisma.agent.findMany({
+      where: { organizationId: orgId, boardId: alphaBoard.id },
+      orderBy: { displayName: 'asc' },
+    });
+    expect(updatedAgents.every(agent => agent.status !== 'IDLE' && agent.currentTask === query)).toBe(true);
+
+    const alphaContext = await buildMotherChatContext(orgId, { boardId: alphaBoard.id });
+    const betaContext = await buildMotherChatContext(orgId, { boardId: betaBoard.id });
+
+    expect(alphaContext.context.tasks.filter(task => task.title === query)).toHaveLength(2);
+    expect(alphaContext.context.messages.map(message => message.content).join('\n')).toContain(query);
+    expect(betaContext.context.tasks.map(task => task.title)).not.toContain(query);
+    expect(betaContext.context.messages.map(message => message.content).join('\n')).not.toContain(query);
   });
 
   it('recovers the latest Codex session id from a persisted chat thread', async () => {

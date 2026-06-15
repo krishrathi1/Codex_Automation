@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { accessSync, constants, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -7,11 +8,37 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const backendHealthUrl = process.env.BACKEND_HEALTH_URL || 'http://127.0.0.1:4000/api/health';
 const startupTimeoutMs = Number(process.env.BACKEND_STARTUP_TIMEOUT_MS || 30_000);
+const defaultCodexCliPath = '/Applications/Codex.app/Contents/Resources/codex';
+
+function isExecutableFile(filePath) {
+  try {
+    const stat = statSync(filePath);
+    if (!stat.isFile()) return false;
+    accessSync(filePath, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveCodexCliPathForDev() {
+  const configured = process.env.CODEX_CLI_PATH?.trim();
+  if (!configured) return defaultCodexCliPath;
+  if (isExecutableFile(configured)) return configured;
+  if (isExecutableFile(defaultCodexCliPath)) {
+    console.warn(
+      `[dev] Ignoring invalid CODEX_CLI_PATH="${configured}". ` +
+      `Using ${defaultCodexCliPath}.`
+    );
+    return defaultCodexCliPath;
+  }
+  return configured;
+}
 
 const env = {
   ...process.env,
   AGENT_RUNTIME: process.env.AGENT_RUNTIME || 'codex-cli',
-  CODEX_CLI_PATH: process.env.CODEX_CLI_PATH || '/Applications/Codex.app/Contents/Resources/codex',
+  CODEX_CLI_PATH: resolveCodexCliPathForDev(),
   CODEX_SANDBOX: process.env.CODEX_SANDBOX || 'workspace-write',
   CODEX_SKIP_GIT_REPO_CHECK: process.env.CODEX_SKIP_GIT_REPO_CHECK || 'true',
 };

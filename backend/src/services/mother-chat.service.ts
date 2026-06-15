@@ -57,6 +57,10 @@ function objectRecord(value: unknown): JsonRecord {
     : {};
 }
 
+function stringValue(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
 function truncate(value: string | null | undefined, length = 240) {
   const text = value?.trim() || '';
   return text.length > length ? `${text.slice(0, length - 1)}...` : text;
@@ -286,7 +290,7 @@ async function resolveBoardScope(organizationId: string, boardId?: string): Prom
 
 export async function buildMotherChatContext(organizationId: string, options: MotherChatContextOptions = {}) {
   const boardScope = await resolveBoardScope(organizationId, options.boardId);
-  const agentSelect = { id: true, name: true, displayName: true, avatar: true, status: true };
+  const agentSelect = { id: true, name: true, displayName: true, avatar: true, status: true, boardId: true };
   const nonMotherAgentWhere = {
     organizationId,
     name: { notIn: [MOTHER_CHAT_AGENT_NAME, ADMIN_AGENT_NAME] },
@@ -299,25 +303,13 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
   const boardTaskWhere = boardScope
     ? { organizationId, boardId: boardScope.id }
     : { organizationId };
-  const messageWhere = boardScope
-    ? {
-        thread: { organizationId },
-        NOT: [
-          { sender: { name: MOTHER_CHAT_AGENT_NAME } },
-          { receiver: { name: MOTHER_CHAT_AGENT_NAME } },
-        ],
-        OR: [
-          { sender: { boardId: boardScope.id } },
-          { receiver: { boardId: boardScope.id } },
-        ],
-      }
-    : {
-        thread: { organizationId },
-        NOT: [
-          { sender: { name: MOTHER_CHAT_AGENT_NAME } },
-          { receiver: { name: MOTHER_CHAT_AGENT_NAME } },
-        ],
-      };
+  const messageWhere = {
+    thread: { organizationId },
+    NOT: [
+      { sender: { name: MOTHER_CHAT_AGENT_NAME } },
+      { receiver: { name: MOTHER_CHAT_AGENT_NAME } },
+    ],
+  };
 
   const [
     agents,
@@ -342,6 +334,7 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
         status: true,
         currentTask: true,
         enabled: true,
+        gatewayAgentId: true,
         lastHeartbeat: true,
         boardId: true,
         identityProfile: true,
@@ -357,7 +350,7 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
     prisma.message.findMany({
       where: messageWhere,
       orderBy: { createdAt: 'desc' },
-      take: 30,
+      take: boardScope ? 200 : 30,
       include: {
         sender: { select: agentSelect },
         receiver: { select: agentSelect },
@@ -418,6 +411,15 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
     }),
   ]);
 
+  const visibleMessages = boardScope
+    ? messages.filter(message => {
+        const metadata = objectRecord(message.metadata);
+        const metadataBoardId = stringValue(metadata.boardId);
+        if (metadataBoardId) return metadataBoardId === boardScope.id;
+        return message.sender.boardId === boardScope.id || message.receiver.boardId === boardScope.id;
+      }).slice(0, 30)
+    : messages;
+
   const tokenTotals = tokenUsages.reduce((total, usage) => ({
     inputTokens: total.inputTokens + usage.inputTokens,
     outputTokens: total.outputTokens + usage.outputTokens,
@@ -431,17 +433,36 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
 
   const agentRows = agents.map(agent => {
     const profile = objectRecord(agent.identityProfile);
-    const codexSessionId = typeof profile.codexCliSessionId === 'string' ? profile.codexCliSessionId : null;
+    const agentRuntime = typeof profile.agentRuntime === 'string' ? profile.agentRuntime : null;
+    const codexCliSessionId = typeof profile.codexCliSessionId === 'string' && profile.codexCliSessionId.trim()
+      ? profile.codexCliSessionId.trim()
+      : null;
+    const codexSessionId = typeof profile.codexSessionId === 'string' && profile.codexSessionId.trim()
+      ? profile.codexSessionId.trim()
+      : null;
+    const activeWorkflowSessionId = typeof profile.activeWorkflowSessionId === 'string' && profile.activeWorkflowSessionId.trim()
+      ? profile.activeWorkflowSessionId.trim()
+      : null;
+    const gatewayCodexSessionId = agent.gatewayAgentId?.startsWith('codex:')
+      ? agent.gatewayAgentId.slice('codex:'.length).trim()
+      : null;
+    const effectiveCodexSessionId = codexCliSessionId || codexSessionId || activeWorkflowSessionId || gatewayCodexSessionId || null;
+    const runtimeConnected = agent.enabled && agentRuntime === 'codex-cli' && Boolean(effectiveCodexSessionId);
     return {
       id: agent.id,
       name: agent.name,
       displayName: agent.displayName,
       status: agent.status,
       enabled: agent.enabled,
+      agentRuntime,
+      runtimeConnected,
       currentTask: agent.currentTask,
       lastHeartbeat: agent.lastHeartbeat?.toISOString() ?? null,
       boardId: agent.boardId,
+      codexCliSessionId,
       codexSessionId,
+      activeWorkflowSessionId,
+      effectiveCodexSessionId,
       updatedAt: agent.updatedAt.toISOString(),
     };
   });
@@ -461,7 +482,7 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
       agents: agents.length,
       runningSessions: runningSessions.length,
       activeTasks: activeTasks.length,
-      recentMessages: messages.length,
+      recentMessages: visibleMessages.length,
       recentActivities: activities.length,
       recentErrors: errorCount,
       pendingApprovals: approvals.filter(approval => approval.status === 'PENDING').length,
@@ -479,13 +500,22 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
       durationMs: session.durationMs,
       tokensUsed: session.tokensUsed,
     })),
-    messages: messages.reverse().map(message => ({
-      id: message.id,
-      from: message.sender.displayName,
-      to: message.receiver.displayName,
-      content: truncate(message.content, 300),
-      createdAt: message.createdAt.toISOString(),
-    })),
+    messages: visibleMessages.reverse().map(message => {
+      const metadata = objectRecord(message.metadata);
+      return {
+        id: message.id,
+        threadId: message.threadId,
+        from: message.sender.displayName,
+        to: message.receiver.displayName,
+        content: truncate(message.content, 300),
+        conversationKind: stringValue(metadata.conversationKind) ?? null,
+        boardId: stringValue(metadata.boardId) ?? null,
+        taskIds: Array.isArray(metadata.taskIds)
+          ? metadata.taskIds.filter((taskId): taskId is string => typeof taskId === 'string')
+          : [],
+        createdAt: message.createdAt.toISOString(),
+      };
+    }),
     activities: activities.map(activity => ({
       id: activity.id,
       agent: activity.agent.displayName,
@@ -549,7 +579,7 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
       : `Nexus Mother Chat DB snapshot generated at ${context.generatedAt}. Scope: organization-wide.`,
     `Counts: agents=${context.counts.agents}, runningSessions=${context.counts.runningSessions}, activeTasks=${context.counts.activeTasks}, recentMessages=${context.counts.recentMessages}, recentActivities=${context.counts.recentActivities}, recentErrors=${context.counts.recentErrors}, pendingApprovals=${context.counts.pendingApprovals}, recentTokens=${context.counts.tokensInWindow}.`,
     formatSection('Agents', context.agents.map(agent =>
-      `- ${agent.displayName} (${agent.name}) status=${agent.status}, enabled=${agent.enabled}, currentTask=${truncate(agent.currentTask, 120) || 'none'}, codexSessionId=${agent.codexSessionId || 'none'}, lastHeartbeat=${agent.lastHeartbeat || 'none'}`
+      `- ${agent.displayName} (${agent.name}) status=${agent.status}, enabled=${agent.enabled}, runtime=${agent.agentRuntime || 'unknown'}, runtimeConnected=${agent.runtimeConnected ? 'yes' : 'no'}, currentTask=${truncate(agent.currentTask, 120) || 'none'}, effectiveCodexSessionId=${agent.effectiveCodexSessionId || 'none'}, codexCliSessionId=${agent.codexCliSessionId || 'none'}, activeWorkflowSessionId=${agent.activeWorkflowSessionId || 'none'}, lastHeartbeat=${agent.lastHeartbeat || 'none'}`
     )),
     formatSection('Recent sessions', context.sessions.map(session =>
       `- ${session.agent}: ${session.type}/${session.status}, id=${session.id}, tokens=${session.tokensUsed ?? 0}, summary=${truncate(session.summary, 180) || 'none'}`
