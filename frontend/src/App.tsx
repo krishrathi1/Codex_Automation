@@ -39,6 +39,7 @@ import { DocsAlerts } from './pages/docs/DocsAlerts';
 import { DocsApiReference } from './pages/docs/DocsApiReference';
 import { DocsOrganizations } from './pages/docs/DocsOrganizations';
 import { DocsWebSocketEvents } from './pages/docs/DocsWebSocketEvents';
+import { AUTH_DISABLED } from './lib/auth-mode';
 
 function RootRedirect() {
   const { isAuthenticated, isLoading } = useAuthStore();
@@ -56,7 +57,7 @@ function RootRedirect() {
     );
   }
 
-  if (isAuthenticated) {
+  if (AUTH_DISABLED || isAuthenticated) {
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -68,10 +69,10 @@ export function App() {
     <Routes>
       {/* Public routes */}
       <Route path="/" element={<RootRedirect />} />
-      <Route path="/login" element={<Login />} />
-      <Route path="/signup" element={<Signup />} />
-      <Route path="/check-email" element={<CheckEmail />} />
-      <Route path="/verify-email" element={<VerifyEmail />} />
+      <Route path="/login" element={AUTH_DISABLED ? <Navigate to="/dashboard" replace /> : <Login />} />
+      <Route path="/signup" element={AUTH_DISABLED ? <Navigate to="/dashboard" replace /> : <Signup />} />
+      <Route path="/check-email" element={AUTH_DISABLED ? <Navigate to="/dashboard" replace /> : <CheckEmail />} />
+      <Route path="/verify-email" element={AUTH_DISABLED ? <Navigate to="/dashboard" replace /> : <VerifyEmail />} />
 
       {/* Documentation (public) */}
       <Route path="/docs" element={<DocsLayout />}>

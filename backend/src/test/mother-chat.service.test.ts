@@ -350,6 +350,9 @@ describe('mother-chat service', () => {
     expect(result.agents).toHaveLength(2);
     expect(result.tasks).toHaveLength(2);
     expect(result.messages).toHaveLength(2);
+    expect(result.runJobs).toHaveLength(2);
+    expect(result.runJobs.every(job => job.status === 'QUEUED' && job.boardId === alphaBoard.id)).toBe(true);
+    expect(result.runJobs.map(job => job.taskId).sort()).toEqual(result.tasks.map(task => task.id).sort());
     expect(result.tasks.every(task => task.status === 'IN_PROGRESS' && task.title === query)).toBe(true);
 
     const updatedAgents = await prisma.agent.findMany({
@@ -362,8 +365,15 @@ describe('mother-chat service', () => {
     const betaContext = await buildMotherChatContext(orgId, { boardId: betaBoard.id });
 
     expect(alphaContext.context.tasks.filter(task => task.title === query)).toHaveLength(2);
+    expect(alphaContext.context.counts.activeRunJobs).toBe(2);
+    expect(alphaContext.context.counts.queuedRunJobs).toBe(2);
+    expect(alphaContext.context.agentRunJobs).toHaveLength(2);
+    expect(alphaContext.context.agentRunJobs.map(job => job.prompt)).toEqual([query, query]);
+    expect(alphaContext.contextText).toContain('Agent run queue');
+    expect(alphaContext.contextText).toContain('status=QUEUED');
     expect(alphaContext.context.messages.map(message => message.content).join('\n')).toContain(query);
     expect(betaContext.context.tasks.map(task => task.title)).not.toContain(query);
+    expect(betaContext.context.agentRunJobs).toHaveLength(0);
     expect(betaContext.context.messages.map(message => message.content).join('\n')).not.toContain(query);
   });
 

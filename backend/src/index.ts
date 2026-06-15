@@ -39,9 +39,11 @@ import boardGroupMemoryRoutes from './routes/board-group-memory.js';
 import boardMemoryRoutes from './routes/board-memory.js';
 import soulTemplateRoutes from './routes/soul-templates.js';
 import motherChatRoutes from './routes/mother-chat.js';
+import errorEventRoutes from './routes/error-events.js';
 import { connectAllGateways, setSocketIO } from './services/gateway.service.js';
 import { getCodexCliDiagnostics, isCodexCliRuntimeEnabled } from './services/codex-cli.service.js';
 import { ensureDevelopmentAdminUser } from './services/dev-admin.service.js';
+import { startAgentRunWorker } from './services/agent-run-queue.service.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -59,7 +61,7 @@ app.set('trust proxy', 1);
 // CORS: env-based origin configuration
 const corsOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',').map(s => s.trim())
-  : ['http://localhost:5173', 'http://localhost:5174'];
+  : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://127.0.0.1:5175'];
 
 // Security middleware
 app.use(helmet({
@@ -145,6 +147,8 @@ app.use('/api/board-groups', requireAuth, boardGroupMemoryRoutes);
 app.use('/api/boards', requireAuth, boardMemoryRoutes);
 app.use('/api/soul-templates', requireAuth, soulTemplateRoutes);
 app.use('/api/mother-chat', requireAuth, motherChatRoutes);
+app.use('/api/error-events', requireAuth, errorEventRoutes);
+app.use('/api/v1/error-events', requireApiKey, errorEventRoutes);
 
 // Global error handler for unhandled async errors in routes
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -213,6 +217,7 @@ async function start() {
   httpServer.listen(Number(PORT), HOST, () => {
     logger.info({ host: HOST, port: PORT }, 'Nexus backend running');
   });
+  startAgentRunWorker(io);
 }
 
 start().catch((err) => {

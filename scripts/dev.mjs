@@ -6,7 +6,11 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
-const backendHealthUrl = process.env.BACKEND_HEALTH_URL || 'http://127.0.0.1:4000/api/health';
+const backendPort = Number(process.env.BACKEND_PORT || 4000);
+const backendHost = process.env.BACKEND_HOST || '127.0.0.1';
+const backendHealthUrl =
+  process.env.BACKEND_HEALTH_URL || `http://${backendHost}:${backendPort}/api/health`;
+const frontendPort = process.env.FRONTEND_PORT || '5174';
 const startupTimeoutMs = Number(process.env.BACKEND_STARTUP_TIMEOUT_MS || 30_000);
 const defaultCodexCliPath = '/Applications/Codex.app/Contents/Resources/codex';
 
@@ -47,9 +51,15 @@ const children = new Set();
 let shuttingDown = false;
 
 function spawnWorkspace(label, workspace) {
+  const workspaceEnv = {
+    ...env,
+    PORT: workspace === 'frontend' ? String(frontendPort) : env.PORT,
+    BACKEND_PORT: String(backendPort),
+  };
+
   const child = spawn('npm', ['run', 'dev', '-w', workspace], {
     cwd: rootDir,
-    env,
+    env: workspaceEnv,
     stdio: 'inherit',
   });
 

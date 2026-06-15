@@ -1,6 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { cn } from '../../lib/utils';
 import { useAuthStore } from '../../stores/auth-store';
+import { AUTH_DISABLED } from '../../lib/auth-mode';
 
 const navSections = [
   {
@@ -50,7 +51,7 @@ export function Sidebar() {
 
   const handleLogout = async () => {
     await logout();
-    navigate('/login');
+    navigate(AUTH_DISABLED ? '/dashboard' : '/login');
   };
 
   return (
@@ -127,13 +128,15 @@ export function Sidebar() {
               <p className="text-[10px] text-gray-600 truncate">{organization?.name}</p>
             </div>
           </div>
-          <button
-            onClick={handleLogout}
-            title="Sign out"
-            className="text-gray-600 hover:text-gray-400 text-xs transition-colors"
-          >
-            {'\u21AA'}
-          </button>
+          {!AUTH_DISABLED && (
+            <button
+              onClick={handleLogout}
+              title="Sign out"
+              className="text-gray-600 hover:text-gray-400 text-xs transition-colors"
+            >
+              {'\u21AA'}
+            </button>
+          )}
         </div>
       </div>
     </aside>

@@ -36,7 +36,7 @@ interface GraphEdgeDetail {
 }
 
 interface GraphObservationLink {
-  type: 'task' | 'session' | 'context';
+  type: 'task' | 'session' | 'context' | 'run_job';
   id: string;
   label: string;
   status?: string;
@@ -53,6 +53,8 @@ interface GraphEdge {
   codexSessionIds: string[];
   sessionIds: string[];
   activeRunIds: string[];
+  queuedRunIds: string[];
+  failedRunIds: string[];
   taskIds: string[];
   recentMessages: GraphEdgeDetail[];
   observationLinks: GraphObservationLink[];
@@ -120,6 +122,8 @@ function getOrCreateEdge(edgeMap: Map<string, GraphEdge>, source: string, target
     codexSessionIds: [],
     sessionIds: [],
     activeRunIds: [],
+    queuedRunIds: [],
+    failedRunIds: [],
     taskIds: [],
     recentMessages: [],
     observationLinks: [],
@@ -160,7 +164,7 @@ export async function getThreadById(id: string, organizationId: string) {
 }
 
 export async function getCommGraph(organizationId: string) {
-  const [agents, messages, runningSessions, openTasks] = await Promise.all([
+  const [agents, messages, runningSessions, openTasks, agentRunJobs] = await Promise.all([
     prisma.agent.findMany({
       where: { organizationId },
       orderBy: { name: 'asc' },
@@ -192,6 +196,24 @@ export async function getCommGraph(organizationId: string) {
       orderBy: { updatedAt: 'desc' },
       select: { id: true, agentId: true, title: true, status: true, priority: true },
     }),
+    prisma.agentRunJob.findMany({
+      where: {
+        organizationId,
+        status: { not: 'CANCELLED' },
+      },
+      orderBy: { queuedAt: 'asc' },
+      take: 500,
+      select: {
+        id: true,
+        status: true,
+        agentId: true,
+        taskId: true,
+        threadId: true,
+        codexSessionId: true,
+        summary: true,
+        error: true,
+      },
+    }),
   ]);
 
   const agentById = new Map(agents.map(agent => [agent.id, agent]));
@@ -204,12 +226,59 @@ export async function getCommGraph(organizationId: string) {
   const adminNodeId = adminAgent?.id ?? VIRTUAL_ADMIN_NODE_ID;
   const taskIdsByAgent = new Map<string, string[]>();
   const activeRunIdsByAgent = new Map<string, string[]>();
+  const queuedRunIdsByAgent = new Map<string, string[]>();
+  const failedRunIdsByAgent = new Map<string, string[]>();
+  const completedRunJobsByAgent = new Map<string, Array<{
+    id: string;
+    status: string;
+    taskId: string | null;
+    threadId: string | null;
+    summary: string | null;
+    error: string | null;
+    codexSessionId: string | null;
+  }>>();
 
   for (const task of openTasks) {
     if (!task.agentId) continue;
     const ids = taskIdsByAgent.get(task.agentId) ?? [];
     ids.push(task.id);
     taskIdsByAgent.set(task.agentId, ids);
+  }
+  for (const job of agentRunJobs) {
+    if (!job.agentId) continue;
+    if (job.status === 'RUNNING') {
+      const ids = activeRunIdsByAgent.get(job.agentId) ?? [];
+      ids.push(job.id);
+      activeRunIdsByAgent.set(job.agentId, ids);
+      continue;
+    }
+    if (job.status === 'QUEUED') {
+      const ids = queuedRunIdsByAgent.get(job.agentId) ?? [];
+      ids.push(job.id);
+      queuedRunIdsByAgent.set(job.agentId, ids);
+      continue;
+    }
+    if (job.status === 'FAILED') {
+      const ids = failedRunIdsByAgent.get(job.agentId) ?? [];
+      ids.push(job.id);
+      failedRunIdsByAgent.set(job.agentId, ids);
+      continue;
+    }
+    if (job.status === 'COMPLETED') {
+      const list = completedRunJobsByAgent.get(job.agentId) ?? [];
+      if (list.length < 3) {
+        list.push({
+          id: job.id,
+          status: job.status,
+          taskId: job.taskId,
+          threadId: job.threadId,
+          summary: job.summary,
+          error: job.error,
+          codexSessionId: job.codexSessionId,
+        });
+        completedRunJobsByAgent.set(job.agentId, list);
+      }
+    }
   }
   for (const session of runningSessions) {
     const ids = activeRunIdsByAgent.get(session.agentId) ?? [];
@@ -231,6 +300,8 @@ export async function getCommGraph(organizationId: string) {
       codexSessionId: stringValue(profile.codexCliSessionId) || stringValue(profile.activeWorkflowSessionId),
       activeRunIds: activeRunIdsByAgent.get(agent.id) ?? [],
       taskIds: taskIdsByAgent.get(agent.id) ?? [],
+      queuedRunIds: queuedRunIdsByAgent.get(agent.id) ?? [],
+      failedRunIds: failedRunIdsByAgent.get(agent.id) ?? [],
     };
   });
 
@@ -247,6 +318,8 @@ export async function getCommGraph(organizationId: string) {
       codexSessionId: undefined,
       activeRunIds: [],
       taskIds: [],
+      queuedRunIds: [],
+      failedRunIds: [],
     });
   }
 
@@ -289,6 +362,8 @@ export async function getCommGraph(organizationId: string) {
 
     for (const endpoint of [source, target]) {
       for (const id of activeRunIdsByAgent.get(endpoint) ?? []) pushUnique(edge.activeRunIds, id);
+      for (const id of queuedRunIdsByAgent.get(endpoint) ?? []) pushUnique(edge.queuedRunIds, id);
+      for (const id of failedRunIdsByAgent.get(endpoint) ?? []) pushUnique(edge.failedRunIds, id);
       for (const id of taskIdsByAgent.get(endpoint) ?? []) pushUnique(edge.taskIds, id);
     }
 
@@ -312,13 +387,33 @@ export async function getCommGraph(organizationId: string) {
       const edge = getOrCreateEdge(edgeMap, motherAgent.id, agent.id, 'mother_observation', agent.updatedAt);
       edge.lastMessage = agent.updatedAt.toISOString();
       for (const id of activeRunIdsByAgent.get(agent.id) ?? []) pushUnique(edge.activeRunIds, id);
+      for (const id of queuedRunIdsByAgent.get(agent.id) ?? []) pushUnique(edge.queuedRunIds, id);
+      for (const id of failedRunIdsByAgent.get(agent.id) ?? []) pushUnique(edge.failedRunIds, id);
       for (const id of taskIdsByAgent.get(agent.id) ?? []) pushUnique(edge.taskIds, id);
       edge.observationLinks = [
         { type: 'context', id: agent.id, label: `Mother Chat observes ${agent.displayName}`, status: agent.status },
+        ...completedRunJobsByAgent.get(agent.id)?.map(job => ({
+          type: 'run_job' as const,
+          id: job.id,
+          label: `${job.summary ?? 'Completed run'} (${job.status})`,
+          status: job.status,
+        })) ?? [],
         ...runningSessions
           .filter(session => session.agentId === agent.id)
           .slice(0, 3)
           .map(session => ({ type: 'session' as const, id: session.id, label: session.summary || session.type, status: session.status })),
+        ...queuedRunIdsByAgent.get(agent.id)?.slice(0, 3).map(id => ({
+          type: 'run_job' as const,
+          id,
+          label: `Queued run ${id.slice(0, 8)}`,
+          status: 'QUEUED',
+        })) ?? [],
+        ...failedRunIdsByAgent.get(agent.id)?.slice(0, 3).map(id => ({
+          type: 'run_job' as const,
+          id,
+          label: `Failed run ${id.slice(0, 8)}`,
+          status: 'FAILED',
+        })) ?? [],
         ...openTasks
           .filter(task => task.agentId === agent.id)
           .slice(0, 3)

@@ -1,8 +1,13 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuthStore } from '../../stores/auth-store';
+import { AUTH_DISABLED } from '../../lib/auth-mode';
 
 export function ProtectedRoute() {
   const { isAuthenticated, isLoading } = useAuthStore();
+
+  if (AUTH_DISABLED) {
+    return <Outlet />;
+  }
 
   if (isLoading) {
     return (

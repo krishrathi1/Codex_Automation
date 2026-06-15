@@ -322,6 +322,8 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
     failedMetrics,
     alertEvents,
     approvals,
+    agentRunJobs,
+    productionErrorEvents,
   ] = await Promise.all([
     prisma.agent.findMany({
       where: nonMotherAgentWhere,
@@ -409,6 +411,31 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
         agent: { select: agentSelect },
       },
     }),
+    prisma.agentRunJob.findMany({
+      where: {
+        organizationId,
+        ...(boardScope && { boardId: boardScope.id }),
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 35,
+      include: {
+        agent: { select: agentSelect },
+        task: { select: { id: true, title: true, status: true } },
+        board: { select: { id: true, name: true, slug: true } },
+      },
+    }),
+    prisma.productionErrorEvent.findMany({
+      where: {
+        organizationId,
+        ...(boardScope && { boardId: boardScope.id }),
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 25,
+      include: {
+        board: { select: { id: true, name: true, slug: true } },
+        task: { select: { id: true, title: true, status: true } },
+      },
+    }),
   ]);
 
   const visibleMessages = boardScope
@@ -429,7 +456,12 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
 
   const activeTasks = tasks.filter(task => ['ASSIGNED', 'IN_PROGRESS', 'REVIEW'].includes(task.status));
   const runningSessions = sessions.filter(session => session.status === 'RUNNING');
-  const errorCount = errorActivities.length + failedMetrics.length + alertEvents.length;
+  const activeProductionErrors = productionErrorEvents.filter(error => !['COMPLETED', 'FAILED'].includes(error.status));
+  const errorCount = errorActivities.length + failedMetrics.length + alertEvents.length + activeProductionErrors.length;
+  const activeRunJobs = agentRunJobs.filter(job => ['QUEUED', 'RUNNING'].includes(job.status));
+  const runningRunJobs = agentRunJobs.filter(job => job.status === 'RUNNING');
+  const queuedRunJobs = agentRunJobs.filter(job => job.status === 'QUEUED');
+  const failedRunJobs = agentRunJobs.filter(job => job.status === 'FAILED');
 
   const agentRows = agents.map(agent => {
     const profile = objectRecord(agent.identityProfile);
@@ -487,6 +519,12 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
       recentErrors: errorCount,
       pendingApprovals: approvals.filter(approval => approval.status === 'PENDING').length,
       tokensInWindow: tokenTotals.totalTokens,
+      activeRunJobs: activeRunJobs.length,
+      queuedRunJobs: queuedRunJobs.length,
+      runningRunJobs: runningRunJobs.length,
+      failedRunJobs: failedRunJobs.length,
+      productionErrors: productionErrorEvents.length,
+      activeProductionErrors: activeProductionErrors.length,
     },
     agents: agentRows,
     sessions: sessions.map(session => ({
@@ -532,6 +570,47 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
       board: task.board?.name ?? null,
       updatedAt: task.updatedAt.toISOString(),
     })),
+    agentRunJobs: agentRunJobs.map(job => ({
+      id: job.id,
+      status: job.status,
+      agent: job.agent.displayName,
+      agentId: job.agentId,
+      board: job.board?.name ?? null,
+      boardId: job.boardId,
+      task: job.task?.title ?? null,
+      taskId: job.taskId,
+      prompt: truncate(job.prompt, 220),
+      summary: truncate(job.summary, 260) || null,
+      error: truncate(job.error, 260) || null,
+      codexSessionId: job.codexSessionId,
+      nexusSessionId: job.nexusSessionId,
+      attempt: job.attempt,
+      queuedAt: job.queuedAt.toISOString(),
+      startedAt: job.startedAt?.toISOString() ?? null,
+      completedAt: job.completedAt?.toISOString() ?? null,
+      durationMs: job.durationMs,
+      updatedAt: job.updatedAt.toISOString(),
+    })),
+    productionErrors: productionErrorEvents.map(error => ({
+      id: error.id,
+      source: error.source,
+      severity: error.severity,
+      title: error.title,
+      message: truncate(error.message, 260),
+      status: error.status,
+      fingerprint: error.fingerprint,
+      board: error.board?.name ?? null,
+      boardId: error.boardId,
+      task: error.task?.title ?? null,
+      taskId: error.taskId,
+      taskStatus: error.task?.status ?? null,
+      debugRunJobId: error.debugRunJobId,
+      reviewRunJobId: error.reviewRunJobId,
+      commitRunJobId: error.commitRunJobId,
+      resolvedAt: error.resolvedAt?.toISOString() ?? null,
+      createdAt: error.createdAt.toISOString(),
+      updatedAt: error.updatedAt.toISOString(),
+    })),
     tokenUsage: tokenUsages.map(usage => ({
       id: usage.id,
       agent: usage.agent.displayName,
@@ -561,6 +640,12 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
         message: truncate(`${alert.alertRule.name}: ${alert.message}`, 260),
         createdAt: alert.createdAt.toISOString(),
       })),
+      ...productionErrorEvents.map(error => ({
+        source: 'production-error',
+        agent: 'pipeline',
+        message: truncate(`${error.status} ${error.title}: ${error.message}`, 260),
+        createdAt: error.createdAt.toISOString(),
+      })),
     ],
     approvals: approvals.map(approval => ({
       id: approval.id,
@@ -577,7 +662,7 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
     boardScope
       ? `Nexus Mother Chat DB snapshot generated at ${context.generatedAt}. Scope: production board "${boardScope.name}" (${boardScope.id}). Objective: ${truncate(boardScope.objective, 180) || 'none'}.`
       : `Nexus Mother Chat DB snapshot generated at ${context.generatedAt}. Scope: organization-wide.`,
-    `Counts: agents=${context.counts.agents}, runningSessions=${context.counts.runningSessions}, activeTasks=${context.counts.activeTasks}, recentMessages=${context.counts.recentMessages}, recentActivities=${context.counts.recentActivities}, recentErrors=${context.counts.recentErrors}, pendingApprovals=${context.counts.pendingApprovals}, recentTokens=${context.counts.tokensInWindow}.`,
+    `Counts: agents=${context.counts.agents}, runningSessions=${context.counts.runningSessions}, activeTasks=${context.counts.activeTasks}, activeRunJobs=${context.counts.activeRunJobs}, queuedRunJobs=${context.counts.queuedRunJobs}, runningRunJobs=${context.counts.runningRunJobs}, failedRunJobs=${context.counts.failedRunJobs}, productionErrors=${context.counts.productionErrors}, activeProductionErrors=${context.counts.activeProductionErrors}, recentMessages=${context.counts.recentMessages}, recentActivities=${context.counts.recentActivities}, recentErrors=${context.counts.recentErrors}, pendingApprovals=${context.counts.pendingApprovals}, recentTokens=${context.counts.tokensInWindow}.`,
     formatSection('Agents', context.agents.map(agent =>
       `- ${agent.displayName} (${agent.name}) status=${agent.status}, enabled=${agent.enabled}, runtime=${agent.agentRuntime || 'unknown'}, runtimeConnected=${agent.runtimeConnected ? 'yes' : 'no'}, currentTask=${truncate(agent.currentTask, 120) || 'none'}, effectiveCodexSessionId=${agent.effectiveCodexSessionId || 'none'}, codexCliSessionId=${agent.codexCliSessionId || 'none'}, activeWorkflowSessionId=${agent.activeWorkflowSessionId || 'none'}, lastHeartbeat=${agent.lastHeartbeat || 'none'}`
     )),
@@ -592,6 +677,12 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
     )),
     formatSection('Tasks', context.tasks.map(task =>
       `- ${task.title} [${task.status}/${task.priority}] agent=${task.agent}, board=${task.board || 'none'}, id=${task.id}`
+    )),
+    formatSection('Agent run queue', context.agentRunJobs.map(job =>
+      `- ${job.agent}: job=${job.id}, status=${job.status}, taskId=${job.taskId || 'none'}, prompt=${job.prompt}, codexSessionId=${job.codexSessionId || 'none'}, nexusSessionId=${job.nexusSessionId || 'none'}, durationMs=${job.durationMs ?? 'none'}, summary=${job.summary || job.error || 'none'}`
+    )),
+    formatSection('Production error pipeline', context.productionErrors.map(error =>
+      `- ${error.createdAt} ${error.title} status=${error.status}, source=${error.source}, severity=${error.severity}, taskId=${error.taskId || 'none'}, taskStatus=${error.taskStatus || 'none'}, debugRunJobId=${error.debugRunJobId || 'none'}, reviewRunJobId=${error.reviewRunJobId || 'none'}, commitRunJobId=${error.commitRunJobId || 'none'}, fingerprint=${error.fingerprint}`
     )),
     formatSection('Recent token usage', context.tokenUsage.map(usage =>
       `- ${usage.agent}: ${usage.totalTokens} tokens (${usage.inputTokens} in/${usage.outputTokens} out), model=${usage.model}, cost=${usage.cost}`

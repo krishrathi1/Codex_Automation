@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { AUTH_DISABLED, LOCAL_AUTH_ORG, LOCAL_AUTH_USER } from '../lib/auth-mode';
 
 interface AuthUser { id: string; email: string; name: string }
 interface AuthOrg { id: string; name: string; slug: string }
@@ -22,16 +23,46 @@ interface AuthState {
   clearAuth: () => void;
 }
 
+function localAuthState(accessToken: string | null = null) {
+  return {
+    user: LOCAL_AUTH_USER,
+    organization: LOCAL_AUTH_ORG,
+    orgRole: 'OWNER' as OrgRole,
+    accessToken,
+    isAuthenticated: true,
+    isLoading: false,
+    error: null,
+  };
+}
+
+async function fetchDevelopmentLogin() {
+  const res = await fetch('/api/auth/dev-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: 'Development login failed' }));
+    throw new Error(data.error || 'Development login failed');
+  }
+  return res.json();
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
-  user: null,
-  organization: null,
-  orgRole: null,
+  user: AUTH_DISABLED ? LOCAL_AUTH_USER : null,
+  organization: AUTH_DISABLED ? LOCAL_AUTH_ORG : null,
+  orgRole: AUTH_DISABLED ? 'OWNER' : null,
   accessToken: null,
-  isAuthenticated: false,
-  isLoading: true,
+  isAuthenticated: AUTH_DISABLED,
+  isLoading: !AUTH_DISABLED,
   error: null,
 
   login: async (email, password) => {
+    if (AUTH_DISABLED) {
+      set(localAuthState());
+      return;
+    }
+
     set({ error: null, isLoading: true });
     try {
       const res = await fetch('/api/auth/login', {
@@ -63,16 +94,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   devLogin: async () => {
     set({ error: null, isLoading: true });
     try {
-      const res = await fetch('/api/auth/dev-login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: 'Development login failed' }));
-        throw new Error(data.error || 'Development login failed');
-      }
-      const data = await res.json();
+      const data = await fetchDevelopmentLogin();
       set({
         user: data.user,
         organization: data.organization,
@@ -82,12 +104,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isLoading: false,
       });
     } catch (e: any) {
+      if (AUTH_DISABLED) {
+        set(localAuthState());
+        return;
+      }
       set({ error: e.message, isLoading: false });
       throw e;
     }
   },
 
   signup: async (email, password, name, orgName) => {
+    if (AUTH_DISABLED) {
+      set(localAuthState());
+      return;
+    }
+
     set({ error: null, isLoading: true });
     try {
       const res = await fetch('/api/auth/signup', {
@@ -109,6 +140,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
+    if (AUTH_DISABLED) {
+      set(localAuthState());
+      return;
+    }
+
     const { accessToken } = get();
     try {
       if (accessToken) {
@@ -123,6 +159,24 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   initialize: async () => {
+    if (AUTH_DISABLED) {
+      try {
+        const data = await fetchDevelopmentLogin();
+        set({
+          user: data.user,
+          organization: data.organization,
+          orgRole: data.role,
+          accessToken: data.accessToken,
+          isAuthenticated: true,
+          isLoading: false,
+          error: null,
+        });
+      } catch {
+        set(localAuthState());
+      }
+      return;
+    }
+
     try {
       // Try to refresh using the httpOnly cookie (automatically sent)
       const res = await fetch('/api/auth/refresh', {
@@ -159,6 +213,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   clearAuth: () => {
+    if (AUTH_DISABLED) {
+      set(localAuthState());
+      return;
+    }
+
     set({ user: null, organization: null, orgRole: null, accessToken: null, isAuthenticated: false });
   },
 }));

@@ -131,6 +131,9 @@ router.post('/:id/collaboration/dispatch', async (req, res) => {
     for (const message of result.messages) {
       io?.to(room).emit('thread:message', { threadId: result.thread.id, message });
     }
+    for (const runJob of result.runJobs) {
+      io?.to(room).emit('agent-run-job:update', runJob);
+    }
 
     io?.to(room).emit('board:taskDispatch', result);
     io?.to(room).emit('agent:message', {
@@ -139,6 +142,47 @@ router.post('/:id/collaboration/dispatch', async (req, res) => {
       message: result.query,
       threadId: result.thread.id,
       boardId: result.board.id,
+      timestamp: new Date().toISOString(),
+    });
+
+    res.status(201).json(result);
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/:id/collaboration/live-workflow/start', async (req, res) => {
+  try {
+    const result = await collaborationService.startLiveAgentWorkflow(
+      req.organizationId!,
+      req.params.id,
+      req.body,
+    );
+    const io = req.app.get('io');
+    const room = `org:${req.organizationId}`;
+
+    for (const agent of result.agents) {
+      io?.to(room).emit('agent:updated', agent);
+    }
+    for (const task of result.tasks) {
+      io?.to(room).emit('task:update', task);
+    }
+    for (const message of result.messages) {
+      io?.to(room).emit('thread:message', { threadId: result.thread.id, message });
+    }
+    for (const runJob of result.runJobs) {
+      io?.to(room).emit('agent-run-job:update', runJob);
+    }
+
+    io?.to(room).emit('board:liveWorkflowStarted', result);
+    io?.to(room).emit('agent:message', {
+      sourceAgent: { id: 'admin', name: 'Admin' },
+      targetAgent: { id: result.agents[0]?.id, name: result.agents[0]?.displayName },
+      message: result.trigger,
+      threadId: result.thread.id,
+      boardId: result.board.id,
+      workflowId: result.workflowId,
       timestamp: new Date().toISOString(),
     });
 

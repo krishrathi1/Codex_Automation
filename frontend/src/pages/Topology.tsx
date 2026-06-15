@@ -17,6 +17,8 @@ interface GraphNode {
   currentTask?: string | null;
   codexSessionId?: string;
   activeRunIds?: string[];
+  queuedRunIds?: string[];
+  failedRunIds?: string[];
   taskIds?: string[];
 }
 
@@ -31,6 +33,8 @@ interface GraphEdge {
   codexSessionIds?: string[];
   sessionIds?: string[];
   activeRunIds?: string[];
+  queuedRunIds?: string[];
+  failedRunIds?: string[];
   taskIds?: string[];
   recentMessages?: Array<{
     id: string;
@@ -43,7 +47,7 @@ interface GraphEdge {
     requestId?: string;
   }>;
   observationLinks?: Array<{
-    type: 'task' | 'session' | 'context';
+    type: 'task' | 'session' | 'context' | 'run_job';
     id: string;
     label: string;
     status?: string;
@@ -207,6 +211,15 @@ function DetailPanel({
   const nodeEdges = edges.filter((e) => e.source === node.id || e.target === node.id);
   const nodeMap = new Map(allNodes.map((n) => [n.id, n]));
   const totalMessages = nodeEdges.reduce((sum, e) => sum + e.messageCount, 0);
+  const activeRuns = node.activeRunIds?.length
+    ? node.activeRunIds.length
+    : 0;
+  const queuedRuns = node.queuedRunIds?.length
+    ? node.queuedRunIds.length
+    : 0;
+  const failedRuns = node.failedRunIds?.length
+    ? node.failedRunIds.length
+    : 0;
 
   return (
     <div className="absolute right-0 top-0 h-full w-80 bg-surface-900 border-l border-white/5 z-20 overflow-y-auto animate-slide-in">
@@ -256,6 +269,20 @@ function DetailPanel({
           <div className="bg-white/5 rounded-lg px-3 py-2">
             <div className="text-xs text-gray-500">Messages</div>
             <div className="text-lg font-bold text-white font-mono">{totalMessages}</div>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-3 gap-3">
+          <div className="bg-white/5 rounded-lg px-3 py-2">
+            <div className="text-xs text-gray-500">Active runs</div>
+            <div className="text-lg font-bold text-white font-mono">{activeRuns}</div>
+          </div>
+          <div className="bg-white/5 rounded-lg px-3 py-2">
+            <div className="text-xs text-gray-500">Queued runs</div>
+            <div className="text-lg font-bold text-white font-mono">{queuedRuns}</div>
+          </div>
+          <div className="bg-white/5 rounded-lg px-3 py-2">
+            <div className="text-xs text-gray-500">Failed runs</div>
+            <div className="text-lg font-bold text-white font-mono">{failedRuns}</div>
           </div>
         </div>
       </div>
@@ -314,6 +341,8 @@ function EdgeDetailPanel({
     { label: 'Codex', values: edge.codexSessionIds ?? [] },
     { label: 'Sessions', values: edge.sessionIds ?? [] },
     { label: 'Active runs', values: edge.activeRunIds ?? [] },
+    { label: 'Queued runs', values: edge.queuedRunIds ?? [] },
+    { label: 'Failed runs', values: edge.failedRunIds ?? [] },
     { label: 'Tasks', values: edge.taskIds ?? [] },
     { label: 'Threads', values: edge.threadIds ?? [] },
   ].filter(item => item.values.length > 0);
@@ -465,7 +494,7 @@ export function Topology() {
   // Live updates from chat, Mother Chat, tasks, and agent state changes
   useEffect(() => {
     const socket = getSocket();
-    const events = ['agent:chat:event', 'mother-chat:event', 'agent:updated', 'agent:status', 'task:update', 'task:delete'];
+    const events = ['agent:chat:event', 'mother-chat:event', 'agent:updated', 'agent:status', 'task:update', 'task:delete', 'agent-run-job:update'];
     events.forEach(eventName => socket.on(eventName, scheduleGraphRefresh));
     return () => {
       events.forEach(eventName => socket.off(eventName, scheduleGraphRefresh));

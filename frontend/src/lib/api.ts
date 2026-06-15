@@ -1,5 +1,6 @@
 import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, Gateway, GatewayHealth, ModelInfo, ChatHistory, ChatResponse, MotherChatContext, MotherChatDiagnostics, WorkspaceFile, LlmProvider, UsageCredit, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate, CommEdge } from '../types';
 import { useAuthStore } from '../stores/auth-store';
+import { AUTH_DISABLED } from './auth-mode';
 
 const BASE_URL = '/api';
 
@@ -35,11 +36,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   // On 401, try to refresh token via httpOnly cookie and retry once
   if (res.status === 401) {
-    const refreshRes = await fetch(`${BASE_URL}/auth/refresh`, {
+    const authPath = AUTH_DISABLED ? '/auth/dev-login' : '/auth/refresh';
+    const refreshRes = await fetch(`${BASE_URL}${authPath}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include', // refresh token is in httpOnly cookie
+      credentials: 'include',
     });
+
     if (refreshRes.ok) {
       const data = await refreshRes.json();
       useAuthStore.getState().setAccessToken(data.accessToken);
@@ -50,10 +53,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
         headers: { ...headers, ...options?.headers },
       });
     } else {
-      // Clear auth state — ProtectedRoute will redirect to /login
-      // without a hard page reload (preserves SPA navigation)
-      useAuthStore.getState().clearAuth();
-      throw new Error('Session expired');
+      if (!AUTH_DISABLED) {
+        // Clear auth state — ProtectedRoute will redirect to /login
+        // without a hard page reload (preserves SPA navigation)
+        useAuthStore.getState().clearAuth();
+      }
+      throw new Error(AUTH_DISABLED ? 'Backend unavailable' : 'Session expired');
     }
   }
 
@@ -295,6 +300,15 @@ export const api = {
     dispatchToAgents: (id: string, data: { query: string; priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' }) =>
       request<{ board: Board; query: string; agents: Agent[]; tasks: Task[]; thread: Thread; messages: Message[] }>(
         `/boards/${id}/collaboration/dispatch`,
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
+    startLiveWorkflow: (id: string, data: {
+      goal?: string;
+      trigger: string;
+      priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+    }) =>
+      request<{ board: Board; workflowId: string; goal: string; trigger: string; agents: Agent[]; tasks: Task[]; thread: Thread; messages: Message[]; runJobs: unknown[] }>(
+        `/boards/${id}/collaboration/live-workflow/start`,
         { method: 'POST', body: JSON.stringify(data) },
       ),
     addAgent: (id: string, data: { agentId: string; isLead?: boolean }) =>

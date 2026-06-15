@@ -1,7 +1,10 @@
-import type { Agent, Board, Message, Task, Thread } from '@prisma/client';
+import { randomUUID } from 'crypto';
+import type { Agent, AgentRunJob, Board, Message, Task, Thread } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import * as activityService from './activity.service.js';
 import * as agentService from './agent.service.js';
+import { enqueueBoardAgentRunJobs, enqueueLiveAgentWorkflowInitialJob } from './agent-run-queue.service.js';
+import { getOrCreateAdminAgent } from './system-agent.service.js';
 
 type AgentInput = {
   agentId?: string;
@@ -21,6 +24,13 @@ export type StartBoardCollaborationInput = {
 export type DispatchBoardTaskInput = {
   query?: string;
   message?: string;
+  priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+};
+
+export type StartLiveAgentWorkflowInput = {
+  goal?: string;
+  trigger?: string;
+  agents?: AgentInput[];
   priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 };
 
@@ -56,6 +66,46 @@ function defaultAgentInputs(board: Pick<Board, 'slug'>): Required<Pick<AgentInpu
   ];
 }
 
+function defaultLiveWorkflowAgentInputs(board: Pick<Board, 'slug'>): Required<Pick<AgentInput, 'name' | 'displayName' | 'role' | 'work' | 'avatar'>>[] {
+  return [
+    {
+      name: `${board.slug}-log-intake`,
+      displayName: 'Log Intake Agent',
+      role: 'Runtime log intake',
+      work: 'Read the incoming error/event log, extract symptoms, affected files/routes, severity, and hand off a compact incident packet.',
+      avatar: 'L',
+    },
+    {
+      name: `${board.slug}-diagnosis-planner`,
+      displayName: 'Diagnosis Planner',
+      role: 'Root-cause analysis',
+      work: 'Read the incident packet, inspect context, identify likely root cause, and hand off a concrete implementation approach.',
+      avatar: 'D',
+    },
+    {
+      name: `${board.slug}-code-fix-engineer`,
+      displayName: 'Code Fix Engineer',
+      role: 'Implementation',
+      work: 'Apply the smallest code change that matches the codebase language and existing patterns, then hand off files changed and rationale.',
+      avatar: 'C',
+    },
+    {
+      name: `${board.slug}-verification-agent`,
+      displayName: 'Verification Agent',
+      role: 'Verification and tests',
+      work: 'Run focused checks/tests/builds, verify the fix, capture failures, and hand off evidence with pass/fail status.',
+      avatar: 'V',
+    },
+    {
+      name: `${board.slug}-release-steward`,
+      displayName: 'Release Steward',
+      role: 'Release and audit',
+      work: 'Review the verification evidence, prepare final audit notes, and only commit/push when the initiating task explicitly allows it.',
+      avatar: 'R',
+    },
+  ];
+}
+
 function normalizeAgentInputs(board: Pick<Board, 'slug'>, data: StartBoardCollaborationInput): AgentInput[] {
   const defaults = defaultAgentInputs(board);
   const provided = Array.isArray(data.agents) ? data.agents.slice(0, 2) : [];
@@ -72,6 +122,41 @@ function normalizeAgentInputs(board: Pick<Board, 'slug'>, data: StartBoardCollab
       isLead: item.isLead ?? index === 0,
     };
   });
+}
+
+function normalizeLiveAgentInputs(board: Pick<Board, 'slug'>, data: StartLiveAgentWorkflowInput, existingAgents: Agent[]): AgentInput[] {
+  if (Array.isArray(data.agents) && data.agents.length > 0) {
+    const defaults = defaultLiveWorkflowAgentInputs(board);
+    return data.agents.slice(0, 8).map((item, index) => {
+      const fallback = defaults[index] ?? defaults[defaults.length - 1];
+      return {
+        agentId: item.agentId,
+        name: item.name || fallback.name,
+        displayName: item.displayName || fallback.displayName,
+        role: item.role || fallback.role,
+        work: item.work || fallback.work,
+        avatar: item.avatar || fallback.avatar,
+        isLead: item.isLead ?? index === 0,
+      };
+    });
+  }
+
+  if (existingAgents.length > 0) {
+    return existingAgents.slice(0, 8).map((agent, index) => ({
+      agentId: agent.id,
+      name: agent.name,
+      displayName: agent.displayName,
+      role: agent.description,
+      work: agent.currentTask || agent.description || `Continue live workflow stage ${index + 1}.`,
+      avatar: agent.avatar || String(index + 1),
+      isLead: index === 0 ? true : agent.isBoardLead,
+    }));
+  }
+
+  return defaultLiveWorkflowAgentInputs(board).map((agent, index) => ({
+    ...agent,
+    isLead: index === 0,
+  }));
 }
 
 async function resolveCollaborationAgent(
@@ -320,6 +405,7 @@ export async function dispatchBoardTaskToAgents(
   tasks: Task[];
   thread: Thread;
   messages: Message[];
+  runJobs: AgentRunJob[];
 }> {
   const query = (data.query || data.message || '').trim();
   if (!query) {
@@ -448,5 +534,167 @@ export async function dispatchBoardTaskToAgents(
     },
   }).catch(() => {});
 
-  return { board, query, agents, tasks, thread, messages };
+  const runJobs = await enqueueBoardAgentRunJobs({
+    organizationId,
+    board,
+    query,
+    agents,
+    tasks,
+    thread,
+  });
+
+  return { board, query, agents, tasks, thread, messages, runJobs };
+}
+
+export async function startLiveAgentWorkflow(
+  organizationId: string,
+  boardId: string,
+  data: StartLiveAgentWorkflowInput,
+): Promise<{
+  board: Board;
+  workflowId: string;
+  goal: string;
+  trigger: string;
+  agents: BoardCollaborationAgent[];
+  tasks: Task[];
+  thread: Thread;
+  messages: Message[];
+  runJobs: AgentRunJob[];
+}> {
+  const board = await prisma.board.findFirst({
+    where: { id: boardId, organizationId },
+  });
+  if (!board) {
+    const err = new Error('Board not found') as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const existingAgents = await prisma.agent.findMany({
+    where: {
+      organizationId,
+      boardId: board.id,
+      enabled: true,
+      name: { notIn: ['__mother_chat__', '__admin__'] },
+    },
+    orderBy: [
+      { isBoardLead: 'desc' },
+      { createdAt: 'asc' },
+    ],
+  });
+
+  const goal = data.goal?.trim()
+    || board.objective?.trim()
+    || `Run a live agent-to-agent workflow for ${board.name}.`;
+  const trigger = data.trigger?.trim() || goal;
+  const workflowId = randomUUID();
+  const agentInputs = normalizeLiveAgentInputs(board, data, existingAgents);
+  const agents = await Promise.all(agentInputs.map(input => (
+    resolveCollaborationAgent(organizationId, board.id, input)
+  )));
+
+  await Promise.all(agents.map((agent, index) => prisma.agent.update({
+    where: { id: agent.id, organizationId },
+    data: {
+      status: index === 0 ? 'ONLINE' : 'IDLE',
+      currentTask: index === 0 ? agent.assignedWork : null,
+      isBoardLead: index === 0,
+      agentToAgent: true,
+      updatedAt: new Date(),
+    },
+  })));
+
+  const priority = data.priority || 'HIGH';
+  const tasks = await Promise.all(agents.map((agent, index) => prisma.task.create({
+    data: {
+      organizationId,
+      boardId: board.id,
+      agentId: agent.id,
+      title: agent.assignedWork.slice(0, 180),
+      description: [
+        `Live workflow: ${goal}`,
+        `Trigger: ${trigger}`,
+        '',
+        `Stage ${index + 1}/${agents.length}: ${agent.displayName}`,
+        `Role: ${agent.collaborationRole}`,
+      ].join('\n'),
+      status: index === 0 ? 'IN_PROGRESS' : 'ASSIGNED',
+      priority,
+    },
+  })));
+
+  const thread = await prisma.thread.create({
+    data: {
+      organizationId,
+      title: `${board.name}: live workflow ${workflowId}`,
+    },
+  });
+  const adminAgent = await getOrCreateAdminAgent(organizationId);
+  const firstAgent = agents[0];
+  const messages = firstAgent ? [
+    await prisma.message.create({
+      data: {
+        threadId: thread.id,
+        senderId: adminAgent.id,
+        receiverId: firstAgent.id,
+        content: [
+          `Live workflow started: ${goal}`,
+          '',
+          `Trigger/event: ${trigger}`,
+          '',
+          `First stage: ${firstAgent.displayName}`,
+          `Expected chain: ${agents.map(agent => agent.displayName).join(' -> ')}`,
+        ].join('\n'),
+        metadata: {
+          runtime: 'local-orchestration',
+          conversationKind: 'admin_agent',
+          edgeSemantic: 'admin_to_agent',
+          boardId: board.id,
+          boardName: board.name,
+          workflowId,
+          workflowStepIndex: 0,
+          taskIds: tasks.map(task => task.id),
+          source: 'live_agent_workflow',
+        } as any,
+      },
+    }),
+  ] : [];
+
+  await prisma.thread.update({
+    where: { id: thread.id },
+    data: { updatedAt: new Date() },
+  });
+
+  const runJob = await enqueueLiveAgentWorkflowInitialJob({
+    organizationId,
+    board,
+    goal,
+    trigger,
+    workflowId,
+    agents,
+    tasks,
+    thread,
+  });
+
+  await prisma.boardMemory.create({
+    data: {
+      boardId: board.id,
+      content: `Live workflow ${workflowId} started. Goal: ${goal}. Chain: ${agents.map(agent => agent.displayName).join(' -> ')}.`,
+      tags: ['live-workflow', 'agent-agent', 'mother-chat', 'started'] as any,
+      isChat: true,
+      source: 'live_agent_workflow',
+    },
+  }).catch(() => {});
+
+  return {
+    board,
+    workflowId,
+    goal,
+    trigger,
+    agents,
+    tasks,
+    thread,
+    messages,
+    runJobs: runJob ? [runJob] : [],
+  };
 }

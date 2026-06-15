@@ -225,6 +225,7 @@ export function MotherChat() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [dispatchingAll, setDispatchingAll] = useState(false);
+  const [startingLiveWorkflow, setStartingLiveWorkflow] = useState(false);
   const [startingA2A, setStartingA2A] = useState(false);
   const [showA2AStarter, setShowA2AStarter] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -322,14 +323,30 @@ export function MotherChat() {
       if (!scopedBoardId || event.board?.id !== scopedBoardId) return;
       loadContext().catch(() => {});
     };
+    const handleBoardLiveWorkflow = (event: { board?: { id?: string } }) => {
+      if (!scopedBoardId || event.board?.id !== scopedBoardId) return;
+      loadContext().catch(() => {});
+    };
+    const handleAgentRunJobUpdate = (event: { boardId?: string | null }) => {
+      if ((event.boardId ?? null) !== (scopedBoardId ?? null)) return;
+      loadContext().catch(() => {});
+    };
 
     socket.on('mother-chat:event', handleMotherChatEvent);
     socket.on('board:a2aStarted', handleBoardA2AStarted);
     socket.on('board:taskDispatch', handleBoardTaskDispatch);
+    socket.on('board:liveWorkflowStarted', handleBoardLiveWorkflow);
+    socket.on('board:liveWorkflowAdvanced', handleBoardLiveWorkflow);
+    socket.on('board:liveWorkflowCompleted', handleBoardLiveWorkflow);
+    socket.on('agent-run-job:update', handleAgentRunJobUpdate);
     return () => {
       socket.off('mother-chat:event', handleMotherChatEvent);
       socket.off('board:a2aStarted', handleBoardA2AStarted);
       socket.off('board:taskDispatch', handleBoardTaskDispatch);
+      socket.off('board:liveWorkflowStarted', handleBoardLiveWorkflow);
+      socket.off('board:liveWorkflowAdvanced', handleBoardLiveWorkflow);
+      socket.off('board:liveWorkflowCompleted', handleBoardLiveWorkflow);
+      socket.off('agent-run-job:update', handleAgentRunJobUpdate);
     };
   }, [scopedBoardId]);
 
@@ -338,7 +355,7 @@ export function MotherChat() {
   }, [messages]);
 
   async function handleSend() {
-    if (!input.trim() || sending || dispatchingAll) return;
+    if (!input.trim() || sending || dispatchingAll || startingLiveWorkflow) return;
 
     const requestId = newRequestId();
     streamedResponseRequestsRef.current[requestId] = false;
@@ -348,6 +365,13 @@ export function MotherChat() {
       : null;
     if (dispatchCommand?.[1]) {
       await handleDispatchAll(dispatchCommand[1]);
+      return;
+    }
+    const liveWorkflowCommand = scopedBoardId
+      ? content.match(/^\/(?:live|live-workflow|pipeline)\s+(.+)/i)
+      : null;
+    if (liveWorkflowCommand?.[1]) {
+      await handleStartLiveWorkflow(liveWorkflowCommand[1]);
       return;
     }
 
@@ -473,6 +497,64 @@ export function MotherChat() {
     }
   }
 
+  async function handleStartLiveWorkflow(triggerOverride?: string) {
+    if (!scopedBoardId || startingLiveWorkflow) return;
+    const trigger = (triggerOverride ?? input).trim();
+    if (!trigger) return;
+
+    const requestId = newRequestId();
+    setMessages(prev => [
+      ...prev,
+      {
+        id: `live-workflow-user-${requestId}`,
+        role: 'user',
+        content: `Start live workflow: ${trigger}`,
+        timestamp: new Date().toISOString(),
+        requestId,
+      },
+    ]);
+    setInput('');
+    setStartingLiveWorkflow(true);
+    setError(null);
+
+    try {
+      const response = await api.boards.startLiveWorkflow(scopedBoardId, {
+        goal: context?.scope?.board?.objective || 'Run a live agent-to-agent production workflow.',
+        trigger,
+        priority: 'HIGH',
+      });
+      setMessages(prev => [
+        ...prev,
+        {
+          id: `live-workflow-assistant-${requestId}`,
+          role: 'assistant',
+          content: [
+            `Started live workflow ${response.workflowId}.`,
+            `Chain: ${response.agents.map(agent => agent.displayName).join(' -> ')}`,
+            `First queued jobs: ${response.runJobs.length}`,
+          ].join('\n'),
+          timestamp: new Date().toISOString(),
+          requestId,
+        },
+      ]);
+      await loadContext();
+    } catch (err) {
+      setMessages(prev => [
+        ...prev,
+        {
+          id: `live-workflow-error-${requestId}`,
+          role: 'assistant',
+          content: `Error: ${(err as Error).message}`,
+          timestamp: new Date().toISOString(),
+          requestId,
+        },
+      ]);
+      setError((err as Error).message);
+    } finally {
+      setStartingLiveWorkflow(false);
+    }
+  }
+
   function handleKeyDown(event: React.KeyboardEvent) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -526,11 +608,21 @@ export function MotherChat() {
             <button
               type="button"
               onClick={() => setShowA2AStarter(true)}
-              disabled={startingA2A}
+              disabled={startingA2A || startingLiveWorkflow}
               className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <GitBranch className="h-3.5 w-3.5" />
               {startingA2A ? 'Starting A2A...' : 'Start A2A'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleStartLiveWorkflow(input || 'Investigate the latest production issue, hand off through diagnosis, code fix, verification, and release audit.')}
+              disabled={startingLiveWorkflow}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-200 transition-colors hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Zap className="h-3.5 w-3.5" />
+              {startingLiveWorkflow ? 'Starting live...' : 'Start live workflow'}
             </button>
 
             <section>
@@ -694,7 +786,8 @@ export function MotherChat() {
             <StatTile label="Agents" value={context?.counts.agents ?? 0} icon={Bot} />
             <StatTile label="Sessions" value={context?.counts.runningSessions ?? 0} icon={Clock3} />
             <StatTile label="Tasks" value={context?.counts.activeTasks ?? 0} icon={CheckCircle2} />
-            <StatTile label="Errors" value={context?.counts.recentErrors ?? 0} icon={AlertTriangle} />
+            <StatTile label="Runs" value={context?.counts.activeRunJobs ?? 0} icon={Activity} />
+            <StatTile label="Errors" value={(context?.counts.recentErrors ?? 0) + (context?.counts.failedRunJobs ?? 0)} icon={AlertTriangle} />
             <StatTile label="Approvals" value={context?.counts.pendingApprovals ?? 0} icon={Activity} />
             <StatTile label="Tokens" value={context?.counts.tokensInWindow ?? 0} icon={Zap} />
           </div>
@@ -714,6 +807,33 @@ export function MotherChat() {
                 </div>
               ))}
               {context && context.agents.length === 0 && <p className="text-sm text-gray-500">No agents</p>}
+            </div>
+          </section>
+
+          <section>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Local Codex Runs</h3>
+            <div className="space-y-2">
+              {(context?.agentRunJobs ?? []).slice(0, 6).map(job => (
+                <div key={job.id} className="rounded-lg border border-sky-500/10 bg-sky-500/5 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-sm text-white">{job.agent}</p>
+                    <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${
+                      job.status === 'FAILED'
+                        ? 'bg-red-500/10 text-red-300'
+                        : job.status === 'RUNNING'
+                          ? 'bg-emerald-500/10 text-emerald-300'
+                          : 'bg-white/5 text-gray-400'
+                    }`}>
+                      {job.status}
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-gray-400">{job.summary || job.error || job.prompt}</p>
+                  <p className="mt-1 truncate text-[10px] text-sky-300/70">
+                    {job.codexSessionId ? `codex ${job.codexSessionId}` : `job ${job.id}`}
+                  </p>
+                </div>
+              ))}
+              {context && (context.agentRunJobs ?? []).length === 0 && <p className="text-sm text-gray-500">No local Codex runs</p>}
             </div>
           </section>
 

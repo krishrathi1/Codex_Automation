@@ -108,6 +108,26 @@ enum OnboardingStatus {
   ABANDONED
 }
 
+enum AgentRunJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ProductionErrorStatus {
+  RECEIVED
+  TASK_CREATED
+  DEBUG_QUEUED
+  REVIEW_QUEUED
+  APPROVED
+  REJECTED
+  COMMIT_QUEUED
+  COMPLETED
+  FAILED
+}
+
 // ─── Organization & Auth ────────────────────────────────
 
 model Organization {
@@ -141,6 +161,8 @@ model Organization {
   skillPacks           SkillPack[]
   invites              OrgInvite[]
   soulTemplates        SoulTemplate[]
+  agentRunJobs         AgentRunJob[]
+  productionErrorEvents ProductionErrorEvent[]
 
   @@index([slug])
 }
@@ -279,6 +301,7 @@ model Agent {
   agentSkills      AgentSkill[]
   integrations     AgentIntegration[]
   soulTemplateId   String?
+  runJobs           AgentRunJob[]
 
   @@unique([organizationId, name])
   @@index([organizationId])
@@ -328,6 +351,8 @@ model Task {
   tags               TagAssignment[]
   customFieldValues  TaskCustomFieldValue[]
   fingerprint        TaskFingerprint?
+  runJobs            AgentRunJob[]
+  productionErrorEvents ProductionErrorEvent[]
 
   @@index([organizationId])
   @@index([status])
@@ -344,6 +369,7 @@ model Thread {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   title          String?
   messages       Message[]
+  runJobs        AgentRunJob[]
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -389,6 +415,86 @@ model Session {
   @@index([agentId])
   @@index([startedAt])
   @@index([status])
+}
+
+// ─── Local Codex Agent Run Queue ───────────────────────
+
+model AgentRunJob {
+  id             String            @id @default(uuid())
+  organizationId String
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  boardId        String?
+  board          Board?            @relation(fields: [boardId], references: [id], onDelete: SetNull)
+  agentId        String
+  agent          Agent             @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  taskId         String?
+  task           Task?             @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  threadId       String?
+  thread         Thread?           @relation(fields: [threadId], references: [id], onDelete: SetNull)
+  status         AgentRunJobStatus @default(QUEUED)
+  prompt         String            @db.Text
+  contextPacket  Json?
+  output         String?           @db.Text
+  summary        String?           @db.Text
+  error          String?           @db.Text
+  codexSessionId String?
+  staleCodexSessionId String?
+  nexusSessionId String?
+  attempt        Int               @default(0)
+  queuedAt       DateTime          @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  durationMs     Int?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([organizationId])
+  @@index([boardId])
+  @@index([agentId])
+  @@index([taskId])
+  @@index([threadId])
+  @@index([status])
+  @@index([queuedAt])
+}
+
+// ─── Production Error Automation ───────────────────────
+
+model ProductionErrorEvent {
+  id             String                @id @default(uuid())
+  organizationId String
+  organization   Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  boardId        String?
+  board          Board?                @relation(fields: [boardId], references: [id], onDelete: SetNull)
+  taskId         String?
+  task           Task?                 @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  source         String                @default("website")
+  severity       String                @default("error")
+  title          String
+  message        String                @db.Text
+  stack          String?               @db.Text
+  url            String?
+  route          String?
+  userAgent      String?               @db.Text
+  environment    String?
+  fingerprint    String
+  payload        Json?
+  status         ProductionErrorStatus @default(RECEIVED)
+  debugAgentId   String?
+  reviewAgentId  String?
+  commitAgentId  String?
+  debugRunJobId  String?
+  reviewRunJobId String?
+  commitRunJobId String?
+  resolvedAt     DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@index([organizationId])
+  @@index([boardId])
+  @@index([taskId])
+  @@index([status])
+  @@index([fingerprint])
+  @@index([createdAt])
 }
 
 // ─── Cost & Token Tracking ──────────────────────────────
@@ -608,6 +714,8 @@ model Board {
   customFields       BoardTaskCustomField[]
   memberAccess       OrgMemberBoardAccess[]
   inviteAccess       OrgInviteBoardAccess[]
+  runJobs            AgentRunJob[]
+  productionErrorEvents ProductionErrorEvent[]
 
   @@unique([organizationId, slug])
   @@index([organizationId])

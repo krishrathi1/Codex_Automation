@@ -190,6 +190,8 @@ export interface CommEdge {
   codexSessionIds?: string[];
   sessionIds?: string[];
   activeRunIds?: string[];
+  queuedRunIds?: string[];
+  failedRunIds?: string[];
   taskIds?: string[];
   recentMessages?: Array<{
     id: string;
@@ -202,7 +204,7 @@ export interface CommEdge {
     requestId?: string;
   }>;
   observationLinks?: Array<{
-    type: 'task' | 'session' | 'context';
+    type: 'task' | 'session' | 'context' | 'run_job';
     id: string;
     label: string;
     status?: string;
@@ -337,6 +339,12 @@ export interface MotherChatContext {
     recentErrors: number;
     pendingApprovals: number;
     tokensInWindow: number;
+    activeRunJobs?: number;
+    queuedRunJobs?: number;
+    runningRunJobs?: number;
+    failedRunJobs?: number;
+    productionErrors?: number;
+    activeProductionErrors?: number;
   };
   agents: Array<{
     id: string;
@@ -386,6 +394,47 @@ export interface MotherChatContext {
     priority: Priority;
     agent: string;
     board: string | null;
+    updatedAt: string;
+  }>;
+  agentRunJobs?: Array<{
+    id: string;
+    status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+    agent: string;
+    agentId: string;
+    board: string | null;
+    boardId: string | null;
+    task: string | null;
+    taskId: string | null;
+    prompt: string;
+    summary: string | null;
+    error: string | null;
+    codexSessionId: string | null;
+    nexusSessionId: string | null;
+    attempt: number;
+    queuedAt: string;
+    startedAt: string | null;
+    completedAt: string | null;
+    durationMs: number | null;
+    updatedAt: string;
+  }>;
+  productionErrors?: Array<{
+    id: string;
+    source: string;
+    severity: string;
+    title: string;
+    message: string;
+    status: 'RECEIVED' | 'TASK_CREATED' | 'DEBUG_QUEUED' | 'REVIEW_QUEUED' | 'APPROVED' | 'REJECTED' | 'COMMIT_QUEUED' | 'COMPLETED' | 'FAILED';
+    fingerprint: string;
+    board: string | null;
+    boardId: string | null;
+    task: string | null;
+    taskId: string | null;
+    taskStatus: TaskStatus | null;
+    debugRunJobId: string | null;
+    reviewRunJobId: string | null;
+    commitRunJobId: string | null;
+    resolvedAt: string | null;
+    createdAt: string;
     updatedAt: string;
   }>;
   tokenUsage: Array<{
