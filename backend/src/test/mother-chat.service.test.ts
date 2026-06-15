@@ -107,6 +107,117 @@ describe('mother-chat service', () => {
     expect(contextText).not.toContain(MOTHER_CHAT_AGENT_NAME);
   });
 
+  it('scopes Mother Chat context to a production board', async () => {
+    const alphaBoard = await prisma.board.create({
+      data: {
+        organizationId: orgId,
+        name: 'Alpha Production',
+        slug: `alpha-production-${Date.now()}`,
+        description: 'Alpha release room',
+        objective: 'Ship alpha safely',
+      },
+    });
+    const betaBoard = await prisma.board.create({
+      data: {
+        organizationId: orgId,
+        name: 'Beta Production',
+        slug: `beta-production-${Date.now()}`,
+        description: 'Beta release room',
+      },
+    });
+    const alphaAgent = await prisma.agent.create({
+      data: {
+        organizationId: orgId,
+        name: 'alpha-worker',
+        displayName: 'Alpha Worker',
+        description: 'Works on alpha',
+        status: 'ONLINE',
+        boardId: alphaBoard.id,
+      },
+    });
+    const betaAgent = await prisma.agent.create({
+      data: {
+        organizationId: orgId,
+        name: 'beta-worker',
+        displayName: 'Beta Worker',
+        description: 'Works on beta',
+        status: 'ONLINE',
+        boardId: betaBoard.id,
+      },
+    });
+    const thread = await prisma.thread.create({
+      data: { organizationId: orgId, title: 'Board scoped updates' },
+    });
+
+    await prisma.message.createMany({
+      data: [
+        {
+          threadId: thread.id,
+          senderId: alphaAgent.id,
+          receiverId: alphaAgent.id,
+          content: 'Alpha deployment is in progress.',
+        },
+        {
+          threadId: thread.id,
+          senderId: betaAgent.id,
+          receiverId: betaAgent.id,
+          content: 'Beta deployment is in progress.',
+        },
+      ],
+    });
+    await prisma.session.createMany({
+      data: [
+        {
+          organizationId: orgId,
+          agentId: alphaAgent.id,
+          type: 'MESSAGE',
+          status: 'RUNNING',
+          summary: 'Alpha active run',
+        },
+        {
+          organizationId: orgId,
+          agentId: betaAgent.id,
+          type: 'MESSAGE',
+          status: 'RUNNING',
+          summary: 'Beta active run',
+        },
+      ],
+    });
+    await prisma.task.createMany({
+      data: [
+        {
+          organizationId: orgId,
+          boardId: alphaBoard.id,
+          agentId: alphaAgent.id,
+          title: 'Alpha smoke test',
+          status: 'IN_PROGRESS',
+          priority: 'HIGH',
+        },
+        {
+          organizationId: orgId,
+          boardId: betaBoard.id,
+          agentId: betaAgent.id,
+          title: 'Beta smoke test',
+          status: 'IN_PROGRESS',
+          priority: 'HIGH',
+        },
+      ],
+    });
+
+    const { context, contextText } = await buildMotherChatContext(orgId, { boardId: alphaBoard.id });
+
+    expect(context.scope.type).toBe('board');
+    expect(context.scope.board?.id).toBe(alphaBoard.id);
+    expect(context.agents.map(item => item.name)).toEqual(['alpha-worker']);
+    expect(context.counts.runningSessions).toBe(1);
+    expect(context.counts.activeTasks).toBe(1);
+    expect(context.messages.map(item => item.content)).toContain('Alpha deployment is in progress.');
+    expect(context.messages.map(item => item.content)).not.toContain('Beta deployment is in progress.');
+    expect(context.tasks.map(item => item.title)).toEqual(['Alpha smoke test']);
+    expect(contextText).toContain('Alpha Production');
+    expect(contextText).not.toContain('Beta Production');
+  });
+
   it('recovers the latest Codex session id from a persisted chat thread', async () => {
     const agent = await prisma.agent.create({
       data: {

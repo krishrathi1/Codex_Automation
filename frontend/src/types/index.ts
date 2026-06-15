@@ -54,6 +54,7 @@ export interface Task {
   status: TaskStatus;
   priority: Priority;
   agentId: string | null;
+  boardId: string | null;
   createdAt: string;
   updatedAt: string;
   agent: {
@@ -316,6 +317,17 @@ export interface ChatResponse {
 
 export interface MotherChatContext {
   generatedAt: string;
+  scope?: {
+    type: 'organization' | 'board';
+    board: {
+      id: string;
+      name: string;
+      slug: string;
+      description: string;
+      objective: string | null;
+      boardType: string;
+    } | null;
+  };
   counts: {
     agents: number;
     runningSessions: number;

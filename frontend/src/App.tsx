@@ -106,6 +106,7 @@ export function App() {
           <Route path="/boards/:id" element={<BoardDetail />} />
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/mother-chat" element={<MotherChat />} />
+          <Route path="/production/:boardId" element={<MotherChat />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/skills" element={<SkillsMarketplace />} />
           <Route path="/soul-templates" element={<SoulTemplates />} />

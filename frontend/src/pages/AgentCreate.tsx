@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom';
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -113,7 +113,12 @@ function toSlug(name: string): string {
 export function AgentCreate() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const isEditMode = Boolean(id);
+  const boardId = searchParams.get('boardId');
+  const returnTo = searchParams.get('returnTo');
+  const createLabel = boardId && !isEditMode ? 'Create Sub-agent' : 'Create Agent';
+  const cancelPath = returnTo || '/controls';
 
   // Form state
   const [name, setName] = useState('');
@@ -380,6 +385,9 @@ export function AgentCreate() {
       } else {
         data.skillIds = skillIdsArray;
         const created = (await api.agents.create(data)) as Agent;
+        if (boardId) {
+          await api.boards.addAgent(boardId, { agentId: created.id });
+        }
 
         // Update customizations for newly created agent
         for (const sid of selectedSkillIds) {
@@ -401,7 +409,7 @@ export function AgentCreate() {
           }
         }
 
-        navigate(`/agents/${created.id}`);
+        navigate(returnTo || `/agents/${created.id}`);
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to save agent');
@@ -534,15 +542,17 @@ export function AgentCreate() {
             Agent Controls
           </Link>
           <span>/</span>
-          <span className="text-gray-400">{isEditMode ? 'Edit Agent' : 'Create Agent'}</span>
+          <span className="text-gray-400">{isEditMode ? 'Edit Agent' : createLabel}</span>
         </div>
         <h2 className="text-2xl font-bold text-white">
-          {isEditMode ? 'Edit Agent' : 'Create Agent'}
+          {isEditMode ? 'Edit Agent' : createLabel}
         </h2>
         <p className="text-sm text-gray-500 mt-0.5">
           {isEditMode
             ? 'Modify agent configuration, personality, and MCP server connections'
-            : 'Configure a new AI agent with personality, workspace, and tool connections'}
+            : boardId
+              ? 'Configure a new agent for this production group'
+              : 'Configure a new AI agent with personality, workspace, and tool connections'}
         </p>
       </header>
 
@@ -1108,10 +1118,10 @@ export function AgentCreate() {
                   ? 'Saving...'
                   : isEditMode
                     ? 'Save Changes'
-                    : 'Create Agent'}
+                    : createLabel}
               </button>
               <Link
-                to="/controls"
+                to={cancelPath}
                 className="px-6 py-2.5 rounded-lg text-sm font-medium bg-white/5 border border-white/10 text-gray-400 hover:bg-white/10 hover:text-gray-200 transition-all"
               >
                 Cancel

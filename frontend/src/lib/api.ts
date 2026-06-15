@@ -166,7 +166,7 @@ export const api = {
   },
   tasks: {
     list: () => request<Task[]>('/tasks'),
-    create: (data: { title: string; description?: string; priority?: string; agentId?: string }) =>
+    create: (data: { title: string; description?: string; status?: string; priority?: string; agentId?: string; boardId?: string }) =>
       request<Task>('/tasks', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Partial<Task>) =>
       request<Task>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
@@ -250,11 +250,17 @@ export const api = {
       request<ChatResponse>(`/agents/${agentId}/chat`, { method: 'POST', body: JSON.stringify({ message, requestId }) }),
   },
   motherChat: {
-    context: () => request<MotherChatContext>('/mother-chat/context'),
+    context: (boardId?: string) => {
+      const qs = boardId ? `?boardId=${encodeURIComponent(boardId)}` : '';
+      return request<MotherChatContext>(`/mother-chat/context${qs}`);
+    },
     diagnostics: () => request<MotherChatDiagnostics>('/mother-chat/diagnostics'),
-    history: () => request<ChatHistory>('/mother-chat/history'),
-    send: (message: string, requestId?: string) =>
-      request<ChatResponse>('/mother-chat/message', { method: 'POST', body: JSON.stringify({ message, requestId }) }),
+    history: (boardId?: string) => {
+      const qs = boardId ? `?boardId=${encodeURIComponent(boardId)}` : '';
+      return request<ChatHistory>(`/mother-chat/history${qs}`);
+    },
+    send: (message: string, requestId?: string, boardId?: string) =>
+      request<ChatResponse>('/mother-chat/message', { method: 'POST', body: JSON.stringify({ message, requestId, boardId }) }),
   },
   files: {
     list: (agentId: string) => request<WorkspaceFile[]>(`/agents/${agentId}/files`),

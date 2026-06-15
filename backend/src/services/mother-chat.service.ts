@@ -6,7 +6,6 @@ import * as activityService from './activity.service.js';
 import * as llmProviderService from './llm-provider.service.js';
 import { ADMIN_AGENT_NAME, getOrCreateAdminAgent } from './system-agent.service.js';
 import {
-  getAgentCodexSessionId,
   getThreadCodexSessionId,
   resolveCodexCwd,
   runCodexCliPromptWithResumeRecovery,
@@ -24,9 +23,23 @@ type JsonRecord = Record<string, unknown>;
 interface MotherChatSendOptions {
   organizationId: string;
   message: string;
+  boardId?: string;
   requestId?: string;
   io?: SocketIOServer;
 }
+
+interface MotherChatContextOptions {
+  boardId?: string;
+}
+
+type MotherChatBoardScope = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  objective: string | null;
+  boardType: string;
+};
 
 export interface MotherChatRunResult {
   status: 'finished' | 'failed';
@@ -55,9 +68,35 @@ function activityTypeForEvent(eventType: NexusCodexEventType): ActivityType {
   return 'SYSTEM';
 }
 
-function getMotherThreadId(agent: { identityProfile: unknown }) {
+function getMotherThreadId(agent: { identityProfile: unknown }, boardId?: string) {
   const profile = objectRecord(agent.identityProfile);
+  if (boardId) {
+    const boardThreads = objectRecord(profile.motherChatThreadIdsByBoard);
+    return typeof boardThreads[boardId] === 'string' ? boardThreads[boardId] as string : undefined;
+  }
   return typeof profile.motherChatThreadId === 'string' ? profile.motherChatThreadId : undefined;
+}
+
+function getMotherCodexSessionId(agent: { identityProfile: unknown; gatewayAgentId: string | null }, boardId?: string) {
+  const profile = objectRecord(agent.identityProfile);
+  if (boardId) {
+    const boardSessions = objectRecord(profile.codexCliSessionIdsByBoard);
+    return typeof boardSessions[boardId] === 'string' ? boardSessions[boardId] as string : getProfileCodexSessionId(agent);
+  }
+  return getProfileCodexSessionId(agent);
+}
+
+function getProfileCodexSessionId(agent: { identityProfile: unknown; gatewayAgentId: string | null }) {
+  const profile = objectRecord(agent.identityProfile);
+  for (const key of ['codexCliSessionId', 'codexSessionId', 'activeWorkflowSessionId']) {
+    const value = profile[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  if (agent.gatewayAgentId?.startsWith('codex:')) {
+    const sessionId = agent.gatewayAgentId.slice('codex:'.length).trim();
+    if (sessionId) return sessionId;
+  }
+  return undefined;
 }
 
 async function getOrCreateMotherAgent(organizationId: string) {
@@ -84,8 +123,11 @@ async function getOrCreateMotherAgent(organizationId: string) {
   });
 }
 
-async function upsertMotherThread(agent: Awaited<ReturnType<typeof getOrCreateMotherAgent>>) {
-  const existingThreadId = getMotherThreadId(agent);
+async function upsertMotherThread(
+  agent: Awaited<ReturnType<typeof getOrCreateMotherAgent>>,
+  boardScope?: MotherChatBoardScope | null,
+) {
+  const existingThreadId = getMotherThreadId(agent, boardScope?.id);
   if (existingThreadId) {
     const existing = await prisma.thread.findFirst({
       where: { id: existingThreadId, organizationId: agent.organizationId },
@@ -96,37 +138,75 @@ async function upsertMotherThread(agent: Awaited<ReturnType<typeof getOrCreateMo
   const thread = await prisma.thread.create({
     data: {
       organizationId: agent.organizationId,
-      title: 'Mother Chat',
+      title: boardScope ? `Mother Chat: ${boardScope.name}` : 'Mother Chat',
     },
   });
+
+  const profile = objectRecord(agent.identityProfile);
+  const threadIdsByBoard = objectRecord(profile.motherChatThreadIdsByBoard);
+  const nextProfile = boardScope
+    ? {
+        ...profile,
+        motherChatThreadIdsByBoard: {
+          ...threadIdsByBoard,
+          [boardScope.id]: thread.id,
+        },
+        agentRuntime: 'codex-cli',
+        systemRole: 'mother-chat',
+      }
+    : {
+        ...profile,
+        motherChatThreadId: thread.id,
+        agentRuntime: 'codex-cli',
+        systemRole: 'mother-chat',
+      };
 
   await prisma.agent.update({
     where: { id: agent.id },
     data: {
-      identityProfile: {
-        ...objectRecord(agent.identityProfile),
-        motherChatThreadId: thread.id,
-        agentRuntime: 'codex-cli',
-        systemRole: 'mother-chat',
-      } as any,
+      identityProfile: nextProfile as any,
     },
   });
 
   return thread;
 }
 
-async function updateMotherSession(agent: Awaited<ReturnType<typeof getOrCreateMotherAgent>>, codexSessionId: string, threadId?: string) {
-  await prisma.agent.update({
-    where: { id: agent.id },
-    data: {
-      identityProfile: {
-        ...objectRecord(agent.identityProfile),
+async function updateMotherSession(
+  agent: Awaited<ReturnType<typeof getOrCreateMotherAgent>>,
+  codexSessionId: string,
+  threadId?: string,
+  boardScope?: MotherChatBoardScope | null,
+) {
+  const profile = objectRecord(agent.identityProfile);
+  const threadIdsByBoard = objectRecord(profile.motherChatThreadIdsByBoard);
+  const sessionIdsByBoard = objectRecord(profile.codexCliSessionIdsByBoard);
+  const nextProfile = boardScope
+    ? {
+        ...profile,
+        motherChatThreadIdsByBoard: {
+          ...threadIdsByBoard,
+          ...(threadId && { [boardScope.id]: threadId }),
+        },
+        codexCliSessionIdsByBoard: {
+          ...sessionIdsByBoard,
+          [boardScope.id]: codexSessionId,
+        },
+        agentRuntime: 'codex-cli',
+        systemRole: 'mother-chat',
+      }
+    : {
+        ...profile,
         ...(threadId && { motherChatThreadId: threadId }),
         codexCliSessionId: codexSessionId,
         activeWorkflowSessionId: codexSessionId,
         agentRuntime: 'codex-cli',
         systemRole: 'mother-chat',
-      } as any,
+      };
+
+  await prisma.agent.update({
+    where: { id: agent.id },
+    data: {
+      identityProfile: nextProfile as any,
     },
   });
 }
@@ -134,6 +214,7 @@ async function updateMotherSession(agent: Awaited<ReturnType<typeof getOrCreateM
 function emitMotherChatEvent(options: {
   io?: SocketIOServer;
   organizationId: string;
+  boardId?: string | null;
   nexusSessionId: string;
   codexSessionId?: string | null;
   requestId?: string;
@@ -143,6 +224,7 @@ function emitMotherChatEvent(options: {
     sessionId: options.nexusSessionId,
     nexusSessionId: options.nexusSessionId,
     codexSessionId: options.codexSessionId ?? null,
+    boardId: options.boardId ?? null,
     requestId: options.requestId ?? null,
     type: options.event.type,
     content: options.event.content,
@@ -154,6 +236,7 @@ function emitMotherChatEvent(options: {
 async function persistMotherActivity(options: {
   organizationId: string;
   motherAgentId: string;
+  boardId?: string | null;
   nexusSessionId: string;
   codexSessionId?: string | null;
   requestId?: string;
@@ -166,6 +249,7 @@ async function persistMotherActivity(options: {
     metadata: {
       runtime: 'codex-cli',
       systemRole: 'mother-chat',
+      boardId: options.boardId ?? null,
       nexusEventType: options.event.type,
       nexusSessionId: options.nexusSessionId,
       codexSessionId: options.codexSessionId ?? null,
@@ -179,12 +263,61 @@ function formatSection(title: string, rows: string[]) {
   return rows.length > 0 ? `${title}\n${rows.join('\n')}` : `${title}\n- None`;
 }
 
-export async function buildMotherChatContext(organizationId: string) {
+async function resolveBoardScope(organizationId: string, boardId?: string): Promise<MotherChatBoardScope | null> {
+  if (!boardId) return null;
+  const board = await prisma.board.findFirst({
+    where: { id: boardId, organizationId },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      description: true,
+      objective: true,
+      boardType: true,
+    },
+  });
+  if (!board) {
+    const err = new Error('Board not found') as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+  return board;
+}
+
+export async function buildMotherChatContext(organizationId: string, options: MotherChatContextOptions = {}) {
+  const boardScope = await resolveBoardScope(organizationId, options.boardId);
   const agentSelect = { id: true, name: true, displayName: true, avatar: true, status: true };
   const nonMotherAgentWhere = {
     organizationId,
     name: { notIn: [MOTHER_CHAT_AGENT_NAME, ADMIN_AGENT_NAME] },
+    ...(boardScope && { boardId: boardScope.id }),
   };
+  const nonMotherAgentRelationWhere = {
+    name: { notIn: [MOTHER_CHAT_AGENT_NAME, ADMIN_AGENT_NAME] },
+    ...(boardScope && { boardId: boardScope.id }),
+  };
+  const boardTaskWhere = boardScope
+    ? { organizationId, boardId: boardScope.id }
+    : { organizationId };
+  const messageWhere = boardScope
+    ? {
+        thread: { organizationId },
+        NOT: [
+          { sender: { name: MOTHER_CHAT_AGENT_NAME } },
+          { receiver: { name: MOTHER_CHAT_AGENT_NAME } },
+        ],
+        OR: [
+          { sender: { boardId: boardScope.id } },
+          { receiver: { boardId: boardScope.id } },
+        ],
+      }
+    : {
+        thread: { organizationId },
+        NOT: [
+          { sender: { name: MOTHER_CHAT_AGENT_NAME } },
+          { receiver: { name: MOTHER_CHAT_AGENT_NAME } },
+        ],
+      };
 
   const [
     agents,
@@ -216,19 +349,13 @@ export async function buildMotherChatContext(organizationId: string) {
       },
     }),
     prisma.session.findMany({
-      where: { organizationId, agent: { name: { notIn: [MOTHER_CHAT_AGENT_NAME, ADMIN_AGENT_NAME] } } },
+      where: { organizationId, agent: nonMotherAgentRelationWhere },
       orderBy: { startedAt: 'desc' },
       take: 25,
       include: { agent: { select: agentSelect } },
     }),
     prisma.message.findMany({
-      where: {
-        thread: { organizationId },
-        NOT: [
-          { sender: { name: MOTHER_CHAT_AGENT_NAME } },
-          { receiver: { name: MOTHER_CHAT_AGENT_NAME } },
-        ],
-      },
+      where: messageWhere,
       orderBy: { createdAt: 'desc' },
       take: 30,
       include: {
@@ -237,13 +364,13 @@ export async function buildMotherChatContext(organizationId: string) {
       },
     }),
     prisma.activity.findMany({
-      where: { organizationId, agent: { name: { notIn: [MOTHER_CHAT_AGENT_NAME, ADMIN_AGENT_NAME] } } },
+      where: { organizationId, agent: nonMotherAgentRelationWhere },
       orderBy: { createdAt: 'desc' },
       take: 35,
       include: { agent: { select: agentSelect } },
     }),
     prisma.task.findMany({
-      where: { organizationId },
+      where: boardTaskWhere,
       orderBy: { updatedAt: 'desc' },
       take: 35,
       include: {
@@ -252,31 +379,35 @@ export async function buildMotherChatContext(organizationId: string) {
       },
     }),
     prisma.tokenUsage.findMany({
-      where: { organizationId, agent: { name: { notIn: [MOTHER_CHAT_AGENT_NAME, ADMIN_AGENT_NAME] } } },
+      where: { organizationId, agent: nonMotherAgentRelationWhere },
       orderBy: { createdAt: 'desc' },
       take: 25,
       include: { agent: { select: agentSelect } },
     }),
     prisma.activity.findMany({
-      where: { organizationId, type: 'ERROR', agent: { name: { notIn: [MOTHER_CHAT_AGENT_NAME, ADMIN_AGENT_NAME] } } },
+      where: { organizationId, type: 'ERROR', agent: nonMotherAgentRelationWhere },
       orderBy: { createdAt: 'desc' },
       take: 15,
       include: { agent: { select: agentSelect } },
     }),
     prisma.metricSnapshot.findMany({
-      where: { organizationId, success: false, agent: { name: { notIn: [MOTHER_CHAT_AGENT_NAME, ADMIN_AGENT_NAME] } } },
+      where: { organizationId, success: false, agent: nonMotherAgentRelationWhere },
       orderBy: { createdAt: 'desc' },
       take: 15,
       include: { agent: { select: agentSelect } },
     }),
     prisma.alertEvent.findMany({
-      where: { organizationId, acknowledged: false },
+      where: {
+        organizationId,
+        acknowledged: false,
+        ...(boardScope && { alertRule: { agent: { is: { boardId: boardScope.id } } } }),
+      },
       orderBy: { createdAt: 'desc' },
       take: 15,
       include: { alertRule: { select: { id: true, name: true, agentId: true } } },
     }),
     prisma.approval.findMany({
-      where: { board: { organizationId } },
+      where: boardScope ? { boardId: boardScope.id } : { board: { organizationId } },
       orderBy: { createdAt: 'desc' },
       take: 20,
       include: {
@@ -317,6 +448,15 @@ export async function buildMotherChatContext(organizationId: string) {
 
   const context = {
     generatedAt: new Date().toISOString(),
+    scope: boardScope
+      ? {
+          type: 'board',
+          board: boardScope,
+        }
+      : {
+          type: 'organization',
+          board: null,
+        },
     counts: {
       agents: agents.length,
       runningSessions: runningSessions.length,
@@ -404,7 +544,9 @@ export async function buildMotherChatContext(organizationId: string) {
   };
 
   const contextText = [
-    `Nexus Mother Chat DB snapshot generated at ${context.generatedAt}.`,
+    boardScope
+      ? `Nexus Mother Chat DB snapshot generated at ${context.generatedAt}. Scope: production board "${boardScope.name}" (${boardScope.id}). Objective: ${truncate(boardScope.objective, 180) || 'none'}.`
+      : `Nexus Mother Chat DB snapshot generated at ${context.generatedAt}. Scope: organization-wide.`,
     `Counts: agents=${context.counts.agents}, runningSessions=${context.counts.runningSessions}, activeTasks=${context.counts.activeTasks}, recentMessages=${context.counts.recentMessages}, recentActivities=${context.counts.recentActivities}, recentErrors=${context.counts.recentErrors}, pendingApprovals=${context.counts.pendingApprovals}, recentTokens=${context.counts.tokensInWindow}.`,
     formatSection('Agents', context.agents.map(agent =>
       `- ${agent.displayName} (${agent.name}) status=${agent.status}, enabled=${agent.enabled}, currentTask=${truncate(agent.currentTask, 120) || 'none'}, codexSessionId=${agent.codexSessionId || 'none'}, lastHeartbeat=${agent.lastHeartbeat || 'none'}`
@@ -450,7 +592,12 @@ function composeMotherPrompt(contextText: string, message: string) {
   ].join('\n');
 }
 
-export async function getMotherChatHistory(organizationId: string, limit = 50) {
+export async function getMotherChatHistory(
+  organizationId: string,
+  limit = 50,
+  options: MotherChatContextOptions = {},
+) {
+  const boardScope = await resolveBoardScope(organizationId, options.boardId);
   const motherAgent = await prisma.agent.findUnique({
     where: { organizationId_name: { organizationId, name: MOTHER_CHAT_AGENT_NAME } },
   });
@@ -458,10 +605,10 @@ export async function getMotherChatHistory(organizationId: string, limit = 50) {
     return { sessionKey: '', messages: [] };
   }
 
-  const threadId = getMotherThreadId(motherAgent);
+  const threadId = getMotherThreadId(motherAgent, boardScope?.id);
   if (!threadId) {
     return {
-      sessionKey: getAgentCodexSessionId(motherAgent) || '',
+      sessionKey: getMotherCodexSessionId(motherAgent, boardScope?.id) || '',
       messages: [],
     };
   }
@@ -478,7 +625,7 @@ export async function getMotherChatHistory(organizationId: string, limit = 50) {
   const threadCodexSessionId = await getThreadCodexSessionId(threadId, organizationId);
 
   return {
-    sessionKey: threadCodexSessionId || getAgentCodexSessionId(motherAgent) || '',
+    sessionKey: threadCodexSessionId || getMotherCodexSessionId(motherAgent, boardScope?.id) || '',
     messages: messages.reverse().map(message => {
       const metadata = objectRecord(message.metadata);
       return {
@@ -515,12 +662,13 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
   }
 
   const motherAgent = await getOrCreateMotherAgent(options.organizationId);
-  const thread = await upsertMotherThread(motherAgent);
+  const boardScope = await resolveBoardScope(options.organizationId, options.boardId);
+  const thread = await upsertMotherThread(motherAgent, boardScope);
   const adminAgent = await getOrCreateAdminAgent(options.organizationId);
   const threadCodexSessionId = await getThreadCodexSessionId(thread.id, options.organizationId);
-  const agentCodexSessionId = getAgentCodexSessionId(motherAgent);
+  const agentCodexSessionId = getMotherCodexSessionId(motherAgent, boardScope?.id);
   const existingCodexSessionId = threadCodexSessionId || agentCodexSessionId;
-  const { context, contextText } = await buildMotherChatContext(options.organizationId);
+  const { context, contextText } = await buildMotherChatContext(options.organizationId, { boardId: boardScope?.id });
   const cwd = resolveCodexCwd(motherAgent);
   const command = installation.command;
   const chatSession = await prisma.session.create({
@@ -546,6 +694,8 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
         systemRole: 'mother-chat',
         conversationKind: 'admin_mother',
         edgeSemantic: 'admin_to_mother_chat',
+        boardId: boardScope?.id ?? null,
+        boardName: boardScope?.name ?? null,
         nexusSessionId: chatSession.id,
         resumeCodexSessionId: existingCodexSessionId ?? null,
         requestId: options.requestId ?? null,
@@ -563,6 +713,7 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
     sessionSource: threadCodexSessionId ? 'thread' : agentCodexSessionId ? 'agent' : 'new',
     threadId: thread.id,
     nexusSessionId: chatSession.id,
+    boardId: boardScope?.id ?? null,
   }, 'Starting Mother Chat Codex CLI run');
 
   try {
@@ -580,6 +731,7 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
         emitMotherChatEvent({
           io: options.io,
           organizationId: options.organizationId,
+          boardId: boardScope?.id ?? null,
           nexusSessionId: chatSession.id,
           codexSessionId: state.codexSessionId,
           requestId: options.requestId,
@@ -588,6 +740,7 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
         await persistMotherActivity({
           organizationId: options.organizationId,
           motherAgentId: motherAgent.id,
+          boardId: boardScope?.id ?? null,
           nexusSessionId: chatSession.id,
           codexSessionId: state.codexSessionId,
           requestId: options.requestId,
@@ -599,7 +752,7 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
     const responseText = state.result || 'No response';
     const durationMs = Date.now() - startedAt;
     if (state.codexSessionId) {
-      await updateMotherSession(motherAgent, state.codexSessionId, thread.id);
+      await updateMotherSession(motherAgent, state.codexSessionId, thread.id, boardScope);
     }
 
     await prisma.message.create({
@@ -614,6 +767,8 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
           systemRole: 'mother-chat',
           conversationKind: 'admin_mother',
           edgeSemantic: 'mother_chat_to_admin',
+          boardId: boardScope?.id ?? null,
+          boardName: boardScope?.name ?? null,
           nexusSessionId: chatSession.id,
           codexSessionId: state.codexSessionId,
           codexSessionConfirmed: Boolean(state.codexSessionId),
@@ -659,6 +814,7 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
     emitMotherChatEvent({
       io: options.io,
       organizationId: options.organizationId,
+      boardId: boardScope?.id ?? null,
       nexusSessionId: chatSession.id,
       codexSessionId: state.codexSessionId,
       requestId: options.requestId,
@@ -707,6 +863,7 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
     emitMotherChatEvent({
       io: options.io,
       organizationId: options.organizationId,
+      boardId: boardScope?.id ?? null,
       nexusSessionId: chatSession.id,
       codexSessionId: existingCodexSessionId,
       requestId: options.requestId,

@@ -6,7 +6,7 @@ const navSections = [
   {
     label: 'Monitor',
     items: [
-      { path: '/dashboard', label: 'Dashboard', icon: '\u25C8' },
+      { path: '/dashboard', label: 'Production Groups', icon: '\u25C8' },
       { path: '/activity', label: 'Activity Feed', icon: '\u25C9' },
       { path: '/mother-chat', label: 'Mother Chat', icon: '\u25B6' },
       { path: '/chat', label: 'Chat', icon: '\u25EC' },
@@ -63,7 +63,7 @@ export function Sidebar() {
           </div>
           <div>
             <h1 className="text-lg font-bold text-white tracking-tight">Nexus</h1>
-            <p className="text-[11px] text-gray-500 uppercase tracking-widest">Agent Monitor</p>
+          <p className="text-[11px] text-gray-500 uppercase tracking-widest">Agent Monitor</p>
           </div>
         </div>
       </div>

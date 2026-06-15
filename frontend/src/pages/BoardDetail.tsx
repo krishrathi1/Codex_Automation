@@ -95,9 +95,10 @@ export function BoardDetail() {
       const task = await api.tasks.create({
         title,
         priority,
+        status,
+        boardId: id,
         agentId: undefined,
       });
-      // Also update board association via task update if needed
       setTasks(prev => [...prev, { ...task, status }]);
       setShowAddTask(null);
     } catch (err) {
@@ -299,16 +300,28 @@ export function BoardDetail() {
             >
               +
             </button>
+            <Link
+              to={`/agents/new?boardId=${encodeURIComponent(board.id)}&returnTo=${encodeURIComponent(`/production/${board.id}`)}`}
+              className="ml-2 rounded-lg border border-white/10 px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:bg-white/5"
+            >
+              Create sub-agent
+            </Link>
           </div>
         )}
         {agents.length === 0 && (
-          <div className="mt-4 pt-4 border-t border-white/5">
+          <div className="mt-4 flex items-center gap-3 border-t border-white/5 pt-4">
             <button
               onClick={() => { setShowAddAgent(true); loadAllAgents(); }}
               className="text-xs text-gray-500 hover:text-nexus-400 transition-colors"
             >
               + Add agents to this board
             </button>
+            <Link
+              to={`/agents/new?boardId=${encodeURIComponent(board.id)}&returnTo=${encodeURIComponent(`/production/${board.id}`)}`}
+              className="text-xs text-gray-500 transition-colors hover:text-nexus-400"
+            >
+              Create sub-agent
+            </Link>
           </div>
         )}
       </div>

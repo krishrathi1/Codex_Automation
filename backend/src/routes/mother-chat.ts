@@ -6,7 +6,8 @@ const router = Router();
 
 router.get('/context', async (req, res, next) => {
   try {
-    const context = await motherChatService.buildMotherChatContext(req.organizationId!);
+    const boardId = typeof req.query.boardId === 'string' ? req.query.boardId : undefined;
+    const context = await motherChatService.buildMotherChatContext(req.organizationId!, { boardId });
     res.json(context.context);
   } catch (err) {
     next(err);
@@ -16,7 +17,8 @@ router.get('/context', async (req, res, next) => {
 router.get('/history', async (req, res, next) => {
   try {
     const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
-    const history = await motherChatService.getMotherChatHistory(req.organizationId!, limit);
+    const boardId = typeof req.query.boardId === 'string' ? req.query.boardId : undefined;
+    const history = await motherChatService.getMotherChatHistory(req.organizationId!, limit, { boardId });
     res.json(history);
   } catch (err) {
     next(err);
@@ -38,6 +40,7 @@ router.post('/message', async (req, res) => {
     const result = await motherChatService.sendMotherChatMessage({
       organizationId: req.organizationId!,
       message,
+      boardId: typeof req.body.boardId === 'string' ? req.body.boardId : undefined,
       requestId: typeof req.body.requestId === 'string' ? req.body.requestId : undefined,
       io: req.app.get('io'),
     });

@@ -6,10 +6,15 @@ import {
   CheckCircle2,
   Clock3,
   Database,
+  FolderKanban,
+  Plus,
   RefreshCw,
   Send,
+  Settings,
+  Users,
   Zap,
 } from 'lucide-react';
+import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { getSocket } from '../lib/socket';
 import type { ChatMessage, MotherChatContext } from '../types';
@@ -21,6 +26,7 @@ type MotherChatSocketEvent = {
   sessionId?: string;
   nexusSessionId?: string;
   codexSessionId?: string | null;
+  boardId?: string | null;
   timestamp?: string;
 };
 
@@ -55,6 +61,8 @@ function StatTile({ label, value, icon: Icon }: { label: string; value: string |
 }
 
 export function MotherChat() {
+  const { boardId } = useParams<{ boardId?: string }>();
+  const scopedBoardId = boardId || undefined;
   const [context, setContext] = useState<MotherChatContext | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('what are my agents doing?');
@@ -65,7 +73,7 @@ export function MotherChat() {
   const streamedResponseRequestsRef = useRef<Record<string, boolean>>({});
 
   async function loadContext() {
-    const data = await api.motherChat.context();
+    const data = await api.motherChat.context(scopedBoardId);
     setContext(data);
   }
 
@@ -74,8 +82,8 @@ export function MotherChat() {
     setError(null);
     try {
       const [contextData, history] = await Promise.all([
-        api.motherChat.context(),
-        api.motherChat.history(),
+        api.motherChat.context(scopedBoardId),
+        api.motherChat.history(scopedBoardId),
       ]);
       setContext(contextData);
       setMessages(history.messages || []);
@@ -91,6 +99,8 @@ export function MotherChat() {
 
     const socket = getSocket();
     const handleMotherChatEvent = (event: MotherChatSocketEvent) => {
+      if ((event.boardId ?? null) !== (scopedBoardId ?? null)) return;
+
       const requestKey = event.requestId || event.nexusSessionId || event.sessionId || `mother-${Date.now()}`;
       const timestamp = event.timestamp || new Date().toISOString();
 
@@ -150,7 +160,7 @@ export function MotherChat() {
     return () => {
       socket.off('mother-chat:event', handleMotherChatEvent);
     };
-  }, []);
+  }, [scopedBoardId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -177,7 +187,7 @@ export function MotherChat() {
     setError(null);
 
     try {
-      const response = await api.motherChat.send(content, requestId);
+      const response = await api.motherChat.send(content, requestId, scopedBoardId);
       if (!streamedResponseRequestsRef.current[requestId]) {
         setMessages(prev => [
           ...prev,
@@ -217,8 +227,86 @@ export function MotherChat() {
     }
   }
 
+  const scopedBoard = context?.scope?.board;
+  const pageTitle = scopedBoard ? `${scopedBoard.name} Mother Chat` : 'Mother Chat';
+  const pageSubtitle = scopedBoard
+    ? scopedBoard.objective || scopedBoard.description || 'Production group context'
+    : 'Local Codex CLI with Nexus DB context';
+
   return (
-    <div className="flex h-[calc(100vh-2rem)] -m-6 -mt-6 bg-surface-950">
+    <div className="flex h-screen -mx-8 bg-surface-950">
+      {scopedBoardId && (
+        <aside className="hidden w-[300px] shrink-0 overflow-y-auto border-r border-white/5 bg-surface-900 lg:block">
+          <div className="border-b border-white/5 px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-nexus-600/20 text-nexus-300">
+                <FolderKanban className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-white">{scopedBoard?.name || 'Production Group'}</p>
+                <p className="text-xs text-gray-500">{context?.counts.agents ?? 0} sub-agents</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-5 p-5">
+            <div className="grid grid-cols-2 gap-2">
+              <Link
+                to={`/agents/new?boardId=${encodeURIComponent(scopedBoardId)}&returnTo=${encodeURIComponent(`/production/${scopedBoardId}`)}`}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-nexus-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-nexus-500"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Sub-agent
+              </Link>
+              <Link
+                to={`/boards/${scopedBoardId}`}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs font-medium text-gray-300 transition-colors hover:bg-white/5"
+              >
+                <Settings className="h-3.5 w-3.5" />
+                Manage
+              </Link>
+            </div>
+
+            <section>
+              <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <Users className="h-3.5 w-3.5" />
+                Sub-agents
+              </div>
+              <div className="space-y-2">
+                {(context?.agents ?? []).map(agent => (
+                  <Link
+                    key={agent.id}
+                    to={`/agents/${agent.id}`}
+                    className="block rounded-lg border border-white/5 bg-surface-850 px-3 py-2 transition-colors hover:border-nexus-500/30"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-white">{agent.displayName}</p>
+                        <p className="truncate text-xs text-gray-500">{agent.currentTask || 'No current task'}</p>
+                      </div>
+                      <div className={`h-2.5 w-2.5 shrink-0 rounded-full ${statusClasses[agent.status] || statusClasses.OFFLINE}`} title={agent.status} />
+                    </div>
+                  </Link>
+                ))}
+                {context && context.agents.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-white/10 px-3 py-4 text-sm text-gray-500">
+                    No sub-agents yet.
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section>
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Workload</div>
+              <div className="grid grid-cols-2 gap-2">
+                <StatTile label="Tasks" value={context?.counts.activeTasks ?? 0} icon={CheckCircle2} />
+                <StatTile label="Errors" value={context?.counts.recentErrors ?? 0} icon={AlertTriangle} />
+              </div>
+            </section>
+          </div>
+        </aside>
+      )}
+
       <main className="flex min-w-0 flex-1 flex-col">
         <div className="border-b border-white/5 px-6 py-4">
           <div className="flex items-center justify-between gap-4">
@@ -227,8 +315,8 @@ export function MotherChat() {
                 <Bot className="h-5 w-5" />
               </div>
               <div>
-                <h1 className="text-lg font-semibold text-white">Mother Chat</h1>
-                <p className="text-xs text-gray-500">Local Codex CLI with Nexus DB context</p>
+                <h1 className="text-lg font-semibold text-white">{pageTitle}</h1>
+                <p className="text-xs text-gray-500">{pageSubtitle}</p>
               </div>
             </div>
             <button
@@ -303,7 +391,7 @@ export function MotherChat() {
               onKeyDown={handleKeyDown}
               disabled={sending}
               rows={2}
-              placeholder="Ask Mother Chat..."
+              placeholder={scopedBoard ? `Ask about ${scopedBoard.name}...` : 'Ask Mother Chat...'}
               className="min-h-[48px] flex-1 resize-none rounded-xl border border-white/10 bg-surface-850 px-4 py-3 text-sm text-white placeholder-gray-600 focus:border-nexus-500 focus:outline-none disabled:opacity-50"
             />
             <button
@@ -320,7 +408,7 @@ export function MotherChat() {
 
       <aside className="hidden w-[360px] shrink-0 overflow-y-auto border-l border-white/5 bg-surface-900 xl:block">
         <div className="border-b border-white/5 px-5 py-4">
-          <h2 className="text-sm font-semibold text-white">Context Snapshot</h2>
+          <h2 className="text-sm font-semibold text-white">{scopedBoard ? 'Production Snapshot' : 'Context Snapshot'}</h2>
           <p className="mt-1 text-xs text-gray-500">{context ? formatTime(context.generatedAt) : 'Not loaded'}</p>
         </div>
 

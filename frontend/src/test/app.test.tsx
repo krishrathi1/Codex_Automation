@@ -773,7 +773,7 @@ describe('Component Rendering', () => {
       );
 
       // Monitor section items
-      expect(screen.getByText('Dashboard')).toBeInTheDocument();
+      expect(screen.getByText('Production Groups')).toBeInTheDocument();
       expect(screen.getByText('Activity Feed')).toBeInTheDocument();
       expect(screen.getByText('Chat')).toBeInTheDocument();
       expect(screen.getByText('Communications')).toBeInTheDocument();
@@ -838,7 +838,7 @@ describe('Component Rendering', () => {
         </MemoryRouter>,
       );
 
-      const dashboardLink = screen.getByText('Dashboard').closest('a');
+      const dashboardLink = screen.getByText('Production Groups').closest('a');
       expect(dashboardLink).toHaveAttribute('href', '/dashboard');
 
       const boardsLink = screen.getByText('Boards').closest('a');
