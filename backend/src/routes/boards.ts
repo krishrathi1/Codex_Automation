@@ -84,8 +84,21 @@ router.patch('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
-  await boardService.deleteBoard(req.params.id, req.organizationId!);
-  req.app.get('io')?.to(`org:${req.organizationId}`).emit('board:deleted', { id: req.params.id });
+  const deleteScopedData = req.query.deleteScopedData === 'true' || req.query.deleteAgents === 'true';
+  const result = await boardService.deleteBoard(req.params.id, req.organizationId!, { deleteScopedData });
+  const io = req.app.get('io');
+  const room = `org:${req.organizationId}`;
+  io?.to(room).emit('board:deleted', {
+    id: req.params.id,
+    deletedAgentIds: result.deletedAgentIds,
+    deletedTaskIds: result.deletedTaskIds,
+  });
+  for (const agentId of result.deletedAgentIds) {
+    io?.to(room).emit('agent:deleted', { id: agentId, boardId: req.params.id });
+  }
+  for (const taskId of result.deletedTaskIds) {
+    io?.to(room).emit('task:delete', { id: taskId, boardId: req.params.id });
+  }
   res.status(204).end();
 });
 

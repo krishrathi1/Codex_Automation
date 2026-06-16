@@ -152,6 +152,9 @@ app.use('/api/v1/error-events', requireApiKey, errorEventRoutes);
 
 // Global error handler for unhandled async errors in routes
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (typeof err?.statusCode === 'number') {
+    return res.status(err.statusCode).json({ error: err.message || 'Request failed' });
+  }
   // Prisma unique constraint violation
   if (err?.code === 'P2002') {
     return res.status(409).json({ error: `Unique constraint failed on: ${err.meta?.target?.join(', ') || 'unknown field'}` });

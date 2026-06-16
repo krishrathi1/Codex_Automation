@@ -3,6 +3,7 @@ import type { Server as SocketIOServer } from 'socket.io';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import * as activityService from './activity.service.js';
+import { createAgentTaskAlert } from './alert.service.js';
 import * as llmProviderService from './llm-provider.service.js';
 import { getOrCreateAdminAgent } from './system-agent.service.js';
 import {
@@ -1247,6 +1248,18 @@ async function failJob(
       durationMs,
     },
   }).catch(() => {});
+
+  await createAgentTaskAlert(job.organizationId, {
+    agentId: job.agentId,
+    boardId: job.boardId,
+    taskId: job.taskId,
+    runJobId: job.id,
+    agentName: job.agent.displayName,
+    boardName: job.board?.name,
+    taskTitle: job.task?.title,
+    errorMessage,
+    durationMs,
+  }, io).catch(err => logger.warn({ err, jobId: job.id }, 'Failed to create agent task alert'));
 
   await prisma.agent.update({
     where: { id: job.agentId },

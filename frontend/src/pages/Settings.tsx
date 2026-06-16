@@ -450,14 +450,17 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
               placeholder={vercelSettings.configured ? 'Paste a new token to replace' : 'vercel token'}
               className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
             />
-            <label className="mb-1 mt-3 block text-xs font-medium text-gray-400">Team ID</label>
+            <label className="mb-1 mt-3 block text-xs font-medium text-gray-400">Team ID (optional)</label>
             <input
               value={vercelTeamId}
               onChange={event => setVercelTeamId(event.target.value)}
               disabled={!isAdmin}
-              placeholder="team_xxx"
+              placeholder="Leave blank to use the token's default scope"
               className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
             />
+            <p className="mt-2 text-xs text-gray-500">
+              Use this only when you need to force Nexus to a specific Vercel team. If the token already has the right default scope, leave it empty.
+            </p>
           </div>
         </div>
 

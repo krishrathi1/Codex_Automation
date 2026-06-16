@@ -131,9 +131,33 @@ function getMotherCodexSessionId(agent: { identityProfile: unknown; gatewayAgent
   const profile = objectRecord(agent.identityProfile);
   if (boardId) {
     const boardSessions = objectRecord(profile.codexCliSessionIdsByBoard);
-    return typeof boardSessions[boardId] === 'string' ? boardSessions[boardId] as string : getProfileCodexSessionId(agent);
+    const sessionId = typeof boardSessions[boardId] === 'string' ? boardSessions[boardId] as string : undefined;
+    return isMotherSessionReusableForScope(agent, boardId, sessionId) ? sessionId : undefined;
   }
   return getProfileCodexSessionId(agent);
+}
+
+function isMotherSessionReusableForScope(
+  agent: { identityProfile: unknown; gatewayAgentId: string | null },
+  boardId: string | undefined,
+  sessionId: string | undefined,
+) {
+  if (!sessionId?.trim()) return false;
+  if (!boardId) return true;
+
+  const profile = objectRecord(agent.identityProfile);
+  const globalSessionIds = [
+    profile.codexCliSessionId,
+    profile.codexSessionId,
+    profile.activeWorkflowSessionId,
+    agent.gatewayAgentId?.startsWith('codex:') ? agent.gatewayAgentId.slice('codex:'.length).trim() : undefined,
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  if (globalSessionIds.includes(sessionId)) return false;
+
+  const boardSessions = objectRecord(profile.codexCliSessionIdsByBoard);
+  return !Object.entries(boardSessions).some(([otherBoardId, value]) => (
+    otherBoardId !== boardId && value === sessionId
+  ));
 }
 
 function getProfileCodexSessionId(agent: { identityProfile: unknown; gatewayAgentId: string | null }) {
@@ -373,6 +397,7 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
     productionErrorEvents,
     boardConversations,
     blackboardEvents,
+    boardMemories,
   ] = await Promise.all([
     prisma.agent.findMany({
       where: nonMotherAgentWhere,
@@ -487,6 +512,14 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
     }),
     getActiveBoardConversationsForMotherChat(organizationId, boardScope?.id),
     getRecentBlackboardEventsForMotherChat(organizationId, boardScope?.id),
+    prisma.boardMemory.findMany({
+      where: boardScope ? { boardId: boardScope.id } : { board: { organizationId } },
+      orderBy: { createdAt: 'desc' },
+      take: boardScope ? 30 : 15,
+      include: {
+        board: { select: { id: true, name: true, slug: true } },
+      },
+    }),
   ]);
 
   const visibleMessages = boardScope
@@ -582,6 +615,7 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
       blackboardConversations: boardConversations.length,
       activeBlackboardConversations: activeBlackboardConversations.length,
       blackboardEvents: blackboardEvents.length,
+      boardMemories: boardMemories.length,
     },
     agents: agentRows,
     sessions: sessions.map(session => ({
@@ -617,6 +651,18 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
       type: activity.type,
       message: truncate(activity.message, 260),
       createdAt: activity.createdAt.toISOString(),
+    })),
+    boardMemories: boardMemories.map(memory => ({
+      id: memory.id,
+      board: memory.board.name,
+      boardId: memory.boardId,
+      content: truncate(memory.content, 600),
+      tags: Array.isArray(memory.tags)
+        ? memory.tags.filter((tag): tag is string => typeof tag === 'string')
+        : [],
+      source: memory.source,
+      isChat: memory.isChat,
+      createdAt: memory.createdAt.toISOString(),
     })),
     tasks: tasks.map(task => ({
       id: task.id,
@@ -757,6 +803,9 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
     formatSection('Recent activities', context.activities.map(activity =>
       `- ${activity.createdAt} ${activity.agent} ${activity.type}: ${activity.message}`
     )),
+    formatSection('Board memories', context.boardMemories.map(memory =>
+      `- ${memory.createdAt} ${memory.board} source=${memory.source || 'none'}, tags=${memory.tags.join(',') || 'none'}: ${memory.content}`
+    )),
     formatSection('Tasks', context.tasks.map(task =>
       `- ${task.title} [${task.status}/${task.priority}] agent=${task.agent}, board=${task.board || 'none'}, id=${task.id}`
     )),
@@ -835,7 +884,10 @@ export async function getMotherChatHistory(
     take: limit,
   });
 
-  const threadCodexSessionId = await getThreadCodexSessionId(threadId, organizationId);
+  const rawThreadCodexSessionId = await getThreadCodexSessionId(threadId, organizationId);
+  const threadCodexSessionId = isMotherSessionReusableForScope(motherAgent, boardScope?.id, rawThreadCodexSessionId)
+    ? rawThreadCodexSessionId
+    : undefined;
 
   return {
     sessionKey: threadCodexSessionId || getMotherCodexSessionId(motherAgent, boardScope?.id) || '',
@@ -878,7 +930,10 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
   const boardScope = await resolveBoardScope(options.organizationId, options.boardId);
   const thread = await upsertMotherThread(motherAgent, boardScope);
   const adminAgent = await getOrCreateAdminAgent(options.organizationId);
-  const threadCodexSessionId = await getThreadCodexSessionId(thread.id, options.organizationId);
+  const rawThreadCodexSessionId = await getThreadCodexSessionId(thread.id, options.organizationId);
+  const threadCodexSessionId = isMotherSessionReusableForScope(motherAgent, boardScope?.id, rawThreadCodexSessionId)
+    ? rawThreadCodexSessionId
+    : undefined;
   const agentCodexSessionId = getMotherCodexSessionId(motherAgent, boardScope?.id);
   const existingCodexSessionId = threadCodexSessionId || agentCodexSessionId;
   const { context, contextText } = await buildMotherChatContext(options.organizationId, { boardId: boardScope?.id });

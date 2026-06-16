@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { logger } from '../lib/logger.js';
 const tracer = trace.getTracer('nexus-board');
+const SYSTEM_AGENT_NAMES = ['__admin__', '__mother_chat__'];
 
 type JsonRecord = Record<string, unknown>;
 
@@ -249,13 +250,81 @@ export async function updateBoard(id: string, organizationId: string, data: {
   });
 }
 
-export async function deleteBoard(id: string, organizationId: string) {
+export async function deleteBoard(
+  id: string,
+  organizationId: string,
+  options: { deleteScopedData?: boolean } = {},
+) {
   return tracer.startActiveSpan('board.delete', async (span) => {
     try {
       span.setAttribute('board.id', id);
       span.setAttribute('org.id', organizationId);
-      const result = await prisma.board.delete({ where: { id, organizationId } });
-      logger.info({ boardId: id, orgId: organizationId }, 'Board deleted');
+      span.setAttribute('board.deleteScopedData', Boolean(options.deleteScopedData));
+
+      const result = await prisma.$transaction(async (tx) => {
+        if (!options.deleteScopedData) {
+          const board = await tx.board.delete({ where: { id, organizationId } });
+          return { board, deletedAgentIds: [] as string[], deletedTaskIds: [] as string[] };
+        }
+
+        const [agents, tasks] = await Promise.all([
+          tx.agent.findMany({
+            where: {
+              organizationId,
+              boardId: id,
+              name: { notIn: SYSTEM_AGENT_NAMES },
+            },
+            select: { id: true },
+          }),
+          tx.task.findMany({
+            where: { organizationId, boardId: id },
+            select: { id: true },
+          }),
+        ]);
+
+        const deletedAgentIds = agents.map(agent => agent.id);
+        const deletedTaskIds = tasks.map(task => task.id);
+
+        if (deletedAgentIds.length > 0) {
+          await tx.message.deleteMany({
+            where: {
+              OR: [
+                { senderId: { in: deletedAgentIds } },
+                { receiverId: { in: deletedAgentIds } },
+              ],
+            },
+          });
+          await tx.agentRuntimeSession.deleteMany({
+            where: { organizationId, agentId: { in: deletedAgentIds } },
+          });
+          await tx.agentConversationCursor.deleteMany({
+            where: { organizationId, agentId: { in: deletedAgentIds } },
+          });
+          await tx.agent.deleteMany({
+            where: { organizationId, id: { in: deletedAgentIds } },
+          });
+        }
+
+        if (deletedTaskIds.length > 0) {
+          await tx.task.deleteMany({
+            where: { organizationId, id: { in: deletedTaskIds } },
+          });
+        }
+
+        await tx.productionErrorEvent.deleteMany({
+          where: { organizationId, boardId: id },
+        });
+
+        const board = await tx.board.delete({ where: { id, organizationId } });
+        return { board, deletedAgentIds, deletedTaskIds };
+      });
+
+      logger.info({
+        boardId: id,
+        orgId: organizationId,
+        deletedAgents: result.deletedAgentIds.length,
+        deletedTasks: result.deletedTaskIds.length,
+      }, 'Board deleted');
       return result;
     } catch (err) {
       span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });

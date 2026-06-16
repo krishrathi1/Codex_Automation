@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import type { PointerEvent, WheelEvent } from 'react';
+import { Maximize2, Minus, Plus, RefreshCw } from 'lucide-react';
 import { Header } from '../components/layout/Header';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { timeAgo } from '@/lib/utils';
+import type { Board } from '@/types';
 
 // ─── Types ─────────────────────────────────────────────
 
@@ -14,6 +16,8 @@ interface GraphNode {
   avatar: string | null;
   status: string;
   kind?: string;
+  boardId?: string | null;
+  boardName?: string | null;
   currentTask?: string | null;
   codexSessionId?: string;
   activeRunIds?: string[];
@@ -29,6 +33,8 @@ interface GraphEdge {
   label?: string;
   messageCount: number;
   lastMessage: string;
+  boardId?: string | null;
+  boardName?: string | null;
   threadIds?: string[];
   codexSessionIds?: string[];
   sessionIds?: string[];
@@ -59,6 +65,8 @@ interface SimNode extends GraphNode {
   y: number;
   vx: number;
   vy: number;
+  anchorX: number;
+  anchorY: number;
   radius: number;
   activity: number; // total message count for this node
 }
@@ -80,48 +88,219 @@ const STATUS_COLORS: Record<string, string> = {
 };
 const EDGE_COLORS: Record<string, string> = {
   admin_agent: '#3b8eff',
-  admin_mother: '#a78bfa',
+  admin_mother: '#3b82f6',
   agent_agent: '#10b981',
   mother_observation: '#f59e0b',
   system: '#64748b',
 };
 
-const REPULSION = 8000;
-const ATTRACTION = 0.005;
-const CENTER_GRAVITY = 0.02;
-const DAMPING = 0.92;
-const MIN_NODE_RADIUS = 28;
-const MAX_NODE_RADIUS = 48;
+const REPULSION = 7000;
+const ATTRACTION = 0.0008;
+const CENTER_GRAVITY = 0.05;
+const DAMPING = 0.72;
+const MIN_NODE_RADIUS = 22;
+const MAX_NODE_RADIUS = 46;
 const MAX_PARTICLES = 60;
+const LABEL_WIDTH = 150;
+const LABEL_HEIGHT = 46;
+const SVG_PADDING_X = 150;
+const SVG_PADDING_TOP = 130;
+const SVG_PADDING_BOTTOM = 130;
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 2.4;
+const ZOOM_STEP = 1.18;
 
 // ─── Force Simulation ──────────────────────────────────
 
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function nodeRank(node: GraphNode) {
+  if (node.kind === 'admin') return 0;
+  if (node.kind === 'mother_chat') return 1;
+  return 2;
+}
+
+function compactName(value: string, max = 24) {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 3)}...`;
+}
+
+function sortNodes(nodes: GraphNode[]) {
+  return [...nodes].sort((a, b) => {
+    const rankDelta = nodeRank(a) - nodeRank(b);
+    if (rankDelta !== 0) return rankDelta;
+    const boardDelta = (a.boardName || '').localeCompare(b.boardName || '');
+    if (boardDelta !== 0) return boardDelta;
+    return (a.displayName || a.name).localeCompare(b.displayName || b.name);
+  });
+}
+
+function boardKey(node: GraphNode) {
+  return node.boardId || 'organization';
+}
+
+function topologyKeyFromEdge(edge: GraphEdge, nodeMap: Map<string, GraphNode>) {
+  const source = nodeMap.get(edge.source);
+  const target = nodeMap.get(edge.target);
+  if (!source || !target) return false;
+  if (source.kind === 'mother_chat' && target.kind === 'mother_chat') return false;
+
+  return (
+    edge.kind === 'admin_mother' &&
+    source.kind === 'admin' &&
+    target.kind === 'mother_chat'
+  ) || (
+    edge.kind === 'mother_observation' &&
+    source.kind === 'mother_chat' &&
+    target.kind === 'agent'
+  );
+}
+
+function visibleTopologyEdges(nodes: GraphNode[], edges: GraphEdge[]) {
+  const nodeMap = new Map(nodes.map(node => [node.id, node]));
+  return edges.filter(edge => topologyKeyFromEdge(edge, nodeMap));
+}
+
+function withUniqueVisibleNames(nodes: GraphNode[]) {
+  const visibleCounts = new Map<string, number>();
+  for (const node of nodes) {
+    if (node.kind === 'admin' || node.kind === 'mother_chat') continue;
+    const key = (node.displayName || node.name).trim().toLowerCase();
+    visibleCounts.set(key, (visibleCounts.get(key) ?? 0) + 1);
+  }
+
+  return nodes.map(node => {
+    if (node.kind === 'admin' || node.kind === 'mother_chat') return node;
+    const key = (node.displayName || node.name).trim().toLowerCase();
+    if ((visibleCounts.get(key) ?? 0) <= 1) return node;
+    const suffix = node.boardName || node.boardId?.slice(0, 6) || node.id.slice(0, 6);
+    return {
+      ...node,
+      displayName: `${node.displayName || node.name} · ${suffix}`,
+    };
+  });
+}
+
+function layoutSizeFor(nodes: GraphNode[], viewportWidth: number, viewportHeight: number) {
+  const mothers = nodes.filter(node => node.kind === 'mother_chat');
+  const agents = nodes.filter(node => nodeRank(node) === 2);
+  const groupKeys = new Set<string>([
+    ...mothers.map(boardKey),
+    ...agents.map(boardKey),
+  ]);
+  const groupCount = Math.max(1, groupKeys.size);
+  const agentCounts = Array.from(groupKeys).map(key => agents.filter(node => boardKey(node) === key).length);
+  const maxAgentsInGroup = Math.max(1, ...agentCounts);
+  const ringRadius = 230 + Math.max(0, groupCount - 1) * 48 + Math.max(0, maxAgentsInGroup - 3) * 18;
+  const agentRing = clamp(118 + maxAgentsInGroup * 10, 128, 240);
+  const side = Math.ceil((ringRadius + agentRing + 190) * 2);
+
+  return {
+    width: Math.max(viewportWidth, 900, side),
+    height: Math.max(viewportHeight, 680, side),
+  };
+}
+
 function initializeNodes(nodes: GraphNode[], edges: GraphEdge[], width: number, height: number): SimNode[] {
-  // Calculate activity per node (total messages sent + received)
   const activityMap = new Map<string, number>();
   for (const edge of edges) {
     activityMap.set(edge.source, (activityMap.get(edge.source) ?? 0) + edge.messageCount);
     activityMap.set(edge.target, (activityMap.get(edge.target) ?? 0) + edge.messageCount);
   }
   const maxActivity = Math.max(1, ...activityMap.values());
+  const sorted = sortNodes(nodes);
+  const agents = sorted.filter(node => nodeRank(node) === 2);
+  const mothers = sorted.filter(node => node.kind === 'mother_chat');
+  const admins = sorted.filter(node => node.kind === 'admin');
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const motherOrder = mothers.map(node => boardKey(node));
+  const agentGroups = new Map<string, GraphNode[]>();
+  agents.forEach((node) => {
+    const key = boardKey(node);
+    const group = agentGroups.get(key) ?? [];
+    group.push(node);
+    agentGroups.set(key, group);
+    if (!motherOrder.includes(key)) motherOrder.push(key);
+  });
+  const groupCount = Math.max(1, motherOrder.length);
+  const maxAgentsInGroup = Math.max(1, ...Array.from(agentGroups.values()).map(group => group.length));
+  const motherRingRadius = 230 + Math.max(0, groupCount - 1) * 48 + Math.max(0, maxAgentsInGroup - 3) * 18;
+  const density = nodes.length > 50 ? 0.72 : nodes.length > 34 ? 0.82 : nodes.length > 22 ? 0.9 : 1;
 
-  return nodes.map((node, i) => {
-    const angle = (2 * Math.PI * i) / nodes.length;
-    const spread = Math.min(width, height) * 0.25;
+  function radiusFor(node: GraphNode) {
     const activity = activityMap.get(node.id) ?? 0;
     const normalized = activity / maxActivity;
-    const radius = MIN_NODE_RADIUS + normalized * (MAX_NODE_RADIUS - MIN_NODE_RADIUS);
+    if (node.kind === 'admin') return 48 * density;
+    if (node.kind === 'mother_chat') return (36 + normalized * 8) * density;
+    return (MIN_NODE_RADIUS + normalized * (MAX_NODE_RADIUS - MIN_NODE_RADIUS)) * density;
+  }
 
+  function baseNode(node: GraphNode, x: number, y: number): SimNode {
+    const activity = activityMap.get(node.id) ?? 0;
     return {
       ...node,
-      x: width / 2 + Math.cos(angle) * spread,
-      y: height / 2 + Math.sin(angle) * spread,
+      x,
+      y,
+      anchorX: x,
+      anchorY: y,
       vx: 0,
       vy: 0,
-      radius,
+      radius: radiusFor(node),
       activity,
     };
+  }
+
+  const positioned: SimNode[] = [];
+  admins.forEach((node, i) => {
+    const offset = (i - (admins.length - 1) / 2) * 118;
+    positioned.push(baseNode(node, centerX + offset, centerY));
   });
+
+  const motherPositions = new Map<string, { x: number; y: number; angle: number }>();
+  mothers.forEach((node) => {
+    const index = Math.max(0, motherOrder.indexOf(boardKey(node)));
+    const angle = -Math.PI / 2 + (Math.PI * 2 * index) / groupCount;
+    const x = centerX + Math.cos(angle) * motherRingRadius;
+    const y = centerY + Math.sin(angle) * motherRingRadius;
+    motherPositions.set(boardKey(node), { x, y, angle });
+    positioned.push(baseNode(
+      node,
+      clamp(x, SVG_PADDING_X, width - SVG_PADDING_X),
+      clamp(y, SVG_PADDING_TOP, height - SVG_PADDING_BOTTOM)
+    ));
+  });
+
+  motherOrder.forEach((key, groupIndex) => {
+    const groupAgents = agentGroups.get(key) ?? [];
+    const fallbackAngle = -Math.PI / 2 + (Math.PI * 2 * groupIndex) / groupCount;
+    const mother = motherPositions.get(key) ?? {
+      x: centerX + Math.cos(fallbackAngle) * motherRingRadius,
+      y: centerY + Math.sin(fallbackAngle) * motherRingRadius,
+      angle: fallbackAngle,
+    };
+    const agentRingRadius = clamp(118 + groupAgents.length * 10, 128, 240);
+    const fanSpan = groupAgents.length <= 1
+      ? 0
+      : clamp(0.52 + groupAgents.length * 0.22, 0.86, Math.PI * 1.25);
+    groupAgents.forEach((node, i) => {
+      const offset = groupAgents.length <= 1
+        ? 0
+        : -fanSpan / 2 + (fanSpan * i) / (groupAgents.length - 1);
+      const angle = mother.angle + offset;
+      const x = mother.x + Math.cos(angle) * agentRingRadius;
+      const y = mother.y + Math.sin(angle) * agentRingRadius;
+      positioned.push(baseNode(
+        node,
+        clamp(x, SVG_PADDING_X, width - SVG_PADDING_X),
+        clamp(y, SVG_PADDING_TOP, height - SVG_PADDING_BOTTOM)
+      ));
+    });
+  });
+
+  return positioned;
 }
 
 function stepSimulation(
@@ -130,14 +309,11 @@ function stepSimulation(
   width: number,
   height: number
 ): void {
-  const cx = width / 2;
-  const cy = height / 2;
-
   // Reset forces
   for (const node of nodes) {
-    // Center gravity
-    node.vx += (cx - node.x) * CENTER_GRAVITY;
-    node.vy += (cy - node.y) * CENTER_GRAVITY;
+    // Pull toward deterministic lane anchors instead of one shared center.
+    node.vx += (node.anchorX - node.x) * CENTER_GRAVITY;
+    node.vy += (node.anchorY - node.y) * CENTER_GRAVITY;
   }
 
   // Node-node repulsion
@@ -149,7 +325,9 @@ function stepSimulation(
       let dy = a.y - b.y;
       let dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < 1) { dist = 1; dx = 1; dy = 0; }
-      const force = REPULSION / (dist * dist);
+      const minDist = a.radius + b.radius + LABEL_HEIGHT + 16;
+      const collisionBoost = dist < minDist ? 3 : 1;
+      const force = (REPULSION * collisionBoost) / (dist * dist);
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
       a.vx += fx;
@@ -172,7 +350,14 @@ function stepSimulation(
     if (dist < 1) continue;
 
     // Stronger attraction for more messages
-    const strength = ATTRACTION * Math.log2(edge.messageCount + 1);
+    const semanticWeight = edge.kind === 'agent_agent'
+      ? 1
+      : edge.kind === 'admin_mother'
+        ? 0.25
+        : edge.kind === 'mother_observation'
+          ? 0.06
+          : 0.18;
+    const strength = ATTRACTION * semanticWeight * Math.log2(edge.messageCount + 1);
     const fx = dx * strength;
     const fy = dy * strength;
     source.vx += fx;
@@ -182,7 +367,8 @@ function stepSimulation(
   }
 
   // Apply velocities and damping
-  const padding = 60;
+  const paddingX = SVG_PADDING_X - 24;
+  const paddingY = SVG_PADDING_TOP - 40;
   for (const node of nodes) {
     node.vx *= DAMPING;
     node.vy *= DAMPING;
@@ -190,8 +376,8 @@ function stepSimulation(
     node.y += node.vy;
 
     // Keep nodes within bounds
-    node.x = Math.max(padding + node.radius, Math.min(width - padding - node.radius, node.x));
-    node.y = Math.max(padding + node.radius, Math.min(height - padding - node.radius, node.y));
+    node.x = Math.max(paddingX + node.radius, Math.min(width - paddingX - node.radius, node.x));
+    node.y = Math.max(paddingY + node.radius, Math.min(height - SVG_PADDING_BOTTOM - node.radius, node.y));
   }
 }
 
@@ -256,6 +442,11 @@ function DetailPanel({
           >
             {node.status}
           </span>
+          {node.boardName && (
+            <span className="rounded bg-nexus-500/10 px-2 py-0.5 text-[10px] font-medium text-nexus-300">
+              {node.boardName}
+            </span>
+          )}
         </div>
       </div>
 
@@ -307,7 +498,7 @@ function DetailPanel({
                   <div className="flex-1 min-w-0">
                     <div className="text-sm text-white font-medium truncate">{other.displayName}</div>
                     <div className="text-xs text-gray-500 truncate">
-                      Last: {timeAgo(edge.lastMessage)}
+                      {edge.boardName || 'Organization'} · Last: {timeAgo(edge.lastMessage)}
                     </div>
                   </div>
                   <div className="text-xs text-gray-400 font-mono shrink-0">
@@ -364,6 +555,7 @@ function EdgeDetailPanel({
         <div className="mt-3 flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
           <span className="text-sm font-medium" style={{ color }}>{edge.label || edge.kind || 'System'}</span>
+          {edge.boardName && <span className="text-xs text-gray-500">{edge.boardName}</span>}
           <span className="text-xs text-gray-600">Last {timeAgo(edge.lastMessage)}</span>
         </div>
       </div>
@@ -442,6 +634,8 @@ function EdgeDetailPanel({
 export function Topology() {
   const [rawNodes, setRawNodes] = useState<GraphNode[]>([]);
   const [rawEdges, setRawEdges] = useState<GraphEdge[]>([]);
+  const [boards, setBoards] = useState<Board[]>([]);
+  const [selectedBoardId, setSelectedBoardId] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -456,13 +650,16 @@ export function Topology() {
   const animFrameRef = useRef<number>(0);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sizeRef = useRef({ width: 900, height: 600 });
+  const layoutSizeRef = useRef({ width: 900, height: 680 });
+  const panRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
+  const [viewport, setViewport] = useState({ x: 0, y: 0, scale: 1 });
   const [, forceRender] = useState(0);
 
   const fetchGraph = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
     setRefreshing(true);
     try {
-      const data = await api.threads.graph();
+      const data = await api.threads.graph(selectedBoardId ? { boardId: selectedBoardId } : undefined);
       setRawNodes(data.nodes);
       setRawEdges(data.edges);
       setSelectedEdge(prev => {
@@ -477,6 +674,12 @@ export function Topology() {
       setLoading(false);
       setRefreshing(false);
     }
+  }, [selectedBoardId]);
+
+  useEffect(() => {
+    api.boards.list()
+      .then(setBoards)
+      .catch((err) => console.error('Failed to load boards for topology filter', err));
   }, []);
 
   const scheduleGraphRefresh = useCallback(() => {
@@ -485,6 +688,44 @@ export function Topology() {
       fetchGraph().catch(() => {});
     }, 500);
   }, [fetchGraph]);
+
+  const graphNodes = useMemo(() => withUniqueVisibleNames(rawNodes), [rawNodes]);
+  const topologyEdges = useMemo(() => visibleTopologyEdges(graphNodes, rawEdges), [graphNodes, rawEdges]);
+
+  const fitViewport = useCallback(() => {
+    const viewportSize = sizeRef.current;
+    const layoutSize = layoutSizeRef.current;
+    const scale = clamp(
+      Math.min(
+        viewportSize.width / Math.max(layoutSize.width, 1),
+        viewportSize.height / Math.max(layoutSize.height, 1),
+        1,
+      ) * 0.94,
+      ZOOM_MIN,
+      ZOOM_MAX,
+    );
+    setViewport({
+      scale,
+      x: (viewportSize.width - layoutSize.width * scale) / 2,
+      y: (viewportSize.height - layoutSize.height * scale) / 2,
+    });
+  }, []);
+
+  const zoomBy = useCallback((factor: number) => {
+    const viewportSize = sizeRef.current;
+    setViewport(prev => {
+      const nextScale = clamp(prev.scale * factor, ZOOM_MIN, ZOOM_MAX);
+      const centerX = viewportSize.width / 2;
+      const centerY = viewportSize.height / 2;
+      const worldX = (centerX - prev.x) / prev.scale;
+      const worldY = (centerY - prev.y) / prev.scale;
+      return {
+        scale: nextScale,
+        x: centerX - worldX * nextScale,
+        y: centerY - worldY * nextScale,
+      };
+    });
+  }, []);
 
   // Fetch graph data
   useEffect(() => {
@@ -504,13 +745,16 @@ export function Topology() {
 
   // Initialize simulation when data arrives
   useEffect(() => {
-    if (rawNodes.length === 0) return;
-    const { width, height } = sizeRef.current;
-    nodesRef.current = initializeNodes(rawNodes, rawEdges, width, height);
+    if (graphNodes.length === 0) return;
+    const viewportSize = sizeRef.current;
+    const layoutSize = layoutSizeFor(graphNodes, viewportSize.width, viewportSize.height);
+    layoutSizeRef.current = layoutSize;
+    nodesRef.current = initializeNodes(graphNodes, topologyEdges, layoutSize.width, layoutSize.height);
+    fitViewport();
 
     // Initialize particles along edges
     const particles: Particle[] = [];
-    rawEdges.forEach((edge, i) => {
+    topologyEdges.forEach((edge, i) => {
       const count = Math.min(Math.ceil(edge.messageCount / 3), 5);
       for (let p = 0; p < count; p++) {
         particles.push({
@@ -523,7 +767,7 @@ export function Topology() {
     });
     // Cap total particles
     particlesRef.current = particles.slice(0, MAX_PARTICLES);
-  }, [rawNodes, rawEdges]);
+  }, [graphNodes, topologyEdges, fitViewport]);
 
   // Resize observer
   useEffect(() => {
@@ -531,27 +775,37 @@ export function Topology() {
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        sizeRef.current = {
+        const nextSize = {
           width: entry.contentRect.width,
           height: entry.contentRect.height,
         };
+        const previous = sizeRef.current;
+        sizeRef.current = nextSize;
+        const changed = Math.abs(previous.width - nextSize.width) > 4 || Math.abs(previous.height - nextSize.height) > 4;
+        if (changed && graphNodes.length > 0) {
+          const layoutSize = layoutSizeFor(graphNodes, nextSize.width, nextSize.height);
+          layoutSizeRef.current = layoutSize;
+          nodesRef.current = initializeNodes(graphNodes, topologyEdges, layoutSize.width, layoutSize.height);
+          fitViewport();
+          forceRender((n) => n + 1);
+        }
       }
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [graphNodes, topologyEdges, fitViewport]);
 
   // Animation loop
   useEffect(() => {
-    if (rawNodes.length === 0) return;
+    if (graphNodes.length === 0) return;
 
     let frameCount = 0;
     function animate() {
       const nodes = nodesRef.current;
-      const { width, height } = sizeRef.current;
+      const { width, height } = layoutSizeRef.current;
 
       // Step physics
-      stepSimulation(nodes, rawEdges, width, height);
+      stepSimulation(nodes, topologyEdges, width, height);
 
       // Step particles
       for (const p of particlesRef.current) {
@@ -571,7 +825,7 @@ export function Topology() {
 
     animFrameRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [rawNodes, rawEdges]);
+  }, [graphNodes, topologyEdges]);
 
   // Click handler
   const handleNodeClick = useCallback(
@@ -607,25 +861,87 @@ export function Topology() {
   }
 
   const { width, height } = sizeRef.current;
+  const layoutSize = layoutSizeRef.current;
   const nodes = nodesRef.current;
   const particles = particlesRef.current;
-  const maxEdgeCount = Math.max(1, ...rawEdges.map((e) => e.messageCount));
+  const maxEdgeCount = Math.max(1, ...topologyEdges.map((e) => e.messageCount));
+
+  function handlePointerDown(event: PointerEvent<SVGSVGElement>) {
+    const target = event.target as Element;
+    if (event.button !== 0 || target.closest('[data-graph-interactive="true"]')) return;
+    panRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: viewport.x,
+      originY: viewport.y,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handlePointerMove(event: PointerEvent<SVGSVGElement>) {
+    const pan = panRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    setViewport(prev => ({
+      ...prev,
+      x: pan.originX + event.clientX - pan.startX,
+      y: pan.originY + event.clientY - pan.startY,
+    }));
+  }
+
+  function handlePointerUp(event: PointerEvent<SVGSVGElement>) {
+    if (panRef.current?.pointerId === event.pointerId) {
+      panRef.current = null;
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function handleWheel(event: WheelEvent<SVGSVGElement>) {
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    setViewport(prev => {
+      const factor = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+      const nextScale = clamp(prev.scale * factor, ZOOM_MIN, ZOOM_MAX);
+      const worldX = (pointerX - prev.x) / prev.scale;
+      const worldY = (pointerY - prev.y) / prev.scale;
+      return {
+        scale: nextScale,
+        x: pointerX - worldX * nextScale,
+        y: pointerY - worldY * nextScale,
+      };
+    });
+  }
 
   return (
     <div>
       <Header
         title="Network Graph"
-        subtitle="Agent communication topology"
+        subtitle={selectedBoardId ? 'Scoped group topology' : 'Isolated group communication topology'}
         action={
-          <button
-            type="button"
-            onClick={() => fetchGraph().catch(() => {})}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-surface-850 text-gray-400 transition-colors hover:text-white"
-            title="Refresh graph"
-            aria-label="Refresh graph"
-          >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-          </button>
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedBoardId}
+              onChange={(event) => setSelectedBoardId(event.target.value)}
+              className="h-9 rounded-lg border border-white/10 bg-surface-850 px-3 text-sm text-gray-200 outline-none transition-colors focus:border-nexus-500"
+              aria-label="Filter network graph by production group"
+            >
+              <option value="">All groups</option>
+              {boards.map((board) => (
+                <option key={board.id} value={board.id}>{board.name}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => fetchGraph().catch(() => {})}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-surface-850 text-gray-400 transition-colors hover:text-white"
+              title="Refresh graph"
+              aria-label="Refresh graph"
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         }
       />
 
@@ -640,10 +956,13 @@ export function Topology() {
           ))}
         </div>
         <div className="flex items-center gap-4">
-          {Object.entries(EDGE_COLORS).map(([kind, color]) => (
+          {[
+            ['admin_mother', 'admin -> mother'],
+            ['mother_observation', 'mother -> sub-agent'],
+          ].map(([kind, label]) => (
             <div key={kind} className="flex items-center gap-1.5">
-              <div className="w-5 h-[2px] rounded" style={{ backgroundColor: color }} />
-              <span className="text-xs text-gray-500">{kind.replace(/_/g, ' ')}</span>
+              <div className="w-5 h-[2px] rounded" style={{ backgroundColor: EDGE_COLORS[kind] }} />
+              <span className="text-xs text-gray-500">{label}</span>
             </div>
           ))}
         </div>
@@ -658,11 +977,45 @@ export function Topology() {
         className="relative rounded-xl border border-white/5 bg-surface-850 overflow-hidden"
         style={{ height: 'calc(100vh - 240px)', minHeight: 500 }}
       >
+        <div className="absolute right-4 top-4 z-10 flex items-center gap-1 rounded-lg border border-white/10 bg-surface-900/90 p-1 shadow-lg backdrop-blur">
+          <button
+            type="button"
+            onClick={() => zoomBy(ZOOM_STEP)}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
+            aria-label="Zoom in"
+            title="Zoom in"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => zoomBy(1 / ZOOM_STEP)}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
+            aria-label="Zoom out"
+            title="Zoom out"
+          >
+            <Minus className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={fitViewport}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
+            aria-label="Fit graph"
+            title="Fit graph"
+          >
+            <Maximize2 className="h-4 w-4" />
+          </button>
+        </div>
         <svg
           ref={svgRef}
           width={width}
           height={height}
-          className="select-none"
+          className="select-none touch-none cursor-grab active:cursor-grabbing"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          onWheel={handleWheel}
         >
           {/* Subtle grid background */}
           <defs>
@@ -692,10 +1045,47 @@ export function Topology() {
               </marker>
             ))}
           </defs>
-          <rect width={width} height={height} fill="url(#grid)" />
+          <rect width={width} height={height} fill="#0b1120" />
+
+          <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
+            <rect width={layoutSize.width} height={layoutSize.height} fill="url(#grid)" />
+
+            {/* Group scopes */}
+            <g opacity={0.5}>
+              {nodes.filter(node => node.kind === 'mother_chat').map((mother) => {
+                const scopedAgents = nodes.filter(node => node.kind === 'agent' && boardKey(node) === boardKey(mother));
+                const maxDistance = Math.max(
+                  128,
+                  ...scopedAgents.map(agent => Math.hypot(agent.x - mother.x, agent.y - mother.y) + agent.radius + 24),
+                );
+                return (
+                  <g key={`scope-${mother.id}`}>
+                    <circle
+                      cx={mother.x}
+                      cy={mother.y}
+                      r={maxDistance}
+                      fill="rgba(59,130,246,0.035)"
+                      stroke="rgba(96,165,250,0.14)"
+                      strokeDasharray="7 8"
+                    />
+                    <text
+                      x={mother.x}
+                      y={mother.y - maxDistance - 12}
+                      textAnchor="middle"
+                      fill="#64748b"
+                      fontSize={12}
+                      fontWeight={700}
+                      letterSpacing={0}
+                    >
+                      {(mother.boardName || mother.displayName).toUpperCase()}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
 
           {/* Edges */}
-          {rawEdges.map((edge, i) => {
+          {topologyEdges.map((edge, i) => {
             const source = nodeMap.get(edge.source);
             const target = nodeMap.get(edge.target);
             if (!source || !target) return null;
@@ -713,20 +1103,30 @@ export function Topology() {
               hoveredNode === edge.target ||
               selectedNode?.id === edge.source ||
               selectedNode?.id === edge.target;
+            const dx = target.x - source.x;
+            const dy = target.y - source.y;
+            const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+            const ox = dx / dist;
+            const oy = dy / dist;
+            const x1 = source.x + ox * (source.radius + 4);
+            const y1 = source.y + oy * (source.radius + 4);
+            const x2 = target.x - ox * (target.radius + 10);
+            const y2 = target.y - oy * (target.radius + 10);
 
             return (
               <line
                 key={`edge-${edge.source}-${edge.target}-${edge.kind || 'system'}-${i}`}
-                x1={source.x}
-                y1={source.y}
-                x2={target.x}
-                y2={target.y}
+                x1={x1}
+                y1={y1}
+                x2={x2}
+                y2={y2}
                 stroke={isHighlighted ? color : 'rgba(255,255,255,0.08)'}
-                strokeWidth={thickness}
+                strokeWidth={isHighlighted ? thickness + 1 : Math.min(thickness, 2.5)}
                 strokeLinecap="round"
                 markerEnd={`url(#arrow-${kind})`}
+                data-graph-interactive="true"
                 className="cursor-pointer transition-all duration-200"
-                opacity={isHighlighted ? 0.85 : 0.35}
+                opacity={isHighlighted ? 0.9 : 0.22}
                 onClick={(event) => {
                   event.stopPropagation();
                   setSelectedNode(null);
@@ -738,7 +1138,7 @@ export function Topology() {
 
           {/* Animated particles */}
           {particles.map((p, i) => {
-            const edge = rawEdges[p.edgeIndex];
+            const edge = topologyEdges[p.edgeIndex];
             if (!edge) return null;
             const source = nodeMap.get(edge.source);
             const target = nodeMap.get(edge.target);
@@ -767,15 +1167,17 @@ export function Topology() {
             const isDimmed =
               hoveredNode != null &&
               !isHovered &&
-              !rawEdges.some(
+              !topologyEdges.some(
                 (e) =>
                   (e.source === hoveredNode && e.target === node.id) ||
                   (e.target === hoveredNode && e.source === node.id)
               );
+            const label = compactName(node.displayName || node.name);
 
             return (
               <g
                 key={node.id}
+                data-graph-interactive="true"
                 onClick={() => handleNodeClick(node)}
                 onMouseEnter={() => setHoveredNode(node.id)}
                 onMouseLeave={() => setHoveredNode(null)}
@@ -827,20 +1229,33 @@ export function Topology() {
                 </text>
 
                 {/* Name label */}
-                <text
-                  x={node.x}
-                  y={node.y + node.radius + 16}
-                  textAnchor="middle"
-                  fill={isHovered || isSelected ? '#e5e7eb' : '#9ca3af'}
-                  fontSize={11}
-                  fontWeight={isSelected ? 600 : 400}
+                <foreignObject
+                  x={clamp(node.x - LABEL_WIDTH / 2, 8, layoutSize.width - LABEL_WIDTH - 8)}
+                  y={node.y + node.radius + 8}
+                  width={LABEL_WIDTH}
+                  height={LABEL_HEIGHT}
                   style={{ pointerEvents: 'none' }}
                 >
-                  {node.displayName}
-                </text>
+                  <div
+                    title={node.displayName}
+                    className="h-full overflow-hidden text-center text-[11px] leading-tight"
+                    style={{
+                      color: isHovered || isSelected ? '#e5e7eb' : '#9ca3af',
+                      fontWeight: isSelected ? 600 : 400,
+                    }}
+                  >
+                    <div className="truncate">{label}</div>
+                    {node.codexSessionId && (
+                      <div className="mt-0.5 truncate font-mono text-[9px] text-gray-600">
+                        {node.codexSessionId.slice(0, 8)}
+                      </div>
+                    )}
+                  </div>
+                </foreignObject>
               </g>
             );
           })}
+          </g>
         </svg>
 
         {/* Detail panel */}
@@ -862,8 +1277,9 @@ export function Topology() {
 
         {/* Info overlay */}
         <div className="absolute bottom-4 left-4 flex items-center gap-4 text-xs text-gray-600">
-          <span>{rawNodes.length} agents</span>
-          <span>{rawEdges.length} connections</span>
+          <span>{graphNodes.length} nodes</span>
+          <span>{topologyEdges.length} visible connections</span>
+          <span>{rawEdges.length - topologyEdges.length} audit links hidden</span>
           <span>
             {rawEdges.reduce((s, e) => s + e.messageCount, 0)} total messages
           </span>

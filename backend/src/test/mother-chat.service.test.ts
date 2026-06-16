@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../lib/prisma.js';
 import { cleanupTestData, createTestUser } from './setup.js';
-import { buildMotherChatContext, MOTHER_CHAT_AGENT_NAME } from '../services/mother-chat.service.js';
+import { buildMotherChatContext, getMotherChatHistory, MOTHER_CHAT_AGENT_NAME } from '../services/mother-chat.service.js';
 import { getThreadCodexSessionId } from '../services/codex-cli.service.js';
 import { dispatchBoardTaskToAgents, startBoardAgentCollaboration } from '../services/board-collaboration.service.js';
 
@@ -227,6 +227,59 @@ describe('mother-chat service', () => {
     expect(context.tasks.map(item => item.title)).toEqual(['Alpha smoke test']);
     expect(contextText).toContain('Alpha Production');
     expect(contextText).not.toContain('Beta Production');
+  });
+
+  it('does not reuse a shared Mother Chat Codex session across production boards', async () => {
+    const alphaBoard = await prisma.board.create({
+      data: {
+        organizationId: orgId,
+        name: 'Mother Session Alpha',
+        slug: `mother-session-alpha-${Date.now()}`,
+        description: 'Alpha mother scope',
+      },
+    });
+    const betaBoard = await prisma.board.create({
+      data: {
+        organizationId: orgId,
+        name: 'Mother Session Beta',
+        slug: `mother-session-beta-${Date.now()}`,
+        description: 'Beta mother scope',
+      },
+    });
+    await prisma.agent.upsert({
+      where: { organizationId_name: { organizationId: orgId, name: MOTHER_CHAT_AGENT_NAME } },
+      create: {
+        organizationId: orgId,
+        name: MOTHER_CHAT_AGENT_NAME,
+        displayName: 'Mother Chat',
+        description: 'Hidden system agent',
+        enabled: false,
+        identityProfile: {
+          systemRole: 'mother-chat',
+          codexCliSessionId: 'shared-session',
+          codexCliSessionIdsByBoard: {
+            [alphaBoard.id]: 'shared-session',
+            [betaBoard.id]: 'shared-session',
+          },
+        },
+      },
+      update: {
+        identityProfile: {
+          systemRole: 'mother-chat',
+          codexCliSessionId: 'shared-session',
+          codexCliSessionIdsByBoard: {
+            [alphaBoard.id]: 'shared-session',
+            [betaBoard.id]: 'shared-session',
+          },
+        },
+      },
+    });
+
+    const alphaHistory = await getMotherChatHistory(orgId, 10, { boardId: alphaBoard.id });
+    const betaHistory = await getMotherChatHistory(orgId, 10, { boardId: betaBoard.id });
+
+    expect(alphaHistory.sessionKey).toBe('');
+    expect(betaHistory.sessionKey).toBe('');
   });
 
   it('starts two-agent board collaboration and keeps Mother Chat scopes isolated', async () => {

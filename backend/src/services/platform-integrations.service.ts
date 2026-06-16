@@ -70,6 +70,10 @@ function integrationSettings(settings: unknown) {
   return objectRecord(objectRecord(settings).integrations);
 }
 
+async function readErrorText(response: Response) {
+  return response.text().catch(() => response.statusText);
+}
+
 function tokenFromSettings(providerSettings: JsonRecord, provider: 'GitHub' | 'Vercel') {
   const encrypted = stringValue(providerSettings.accessToken);
   if (!encrypted) return undefined;
@@ -257,21 +261,33 @@ export async function listVercelProjects(organizationId: string): Promise<Vercel
     throw integrationError('Vercel access token is not configured in Settings.');
   }
 
-  const url = new URL('https://api.vercel.com/v9/projects');
-  url.searchParams.set('limit', '100');
-  const teamId = stringValue(settings.teamId);
-  if (teamId) url.searchParams.set('teamId', teamId);
+  async function fetchProjects(requestedTeamId?: string | null) {
+    const url = new URL('https://api.vercel.com/v9/projects');
+    url.searchParams.set('limit', '100');
+    if (requestedTeamId) url.searchParams.set('teamId', requestedTeamId);
 
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'User-Agent': 'nexus-ai-dashboard',
-    },
-  });
+    return fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': 'nexus-ai-dashboard',
+      },
+    });
+  }
+
+  const teamId = stringValue(settings.teamId);
+  let response = await fetchProjects(teamId);
+  let details = response.ok ? '' : await readErrorText(response);
+
+  // If the stored team scope is invalid for this token, fall back to the token's default scope
+  // so Nexus can still list accessible projects instead of hard failing the integration.
+  if (!response.ok && teamId && response.status === 403 && /not authorized/i.test(details)) {
+    response = await fetchProjects();
+    details = response.ok ? '' : await readErrorText(response);
+  }
+
   if (!response.ok) {
-    const details = await response.text().catch(() => response.statusText);
     const error = new Error(`Vercel project fetch failed: ${response.status} ${details}`);
-    (error as Error & { statusCode?: number }).statusCode = response.status === 401 ? 401 : 502;
+    (error as Error & { statusCode?: number }).statusCode = response.status === 401 || response.status === 403 ? response.status : 502;
     throw error;
   }
 

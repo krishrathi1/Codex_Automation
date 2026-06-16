@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as taskService from '../services/task.service.js';
 import * as fingerprintService from '../services/task-fingerprint.service.js';
 import * as policyService from '../services/board-policy.service.js';
+import * as alertService from '../services/alert.service.js';
 import type { TaskStatus } from '@prisma/client';
 
 const router = Router();
@@ -46,6 +47,15 @@ router.patch('/:id', async (req, res) => {
         req.body.agentId || currentTask.agentId
       );
       if (!check.allowed) {
+        await alertService.createAgentTaskAlert(req.organizationId!, {
+          agentId: req.body.agentId || currentTask.agentId,
+          boardId: currentTask.boardId,
+          taskId: currentTask.id,
+          agentName: currentTask.agent?.displayName,
+          taskTitle: currentTask.title,
+          errorMessage: check.reason || 'Board policy blocked the task status change.',
+          issueKind: 'policy_blocked',
+        }, req.app.get('io')).catch(() => {});
         return res.status(403).json({ error: check.reason });
       }
     }

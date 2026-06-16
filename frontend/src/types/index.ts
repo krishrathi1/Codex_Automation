@@ -187,6 +187,8 @@ export interface CommEdge {
   label?: string;
   messageCount: number;
   lastMessage: string;
+  boardId?: string | null;
+  boardName?: string | null;
   threadIds?: string[];
   codexSessionIds?: string[];
   sessionIds?: string[];

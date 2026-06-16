@@ -9,7 +9,8 @@ router.get('/', async (req, res) => {
 });
 
 router.get('/graph', async (req, res) => {
-  const graph = await threadService.getCommGraph(req.organizationId!);
+  const boardId = typeof req.query.boardId === 'string' ? req.query.boardId : undefined;
+  const graph = await threadService.getCommGraph(req.organizationId!, { boardId });
   res.json(graph);
 });
 

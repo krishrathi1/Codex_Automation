@@ -190,7 +190,12 @@ export const api = {
   threads: {
     list: () => request<Thread[]>('/threads'),
     get: (id: string) => request<Thread>(`/threads/${id}`),
-    graph: () => request<{ nodes: Array<{ id: string; name: string; displayName: string; avatar: string | null; status: string; kind?: string; currentTask?: string | null; codexSessionId?: string; activeRunIds?: string[]; taskIds?: string[] }>; edges: CommEdge[] }>('/threads/graph'),
+    graph: (params?: { boardId?: string }) => {
+      const query = new URLSearchParams();
+      if (params?.boardId) query.set('boardId', params.boardId);
+      const qs = query.toString();
+      return request<{ nodes: Array<{ id: string; name: string; displayName: string; avatar: string | null; status: string; kind?: string; boardId?: string | null; boardName?: string | null; currentTask?: string | null; codexSessionId?: string; activeRunIds?: string[]; taskIds?: string[] }>; edges: CommEdge[] }>(`/threads/graph${qs ? `?${qs}` : ''}`);
+    },
   },
   sessions: {
     list: (params?: { agentId?: string; limit?: number }) => {
@@ -290,7 +295,10 @@ export const api = {
       request<Board>('/boards', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Record<string, unknown>) =>
       request<Board>(`/boards/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-    delete: (id: string) => request<void>(`/boards/${id}`, { method: 'DELETE' }),
+    delete: (id: string, options?: { deleteScopedData?: boolean }) => {
+      const qs = options?.deleteScopedData ? '?deleteScopedData=true' : '';
+      return request<void>(`/boards/${id}${qs}`, { method: 'DELETE' });
+    },
     startCollaboration: (id: string, data: {
       goal?: string;
       agents?: Array<{

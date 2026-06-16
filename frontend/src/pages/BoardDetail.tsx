@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd';
+import { AlertTriangle, Trash2 } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -39,6 +40,7 @@ interface BoardAgent {
 
 export function BoardDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [board, setBoard] = useState<Board | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [agents, setAgents] = useState<BoardAgent[]>([]);
@@ -144,6 +146,12 @@ export function BoardDetail() {
     } catch (err) {
       console.error('Failed to update board:', err);
     }
+  }
+
+  async function handleDeleteBoard() {
+    if (!id) return;
+    await api.boards.delete(id, { deleteScopedData: true });
+    navigate('/dashboard');
   }
 
   async function loadAllAgents() {
@@ -333,6 +341,7 @@ export function BoardDetail() {
           agents={agents}
           onUpdate={handleUpdateBoard}
           onRemoveAgent={handleRemoveAgent}
+          onDelete={handleDeleteBoard}
           onClose={() => setShowSettings(false)}
         />
       )}
@@ -630,8 +639,8 @@ function AddAgentModal({
               >
                 <span
                   className={cn(
-                    'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
-                    isLead ? 'translate-x-5' : 'translate-x-0.5'
+                    'absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
+                    isLead ? 'translate-x-5' : 'translate-x-0'
                   )}
                 />
               </button>
@@ -667,12 +676,14 @@ function BoardSettings({
   agents,
   onUpdate,
   onRemoveAgent,
+  onDelete,
   onClose,
 }: {
   board: Board;
   agents: { id: string; displayName: string; avatar: string | null; isBoardLead: boolean }[];
   onUpdate: (data: Record<string, unknown>) => void;
   onRemoveAgent: (agentId: string) => void;
+  onDelete: () => Promise<void>;
   onClose: () => void;
 }) {
   const [objective, setObjective] = useState(board.objective || '');
@@ -682,6 +693,9 @@ function BoardSettings({
   const [maxAgents, setMaxAgents] = useState(board.maxAgents);
   const [requireApproval, setRequireApproval] = useState(board.requireApprovalForDone);
   const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   async function handleSave() {
     setSaving(true);
@@ -692,6 +706,22 @@ function BoardSettings({
       requireApprovalForDone: requireApproval,
     });
     setSaving(false);
+  }
+
+  async function handleDelete() {
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      return;
+    }
+
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await onDelete();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete production group');
+      setDeleting(false);
+    }
   }
 
   return (
@@ -760,8 +790,8 @@ function BoardSettings({
         >
           <span
             className={cn(
-              'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
-              requireApproval ? 'translate-x-5' : 'translate-x-0.5'
+              'absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
+              requireApproval ? 'translate-x-5' : 'translate-x-0'
             )}
           />
         </button>
@@ -807,6 +837,42 @@ function BoardSettings({
         >
           {saving ? 'Saving...' : 'Save Settings'}
         </button>
+      </div>
+
+      <div className="mt-5 border-t border-red-500/20 pt-4">
+        <div className="rounded-lg border border-red-500/25 bg-red-500/10 p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-300" />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold text-red-100">Delete production group</div>
+              <p className="mt-1 text-xs leading-5 text-red-200/75">
+                This removes the group, its scoped tasks, live workflow state, and {agents.length} sub-agent{agents.length === 1 ? '' : 's'} from Nexus.
+              </p>
+              {confirmDelete && (
+                <p className="mt-2 text-xs font-medium text-red-200">
+                  Click delete again to confirm. This cannot be undone.
+                </p>
+              )}
+              {deleteError && (
+                <p className="mt-2 text-xs text-red-200">{deleteError}</p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deleting}
+              className={cn(
+                'inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-50',
+                confirmDelete
+                  ? 'border-red-400/40 bg-red-500/20 text-red-100 hover:bg-red-500/30'
+                  : 'border-red-500/25 text-red-200 hover:bg-red-500/15'
+              )}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {deleting ? 'Deleting...' : confirmDelete ? 'Confirm delete' : 'Delete'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
