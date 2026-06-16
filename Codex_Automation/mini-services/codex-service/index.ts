@@ -1,0 +1,793 @@
+/**
+ * Codex Automation - Lightweight Socket.IO Service
+ * 
+ * This service provides Socket.IO chat functionality.
+ * When the `codex` CLI is available, it will use the full Codex integration.
+ * Otherwise, it provides a mock mode for UI demonstration.
+ */
+
+import express from 'express';
+import { createServer } from 'node:http';
+import { Server, type Socket } from 'socket.io';
+import cors from 'cors';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const serviceDir = path.dirname(fileURLToPath(import.meta.url));
+const defaultWorkspaceDir = path.resolve(serviceDir, '..', '..');
+
+const config = {
+  port: 3003,
+  apiKey: process.env.API_KEY || '',
+  codexCommand: process.env.CODEX_COMMAND || 'codex',
+  codexModel: process.env.CODEX_MODEL || undefined,
+  maxPromptLength: 50_000,
+  operationTimeoutMs: parseInt(process.env.OPERATION_TIMEOUT_MS || '900000', 10),
+};
+
+function getWorkspaceCwd(): string {
+  return process.env.CODEX_CWD || defaultWorkspaceDir;
+}
+
+// ─── Check if Codex CLI is available ─────────────────────────────
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+
+let codexAvailable = false;
+
+function checkCodexAvailable(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(config.codexCommand, ['--version'], {
+      shell: process.platform === 'win32',
+      windowsHide: true,
+      timeout: 5000,
+    });
+    child.on('error', () => resolve(false));
+    child.on('close', (code) => resolve(code === 0));
+  });
+}
+
+// ─── Types ───────────────────────────────────────────────────────
+interface StreamActivity {
+  type: 'tool_use' | 'tool_result' | 'system' | 'unknown';
+  tool?: string;
+  input?: Record<string, unknown>;
+  toolUseId?: string;
+  content?: unknown;
+  isError?: boolean;
+  subtype?: string;
+  data?: unknown;
+  raw?: unknown;
+}
+
+type CodexStreamEvent =
+  | { type: 'text'; content: string }
+  | { type: 'activity'; activity: StreamActivity };
+
+// ─── Codex Service (full integration) ────────────────────────────
+interface InstructionResult {
+  result: string;
+  sessionId: string | null;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalCost: number;
+  } | null;
+}
+
+interface CodexUsage {
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  output_tokens?: number;
+  reasoning_output_tokens?: number;
+}
+
+interface CodexItem {
+  id?: string;
+  type?: string;
+  text?: string;
+  command?: string | string[];
+  status?: string;
+  [key: string]: unknown;
+}
+
+interface CodexJsonEvent {
+  type?: string;
+  thread_id?: string;
+  item?: CodexItem;
+  usage?: CodexUsage;
+  error?: unknown;
+  message?: string;
+  [key: string]: unknown;
+}
+
+interface RunState {
+  sessionId: string | null;
+  result: string;
+  usage: InstructionResult['usage'];
+  errorMessage: string | null;
+  rawStdout: string;
+  stderr: string;
+}
+
+const CODEX_SANDBOXES = ['read-only', 'workspace-write', 'danger-full-access'] as const;
+type CodexSandbox = (typeof CODEX_SANDBOXES)[number];
+
+const CANCELLED_MESSAGE = 'Request cancelled by user';
+const SESSION_ID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const UI_MODEL_ALIASES = new Set(['codex-agent', 'codex-agent-deep', 'system-operator']);
+
+function normalizeSessionId(sessionId: string | undefined): string | undefined {
+  const trimmed = sessionId?.trim() || '';
+  if (!trimmed) return undefined;
+
+  return trimmed.match(SESSION_ID_PATTERN)?.[0] || trimmed;
+}
+
+function composePrompt(prompt: string): string {
+  const systemPrompt = process.env.SYSTEM_PROMPT || '';
+  if (!systemPrompt) return prompt;
+  return `${systemPrompt}\n\n---\n\nUser request:\n${prompt}`;
+}
+
+function resolveCodexModel(model: string | undefined): string | undefined {
+  const normalizedModel = model?.trim();
+  if (!normalizedModel || UI_MODEL_ALIASES.has(normalizedModel)) return undefined;
+  return normalizedModel;
+}
+
+function buildCodexArgs(model: string | undefined, sessionId: string | undefined): string[] {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  const args: string[] = ['-C', getWorkspaceCwd()];
+  const dangerouslyBypass = ['1', 'true', 'yes', 'on'].includes((process.env.CODEX_DANGEROUSLY_BYPASS || '').trim().toLowerCase());
+  const sandbox = (process.env.CODEX_SANDBOX || 'workspace-write') as CodexSandbox;
+
+  if (dangerouslyBypass) {
+    args.push('--dangerously-bypass-approvals-and-sandbox');
+  } else {
+    args.push('--sandbox', sandbox);
+  }
+
+  const effectiveModel = model || config.codexModel;
+  if (effectiveModel) {
+    args.push('-m', effectiveModel);
+  }
+  args.push('exec');
+  if (normalizedSessionId) {
+    args.push('resume');
+    args.push('--all');
+  }
+  args.push('--json');
+  const ephemeral = ['1', 'true', 'yes', 'on'].includes((process.env.CODEX_EPHEMERAL || '').trim().toLowerCase());
+  if (ephemeral) {
+    args.push('--ephemeral');
+  }
+  const skipGitRepoCheck = ['1', 'true', 'yes', 'on'].includes((process.env.CODEX_SKIP_GIT_REPO_CHECK || '').trim().toLowerCase());
+  if (skipGitRepoCheck) {
+    args.push('--skip-git-repo-check');
+  }
+  if (normalizedSessionId) {
+    args.push(normalizedSessionId);
+  }
+  args.push('-');
+  return args;
+}
+
+function usageFromEvent(usage: CodexUsage | undefined): InstructionResult['usage'] {
+  if (!usage) return null;
+  return {
+    inputTokens: usage.input_tokens ?? 0,
+    outputTokens: usage.output_tokens ?? 0,
+    totalCost: 0,
+  };
+}
+
+function stringifyCommand(command: string | string[] | undefined): string {
+  if (Array.isArray(command)) return command.join(' ');
+  return command || 'codex';
+}
+
+function emitActivity(onEvent: ((event: CodexStreamEvent) => void) | undefined, activity: StreamActivity): void {
+  onEvent?.({ type: 'activity', activity });
+}
+
+function terminateProcessTree(child: ChildProcessWithoutNullStreams, reason: string): void {
+  if (child.killed) return;
+  console.log(`[codex] terminating process: ${reason}`);
+
+  if (process.platform === 'win32' && child.pid) {
+    const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+      windowsHide: true,
+      shell: false,
+    });
+    killer.on('error', (err) => {
+      console.error(`[codex] taskkill failed: ${err.message}`);
+      child.kill();
+    });
+    return;
+  }
+
+  child.kill('SIGTERM');
+  setTimeout(() => child.kill('SIGKILL'), 2000).unref();
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error(CANCELLED_MESSAGE));
+      return;
+    }
+
+    const timer = setTimeout(resolve, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(new Error(CANCELLED_MESSAGE));
+    };
+
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
+function getResponseStreamDelayMs(): number {
+  const configuredDelay = Number(process.env.RESPONSE_STREAM_DELAY_MS ?? 18);
+  if (!Number.isFinite(configuredDelay) || configuredDelay < 0) return 18;
+  return configuredDelay;
+}
+
+function splitTextIntoWordChunks(text: string): string[] {
+  return text.match(/\S+\s*/g) ?? [];
+}
+
+async function streamResponseText(socket: Socket, text: string, signal?: AbortSignal): Promise<void> {
+  const delayMs = getResponseStreamDelayMs();
+  const chunks = splitTextIntoWordChunks(text);
+
+  for (const chunk of chunks) {
+    if (signal?.aborted) throw new Error(CANCELLED_MESSAGE);
+    socket.emit('response', { type: 'text', content: chunk });
+    if (delayMs > 0) {
+      await delay(delayMs, signal);
+    }
+  }
+}
+
+function eventErrorMessage(event: CodexJsonEvent): string {
+  if (typeof event.message === 'string') return event.message;
+  if (typeof event.error === 'string') return event.error;
+  if (event.error && typeof event.error === 'object' && 'message' in event.error) {
+    const message = (event.error as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
+  return JSON.stringify(event.error ?? event);
+}
+
+function handleCodexEvent(
+  event: CodexJsonEvent,
+  state: RunState,
+  onEvent?: (event: CodexStreamEvent) => void,
+): void {
+  switch (event.type) {
+    case 'thread.started': {
+      if (typeof event.thread_id === 'string') {
+        state.sessionId = event.thread_id;
+      }
+      emitActivity(onEvent, {
+        type: 'system',
+        subtype: 'codex.thread.started',
+        data: { threadId: state.sessionId },
+      });
+      break;
+    }
+    case 'item.started': {
+      const item = event.item;
+      if (item?.type === 'command_execution') {
+        emitActivity(onEvent, {
+          type: 'tool_use',
+          tool: 'shell',
+          toolUseId: item.id,
+          input: { command: stringifyCommand(item.command) },
+        });
+      } else {
+        emitActivity(onEvent, {
+          type: 'system',
+          subtype: 'codex.item.started',
+          data: item,
+        });
+      }
+      break;
+    }
+    case 'item.completed': {
+      const item = event.item;
+      if (item?.type === 'agent_message' && typeof item.text === 'string') {
+        state.result = item.text;
+        onEvent?.({ type: 'text', content: item.text });
+      } else if (item?.type === 'command_execution') {
+        emitActivity(onEvent, {
+          type: 'tool_result',
+          toolUseId: item.id,
+          content: item,
+          isError: item.status === 'failed',
+        });
+      } else {
+        emitActivity(onEvent, {
+          type: 'system',
+          subtype: 'codex.item.completed',
+          data: item,
+        });
+      }
+      break;
+    }
+    case 'turn.completed': {
+      state.usage = usageFromEvent(event.usage);
+      emitActivity(onEvent, {
+        type: 'system',
+        subtype: 'codex.turn.completed',
+        data: { usage: state.usage },
+      });
+      break;
+    }
+    case 'turn.failed':
+    case 'error': {
+      state.errorMessage = eventErrorMessage(event);
+      emitActivity(onEvent, {
+        type: 'system',
+        subtype: `codex.${event.type}`,
+        data: event,
+      });
+      break;
+    }
+    default: {
+      emitActivity(onEvent, {
+        type: 'unknown',
+        raw: event,
+      });
+    }
+  }
+}
+
+async function runCodex(
+  prompt: string,
+  options: { model?: string; sessionId?: string; signal?: AbortSignal; onEvent?: (event: CodexStreamEvent) => void } = {},
+): Promise<InstructionResult> {
+  if (options.signal?.aborted) {
+    throw new Error(CANCELLED_MESSAGE);
+  }
+
+  const startTime = Date.now();
+  const normalizedSessionId = normalizeSessionId(options.sessionId);
+  const requestedModel = resolveCodexModel(options.model);
+  const cwd = getWorkspaceCwd();
+  const args = buildCodexArgs(requestedModel, normalizedSessionId);
+  const state: RunState = {
+    sessionId: normalizedSessionId || null,
+    result: '',
+    usage: null,
+    errorMessage: null,
+    rawStdout: '',
+    stderr: '',
+  };
+
+  console.log(`[codex] spawning ${config.codexCommand}: model=${requestedModel || config.codexModel || 'config-default'}, sessionId=${normalizedSessionId || 'new'}, cwd=${cwd}`);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let stdoutBuffer = '';
+    let timeout: ReturnType<typeof setTimeout>;
+    let handleAbort = () => {};
+
+    const child = spawn(config.codexCommand, args, {
+      cwd,
+      env: process.env,
+      shell: process.platform === 'win32',
+      windowsHide: true,
+    });
+
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      options.signal?.removeEventListener('abort', handleAbort);
+      if (err) { reject(err); return; }
+      if (state.errorMessage) { reject(new Error(state.errorMessage)); return; }
+      const fallbackResult = state.rawStdout.trim();
+      const elapsed = Date.now() - startTime;
+      console.log(`[codex] complete: elapsed=${elapsed}ms, sessionId=${state.sessionId || 'none'}`);
+      resolve({
+        result: state.result || fallbackResult,
+        sessionId: state.sessionId,
+        usage: state.usage,
+      });
+    };
+
+    handleAbort = () => {
+      terminateProcessTree(child, 'cancelled');
+      finish(new Error(CANCELLED_MESSAGE));
+    };
+
+    options.signal?.addEventListener('abort', handleAbort, { once: true });
+
+    timeout = setTimeout(() => {
+      const message = `Operation timed out: codex exec after ${config.operationTimeoutMs}ms`;
+      console.error(`[codex] TIMEOUT: ${message}`);
+      terminateProcessTree(child, 'timeout');
+      finish(new Error(message));
+    }, config.operationTimeoutMs);
+
+    const processLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      try {
+        const event = JSON.parse(trimmed) as CodexJsonEvent;
+        handleCodexEvent(event, state, options.onEvent);
+      } catch {
+        state.rawStdout += `${line}\n`;
+        console.log(`[codex:stdout] ${line}`);
+      }
+    };
+
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      stdoutBuffer += chunk;
+      let newlineIndex = stdoutBuffer.indexOf('\n');
+      while (newlineIndex >= 0) {
+        const line = stdoutBuffer.slice(0, newlineIndex);
+        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+        processLine(line);
+        newlineIndex = stdoutBuffer.indexOf('\n');
+      }
+    });
+
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      state.stderr += chunk;
+      const trimmed = chunk.trim();
+      if (trimmed) console.error(`[codex:stderr] ${trimmed}`);
+    });
+
+    child.on('error', (err) => {
+      finish(new Error(`Failed to start Codex command "${config.codexCommand}": ${err.message}`));
+    });
+
+    child.on('close', (code) => {
+      processLine(stdoutBuffer);
+      if (code !== 0) {
+        const stderr = state.stderr.trim();
+        finish(new Error(`Codex exited with code ${code}${stderr ? `: ${stderr}` : ''}`));
+        return;
+      }
+      finish();
+    });
+
+    child.stdin.on('error', (err) => {
+      console.error(`[codex] stdin error: ${err.message}`);
+    });
+    child.stdin.end(composePrompt(prompt));
+  });
+}
+
+// ─── Express + Socket.IO Setup ───────────────────────────────────
+const app = express();
+const httpServer = createServer(app);
+
+const io = new Server(httpServer, {
+  path: '/socket.io',
+  cors: { origin: '*' },
+  maxHttpBufferSize: 1e6,
+  connectTimeout: 10_000,
+  pingTimeout: config.operationTimeoutMs + 30_000,
+  pingInterval: 25_000,
+});
+
+app.use(cors({ origin: '*' }));
+app.use(express.json({ limit: '100kb' }));
+
+// Health check
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', codexAvailable });
+});
+
+// REST API: POST /api/instruction
+app.post('/api/instruction', async (req, res) => {
+  const { prompt, model, sessionId } = req.body;
+
+  if (!prompt || typeof prompt !== 'string') {
+    res.status(400).json({ error: 'Missing or invalid "prompt" field' });
+    return;
+  }
+  if (prompt.length > config.maxPromptLength) {
+    res.status(400).json({ error: `Prompt exceeds maximum length of ${config.maxPromptLength} characters` });
+    return;
+  }
+
+  if (!codexAvailable) {
+    res.status(503).json({ error: 'Codex CLI is not available. Please install and configure the Codex CLI.' });
+    return;
+  }
+
+  try {
+    const result = await runCodex(prompt, { model, sessionId: normalizeSessionId(sessionId) });
+    res.json(result);
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `Failed to execute instruction: ${errorMessage}` });
+  }
+});
+
+// ─── Socket.IO Chat Handler ──────────────────────────────────────
+const MAX_CONCURRENT_PER_SOCKET = 1;
+
+io.on('connection', (socket: Socket) => {
+  let sessionId: string | undefined;
+  let activeRequests = 0;
+  let activeAbortController: AbortController | null = null;
+
+  console.log(`[socket] connected: ${socket.id}`);
+
+  socket.on('disconnect', (reason) => {
+    console.log(`[socket] disconnected: ${socket.id} (reason: ${reason})`);
+    activeAbortController?.abort();
+  });
+
+  socket.on('cancel', () => {
+    if (!activeAbortController || activeAbortController.signal.aborted) {
+      socket.emit('cancelled', { cancelled: false, reason: 'No active request' });
+      return;
+    }
+
+    console.log(`[socket] cancel requested: ${socket.id}`);
+    activeAbortController.abort();
+    socket.emit('cancelled', { cancelled: true });
+  });
+
+  socket.on('create_session', async (data: { clientThreadId?: string; model?: string } = {}) => {
+    if (activeRequests >= MAX_CONCURRENT_PER_SOCKET) {
+      socket.emit('session_create_error', {
+        clientThreadId: data.clientThreadId,
+        message: 'A Codex request is already in progress. Try again after it finishes.',
+      });
+      return;
+    }
+
+    if (!codexAvailable) {
+      const mockSessionId = `mock-${Date.now().toString(36)}`;
+      sessionId = mockSessionId;
+      socket.emit('session_created', { clientThreadId: data.clientThreadId, sessionId: mockSessionId });
+      return;
+    }
+
+    const abortController = new AbortController();
+    activeAbortController = abortController;
+    activeRequests++;
+
+    try {
+      const result = await runCodex('Initialize a new Codex session for this chat. Do not inspect files, run commands, or edit anything. Reply only: READY.', {
+        model: data.model,
+        signal: abortController.signal,
+      });
+
+      if (result.sessionId) {
+        sessionId = normalizeSessionId(result.sessionId);
+        socket.emit('session_created', { clientThreadId: data.clientThreadId, sessionId });
+      } else {
+        socket.emit('session_create_error', {
+          clientThreadId: data.clientThreadId,
+          message: 'Codex did not return a session id.',
+        });
+      }
+    } catch (err) {
+      if (abortController.signal.aborted) {
+        socket.emit('session_create_error', {
+          clientThreadId: data.clientThreadId,
+          message: CANCELLED_MESSAGE,
+        });
+      } else {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        socket.emit('session_create_error', {
+          clientThreadId: data.clientThreadId,
+          message: `Failed to create Codex session: ${errorMessage}`,
+        });
+      }
+    } finally {
+      if (activeAbortController === abortController) {
+        activeAbortController = null;
+      }
+      activeRequests--;
+    }
+  });
+
+  socket.on('message', async (data: { prompt: string; sessionId?: string; model?: string }) => {
+    const promptPreview = data?.prompt?.slice(0, 120) || '<empty>';
+    console.log(`[socket] message from ${socket.id}: "${promptPreview}"`);
+
+    if (activeRequests >= MAX_CONCURRENT_PER_SOCKET) {
+      socket.emit('error', { message: 'A request is already in progress. Wait for it to finish.' });
+      return;
+    }
+
+    const prompt = data?.prompt;
+    if (!prompt || typeof prompt !== 'string') {
+      socket.emit('error', { message: 'Missing or invalid "prompt" field' });
+      return;
+    }
+
+    if (prompt.length > config.maxPromptLength) {
+      socket.emit('error', { message: `Prompt exceeds maximum length of ${config.maxPromptLength} characters` });
+      return;
+    }
+
+    const activeSessionId = normalizeSessionId(data.sessionId) || sessionId;
+    const abortController = new AbortController();
+    activeAbortController = abortController;
+    activeRequests++;
+
+    if (codexAvailable) {
+      // ─── Full Codex CLI Integration ──────────────────────────
+      try {
+        let responseText = '';
+
+        const onEvent = (event: CodexStreamEvent) => {
+          if (event.type === 'text') {
+            responseText += event.content;
+            return;
+          }
+          socket.emit('activity', event.activity);
+        };
+
+        const result = await runCodex(prompt, {
+          model: data.model,
+          sessionId: activeSessionId,
+          signal: abortController.signal,
+          onEvent,
+        });
+        if (result.sessionId) {
+          sessionId = normalizeSessionId(result.sessionId);
+        }
+
+        await streamResponseText(socket, responseText || result.result, abortController.signal);
+        socket.emit('response_end', { sessionId, done: true });
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        if (abortController.signal.aborted) {
+          socket.emit('activity', {
+            type: 'system',
+            subtype: 'codex.turn.cancelled',
+            data: { reason: CANCELLED_MESSAGE },
+          });
+          socket.emit('response_end', { sessionId, done: true, cancelled: true });
+        } else {
+          socket.emit('error', { message: `Failed to process message: ${errorMessage}` });
+        }
+      } finally {
+        if (activeAbortController === abortController) {
+          activeAbortController = null;
+        }
+        activeRequests--;
+      }
+    } else {
+      // ─── Mock Mode (no Codex CLI) ────────────────────────────
+      // Emit a thread.started activity
+      const mockSessionId = `mock-${Date.now().toString(36)}`;
+      sessionId = mockSessionId;
+
+      socket.emit('activity', {
+        type: 'system',
+        subtype: 'codex.thread.started',
+        data: { threadId: mockSessionId },
+      });
+
+      // Simulate a shell command execution
+      try {
+        await delay(500, abortController.signal);
+        const toolUseId = `cmd-${Date.now()}`;
+        socket.emit('activity', {
+          type: 'tool_use',
+          tool: 'shell',
+          toolUseId,
+          input: { command: `echo "Processing: ${prompt.slice(0, 50)}..."` },
+        });
+
+        // Simulate processing time
+        await delay(800, abortController.signal);
+
+        // Emit tool result
+        socket.emit('activity', {
+          type: 'tool_result',
+          toolUseId,
+          content: { status: 'completed' },
+          isError: false,
+        });
+
+        // Emit the response text
+        const responseText = generateMockResponse(prompt);
+        await streamResponseText(socket, responseText, abortController.signal);
+
+        // Emit turn completed
+        socket.emit('activity', {
+          type: 'system',
+          subtype: 'codex.turn.completed',
+          data: { usage: { inputTokens: prompt.length, outputTokens: responseText.length } },
+        });
+
+        socket.emit('response_end', { sessionId: mockSessionId, done: true });
+      } catch (err) {
+        if (abortController.signal.aborted) {
+          socket.emit('activity', {
+            type: 'system',
+            subtype: 'codex.turn.cancelled',
+            data: { reason: CANCELLED_MESSAGE },
+          });
+          socket.emit('response_end', { sessionId: mockSessionId, done: true, cancelled: true });
+        } else {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          socket.emit('error', { message: `Failed to process message: ${errorMessage}` });
+        }
+      } finally {
+        if (activeAbortController === abortController) {
+          activeAbortController = null;
+        }
+        activeRequests--;
+      }
+    }
+  });
+});
+
+// ─── Mock Response Generator ─────────────────────────────────────
+function generateMockResponse(prompt: string): string {
+  const lower = prompt.toLowerCase();
+
+  if (lower.includes('log') || lower.includes('search') || lower.includes('txid') || lower.includes('transaction')) {
+    return `I'll help you search for that transaction. Here's what I found:\n\n- **Transaction Status**: The search has been initiated\n- **Log Files**: Scanning PM2 logs across all instances\n- **Service**: blostem-external-Prod\n\n**Note**: This is a demo response. To enable real Codex CLI integration, please ensure the \`codex\` command is available in your environment and configure the following environment variables:\n\n\`\`\`bash\nCODEX_COMMAND=codex\nCODEX_MODEL=<your-model>\nCODEX_CWD=/path/to/workspace\n\`\`\`\n\nWould you like me to search a specific date range or instance?`;
+  }
+
+  if (lower.includes('error') || lower.includes('failed') || lower.includes('issue')) {
+    return `Let me analyze the error patterns for you.\n\n**Analysis Summary:**\n- Checking error logs across all PM2 instances\n- Looking for correlation with recent deployments\n- Scanning for bank API timeout patterns\n\n**Note**: This is a demo response. Connect the Codex CLI for real-time analysis.\n\n\`\`\`bash\n# Example command for real analysis:\nzgrep -l "error" /home/ubuntu/.pm2/logs/blostem-external-Prod-error-*.log\n\`\`\``;
+  }
+
+  if (lower.includes('command') || lower.includes('run') || lower.includes('execute')) {
+    return `I can help execute system commands. Here's a summary of available operations:\n\n1. **Log Search** - Search PM2 logs for transaction IDs\n2. **Error Analysis** - Analyze error patterns across services\n3. **Service Status** - Check PM2 process status\n\n\`\`\`bash\n# Example: Check PM2 status\npm2 list\n\`\`\`\n\n**Note**: Enable Codex CLI for full command execution capabilities.`;
+  }
+
+  return `I understand your request: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"\n\nI'm currently running in **demo mode** because the Codex CLI is not available in this environment. To enable full functionality:\n\n1. Install the Codex CLI\n2. Set the \`CODEX_COMMAND\` environment variable\n3. Configure your model and workspace directory\n\n\`\`\`bash\n# Environment configuration\nCODEX_COMMAND=codex\nCODEX_MODEL=o4-mini\nCODEX_CWD=/your/workspace\n\`\`\`\n\nOnce configured, I'll be able to:\n- Execute real shell commands\n- Search and analyze logs\n- Perform multi-step operations\n- Track session state across interactions`;
+}
+
+// ─── Start Server ────────────────────────────────────────────────
+const PORT = 3003;
+
+async function start() {
+  codexAvailable = await checkCodexAvailable();
+
+  httpServer.listen(PORT, () => {
+    console.log(`Codex Service running on port ${PORT}`);
+    console.log(`REST API:    POST /api/instruction`);
+    console.log(`Socket.IO:   ws://localhost:${PORT}`);
+    console.log(`Auth:        ${config.apiKey ? 'enabled (x-api-key)' : 'DISABLED'}`);
+    console.log(`Codex CLI:   ${codexAvailable ? 'AVAILABLE' : 'NOT FOUND (running in demo mode)'}`);
+  });
+}
+
+start().catch((err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
+});
+
+// Graceful shutdown
+function shutdown(signal: string) {
+  console.log(`\n${signal} received — shutting down gracefully`);
+  io.disconnectSockets(true);
+  httpServer.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+  setTimeout(() => {
+    console.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 5000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('unhandledRejection', (reason) => {
+  console.error('[process] Unhandled rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[process] Uncaught exception:', err.message);
+});

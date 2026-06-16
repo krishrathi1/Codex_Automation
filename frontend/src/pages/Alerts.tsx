@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Header } from '../components/layout/Header';
 import { api } from '@/lib/api';
+import { getSocket } from '@/lib/socket';
 import { cn, timeAgo } from '@/lib/utils';
 import type { AlertRule, AlertEvent, Severity } from '@/types';
 
@@ -33,6 +34,34 @@ export function Alerts() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    const socket = getSocket();
+    const handleNewAlert = (event: AlertEvent) => {
+      setEvents((prev) => [event, ...prev.filter((item) => item.id !== event.id)]);
+    };
+    const handleAcknowledged = (event: AlertEvent) => {
+      setEvents((prev) => prev.map((item) => (item.id === event.id ? event : item)));
+    };
+    const handleRuleCreated = (rule: AlertRule) => {
+      setRules((prev) => [rule, ...prev.filter((item) => item.id !== rule.id)]);
+    };
+    const handleRuleUpdated = (rule: AlertRule) => {
+      setRules((prev) => prev.map((item) => (item.id === rule.id ? rule : item)));
+    };
+
+    socket.on('alert:new', handleNewAlert);
+    socket.on('alert:event:acknowledged', handleAcknowledged);
+    socket.on('alert:rule:created', handleRuleCreated);
+    socket.on('alert:rule:updated', handleRuleUpdated);
+
+    return () => {
+      socket.off('alert:new', handleNewAlert);
+      socket.off('alert:event:acknowledged', handleAcknowledged);
+      socket.off('alert:rule:created', handleRuleCreated);
+      socket.off('alert:rule:updated', handleRuleUpdated);
+    };
+  }, []);
 
   const handleAcknowledge = async (id: string) => {
     try {

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as boardService from '../services/board.service.js';
 import * as collaborationService from '../services/board-collaboration.service.js';
+import * as blackboardService from '../services/blackboard.service.js';
 
 const router = Router();
 
@@ -41,6 +42,20 @@ router.get('/:id/snapshot', async (req, res) => {
   res.json(snapshot);
 });
 
+router.get('/:id/live-blackboard/trace', async (req, res) => {
+  try {
+    const trace = await blackboardService.getBoardLiveBlackboardTrace(
+      req.organizationId!,
+      req.params.id,
+      typeof req.query.conversationId === 'string' ? req.query.conversationId : undefined,
+    );
+    res.json(trace);
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
+});
+
 // Board Group Snapshot — cross-board summary for the board's group
 router.get('/groups/:groupId/snapshot', async (req, res) => {
   const includeDone = req.query.includeDone === 'true';
@@ -69,8 +84,21 @@ router.patch('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
-  await boardService.deleteBoard(req.params.id, req.organizationId!);
-  req.app.get('io')?.to(`org:${req.organizationId}`).emit('board:deleted', { id: req.params.id });
+  const deleteScopedData = req.query.deleteScopedData === 'true' || req.query.deleteAgents === 'true';
+  const result = await boardService.deleteBoard(req.params.id, req.organizationId!, { deleteScopedData });
+  const io = req.app.get('io');
+  const room = `org:${req.organizationId}`;
+  io?.to(room).emit('board:deleted', {
+    id: req.params.id,
+    deletedAgentIds: result.deletedAgentIds,
+    deletedTaskIds: result.deletedTaskIds,
+  });
+  for (const agentId of result.deletedAgentIds) {
+    io?.to(room).emit('agent:deleted', { id: agentId, boardId: req.params.id });
+  }
+  for (const taskId of result.deletedTaskIds) {
+    io?.to(room).emit('task:delete', { id: taskId, boardId: req.params.id });
+  }
   res.status(204).end();
 });
 
@@ -193,11 +221,52 @@ router.post('/:id/collaboration/live-workflow/start', async (req, res) => {
   }
 });
 
+router.post('/:id/collaboration/live-blackboard/start', async (req, res) => {
+  try {
+    const result = await collaborationService.startLiveBlackboardConversation(
+      req.organizationId!,
+      req.params.id,
+      req.body,
+    );
+    const io = req.app.get('io');
+    const room = `org:${req.organizationId}`;
+
+    for (const agent of result.agents) {
+      io?.to(room).emit('agent:updated', agent);
+    }
+    for (const task of result.tasks) {
+      io?.to(room).emit('task:update', task);
+    }
+    for (const message of result.messages) {
+      io?.to(room).emit('thread:message', { threadId: result.thread.id, message });
+    }
+    for (const runJob of result.runJobs) {
+      io?.to(room).emit('agent-run-job:update', runJob);
+    }
+
+    io?.to(room).emit('board:liveBlackboardStarted', result);
+    io?.to(room).emit('agent:message', {
+      sourceAgent: { id: 'admin', name: 'Admin' },
+      targetAgent: { id: 'live-blackboard', name: 'Live blackboard agents' },
+      message: result.trigger,
+      threadId: result.thread.id,
+      boardId: result.board.id,
+      conversationId: result.conversationId,
+      timestamp: new Date().toISOString(),
+    });
+
+    res.status(201).json(result);
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
+});
+
 // Board agent management
 router.post('/:id/agents', async (req, res) => {
   try {
-    const { agentId, isLead } = req.body;
-    const agent = await boardService.addAgentToBoard(req.params.id, agentId, req.organizationId!, isLead);
+    const { agentId, isLead, integrationAccess } = req.body;
+    const agent = await boardService.addAgentToBoard(req.params.id, agentId, req.organizationId!, isLead, integrationAccess);
     req.app.get('io')?.to(`org:${req.organizationId}`).emit('board:agentAdded', { boardId: req.params.id, agent });
     res.json(agent);
   } catch (e: any) {

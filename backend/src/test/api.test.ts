@@ -13,6 +13,7 @@ import * as agentService from '../services/agent.service.js';
 import * as taskService from '../services/task.service.js';
 import * as boardService from '../services/board.service.js';
 import * as approvalService from '../services/approval.service.js';
+import * as alertService from '../services/alert.service.js';
 import { generateAgentToken } from '../routes/agent-api.js';
 import { createHash } from 'crypto';
 
@@ -832,6 +833,97 @@ describe('Nexus Backend Integration Tests', () => {
       // Verify it is gone
       const gone = await boardService.getBoardById(board.id, orgId);
       expect(gone).toBeNull();
+    });
+
+    it('deleteBoard: scoped delete removes tasks, board agents, and their messages', async () => {
+      const suffix = Date.now();
+      const board = await boardService.createBoard(orgId, {
+        name: `Scoped Board to Delete ${suffix}`,
+      });
+      const agentA = await prisma.agent.create({
+        data: {
+          organizationId: orgId,
+          boardId: board.id,
+          name: `scoped-delete-a-${suffix}`,
+          displayName: `Scoped Delete A ${suffix}`,
+          description: 'Scoped delete test agent A',
+          workspace: '',
+        },
+      });
+      const agentB = await prisma.agent.create({
+        data: {
+          organizationId: orgId,
+          boardId: board.id,
+          name: `scoped-delete-b-${suffix}`,
+          displayName: `Scoped Delete B ${suffix}`,
+          description: 'Scoped delete test agent B',
+          workspace: '',
+        },
+      });
+      const task = await taskService.createTask(orgId, {
+        boardId: board.id,
+        agentId: agentA.id,
+        title: `Scoped task ${suffix}`,
+      });
+      const thread = await prisma.thread.create({ data: { organizationId: orgId } });
+      const message = await prisma.message.create({
+        data: {
+          threadId: thread.id,
+          senderId: agentA.id,
+          receiverId: agentB.id,
+          content: 'Scoped agent-to-agent message',
+        },
+      });
+
+      const deleted = await boardService.deleteBoard(board.id, orgId, { deleteScopedData: true });
+
+      expect(deleted.deletedAgentIds).toEqual(expect.arrayContaining([agentA.id, agentB.id]));
+      expect(deleted.deletedTaskIds).toContain(task.id);
+      await expect(boardService.getBoardById(board.id, orgId)).resolves.toBeNull();
+      await expect(prisma.agent.findMany({ where: { id: { in: [agentA.id, agentB.id] } } })).resolves.toHaveLength(0);
+      await expect(prisma.task.findUnique({ where: { id: task.id } })).resolves.toBeNull();
+      await expect(prisma.message.findUnique({ where: { id: message.id } })).resolves.toBeNull();
+    });
+
+    it('createAgentTaskAlert: records an access-needed alert with group context', async () => {
+      const suffix = Date.now();
+      const board = await boardService.createBoard(orgId, {
+        name: `Alert Board ${suffix}`,
+      });
+      const agent = await prisma.agent.create({
+        data: {
+          organizationId: orgId,
+          boardId: board.id,
+          name: `alert-agent-${suffix}`,
+          displayName: `Alert Agent ${suffix}`,
+          description: 'Alert test agent',
+          workspace: '',
+        },
+      });
+      const task = await taskService.createTask(orgId, {
+        boardId: board.id,
+        agentId: agent.id,
+        title: `Alert task ${suffix}`,
+      });
+
+      const event = await alertService.createAgentTaskAlert(orgId, {
+        agentId: agent.id,
+        boardId: board.id,
+        taskId: task.id,
+        agentName: agent.displayName,
+        boardName: board.name,
+        taskTitle: task.title,
+        errorMessage: 'GitHub token forbidden for selected repository',
+      });
+
+      expect(event.severity).toBe('CRITICAL');
+      expect(event.message).toContain('Access needed');
+      expect(event.message).toContain(agent.displayName);
+      expect(event.message).toContain(task.title);
+      expect(event.message).toContain(board.name);
+      expect(event.alertRule?.condition).toBe('agent_access_needed');
+
+      await boardService.deleteBoard(board.id, orgId, { deleteScopedData: true });
     });
 
     // ─── Board Groups ───────────────────────────────────────────────────

@@ -22,6 +22,7 @@ export interface Agent {
   boardId: string | null;
   isBoardLead: boolean;
   agentToAgent: boolean;
+  identityProfile?: Record<string, unknown> | null;
   soulTemplateId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -186,6 +187,8 @@ export interface CommEdge {
   label?: string;
   messageCount: number;
   lastMessage: string;
+  boardId?: string | null;
+  boardName?: string | null;
   threadIds?: string[];
   codexSessionIds?: string[];
   sessionIds?: string[];
@@ -302,6 +305,43 @@ export interface ChatMessage {
   metadata?: Record<string, unknown>;
 }
 
+export interface PlatformIntegrationSettings {
+  github: {
+    configured: boolean;
+    tokenMasked: string | null;
+    updatedAt: string | null;
+  };
+  vercel: {
+    configured: boolean;
+    tokenMasked: string | null;
+    teamId: string | null;
+    updatedAt: string | null;
+  };
+}
+
+export interface GithubRepositorySummary {
+  id: number;
+  name: string;
+  fullName: string;
+  private: boolean;
+  htmlUrl: string;
+  cloneUrl: string;
+  sshUrl: string;
+  defaultBranch: string;
+  ownerLogin: string;
+  updatedAt: string | null;
+}
+
+export interface VercelProjectSummary {
+  id: string;
+  name: string;
+  framework: string | null;
+  accountId: string | null;
+  repo: string | null;
+  productionUrl: string | null;
+  updatedAt: string | null;
+}
+
 export interface ChatHistory {
   sessionKey: string;
   messages: ChatMessage[];
@@ -345,6 +385,9 @@ export interface MotherChatContext {
     failedRunJobs?: number;
     productionErrors?: number;
     activeProductionErrors?: number;
+    blackboardConversations?: number;
+    activeBlackboardConversations?: number;
+    blackboardEvents?: number;
   };
   agents: Array<{
     id: string;
@@ -405,12 +448,17 @@ export interface MotherChatContext {
     boardId: string | null;
     task: string | null;
     taskId: string | null;
-    prompt: string;
-    summary: string | null;
-    error: string | null;
-    codexSessionId: string | null;
-    nexusSessionId: string | null;
-    attempt: number;
+	    prompt: string;
+	    summary: string | null;
+	    output?: string | null;
+	    error: string | null;
+	    codexSessionId: string | null;
+	    nexusSessionId: string | null;
+	    workflowId?: string | null;
+	    workflowStepNumber?: number | null;
+	    workflowTotalSteps?: number | null;
+	    workflowFinalStep?: boolean;
+	    attempt: number;
     queuedAt: string;
     startedAt: string | null;
     completedAt: string | null;
@@ -437,6 +485,32 @@ export interface MotherChatContext {
     createdAt: string;
     updatedAt: string;
   }>;
+  blackboardConversations?: Array<{
+    id: string;
+    boardId: string;
+    threadId: string | null;
+    title: string;
+    goal: string | null;
+    status: string;
+    currentRound: number;
+    maxRounds: number;
+    completedReason: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+  blackboardEvents?: Array<{
+    id: string;
+    type: string;
+    from: string;
+    to: string;
+    senderAgentId: string | null;
+    receiverAgentId: string | null;
+    runJobId: string | null;
+    taskId: string | null;
+    content: string;
+    metadata: Record<string, unknown>;
+    createdAt: string;
+  }>;
   tokenUsage: Array<{
     id: string;
     agent: string;
@@ -461,6 +535,71 @@ export interface MotherChatContext {
     task: string | null;
     board: string;
     createdAt: string;
+  }>;
+}
+
+export interface LiveBlackboardTraceJob {
+  id: string;
+  agentId: string;
+  agentName: string;
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  round: number | null;
+  prompt: string;
+  reconstructedPrompt: string | null;
+  output: string | null;
+  summary: string | null;
+  error: string | null;
+  codexSessionId: string | null;
+  nexusSessionId: string | null;
+  queuedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+}
+
+export interface LiveBlackboardTrace {
+  generatedAt: string;
+  board: {
+    id: string;
+    name: string;
+    slug: string;
+    objective: string | null;
+    maxAgents: number;
+  };
+  agents: Array<{
+    id: string;
+    displayName: string;
+    description: string;
+    status: AgentStatus;
+    isBoardLead: boolean;
+  }>;
+  conversations: Array<{
+    id: string;
+    title: string;
+    goal: string | null;
+    status: string;
+    currentRound: number;
+    maxRounds: number;
+    maxObservedRound: number;
+    completedReason: string | null;
+    createdAt: string;
+    updatedAt: string;
+    events: Array<{
+      id: string;
+      type: string;
+      from: string;
+      to: string;
+      senderAgentId: string | null;
+      receiverAgentId: string | null;
+      runJobId: string | null;
+      taskId: string | null;
+      content: string;
+      metadata: Record<string, unknown>;
+      createdAt: string;
+      round: number | null;
+      linkedJob: LiveBlackboardTraceJob | null;
+    }>;
+    jobs: LiveBlackboardTraceJob[];
   }>;
 }
 

@@ -5,10 +5,11 @@ import { generateApiKey } from '../lib/crypto.js';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { logger } from '../lib/logger.js';
 import type { OrgRole } from '@prisma/client';
+import { sanitizeOrganizationSettings } from './platform-integrations.service.js';
 const tracer = trace.getTracer('nexus-org');
 
 export async function getOrganization(orgId: string) {
-  return prisma.organization.findUnique({
+  const org = await prisma.organization.findUnique({
     where: { id: orgId },
     include: {
       _count: {
@@ -16,16 +17,18 @@ export async function getOrganization(orgId: string) {
       },
     },
   });
+  return org ? { ...org, settings: sanitizeOrganizationSettings(org.settings) } : null;
 }
 
 export async function updateOrganization(orgId: string, data: { name?: string; settings?: Record<string, unknown> }) {
-  return prisma.organization.update({
+  const org = await prisma.organization.update({
     where: { id: orgId },
     data: {
       ...(data.name !== undefined && { name: data.name }),
       ...(data.settings !== undefined && { settings: data.settings as any }),
     },
   });
+  return { ...org, settings: sanitizeOrganizationSettings(org.settings) };
 }
 
 export async function getMembers(orgId: string) {

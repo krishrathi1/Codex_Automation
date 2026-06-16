@@ -1,4 +1,4 @@
-import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, Gateway, GatewayHealth, ModelInfo, ChatHistory, ChatResponse, MotherChatContext, MotherChatDiagnostics, WorkspaceFile, LlmProvider, UsageCredit, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate, CommEdge } from '../types';
+import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, Gateway, GatewayHealth, ModelInfo, ChatHistory, ChatResponse, MotherChatContext, MotherChatDiagnostics, WorkspaceFile, LlmProvider, UsageCredit, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate, CommEdge, LiveBlackboardTrace, PlatformIntegrationSettings, GithubRepositorySummary, VercelProjectSummary } from '../types';
 import { useAuthStore } from '../stores/auth-store';
 import { AUTH_DISABLED } from './auth-mode';
 
@@ -105,8 +105,18 @@ export const api = {
     removeMember: (id: string) => request(`/org/members/${id}`, { method: 'DELETE' }),
     apiKeys: () => request('/org/api-keys'),
     createApiKey: (name: string) => request('/org/api-keys', { method: 'POST', body: JSON.stringify({ name }) }),
-    revokeApiKey: (id: string) => request(`/org/api-keys/${id}`, { method: 'DELETE' }),
-  },
+	    revokeApiKey: (id: string) => request(`/org/api-keys/${id}`, { method: 'DELETE' }),
+	    integrationSettings: () => request<PlatformIntegrationSettings>('/org/integrations/settings'),
+	    updateIntegrationSettings: (data: {
+	      githubAccessToken?: string | null;
+	      clearGithubAccessToken?: boolean;
+	      vercelAccessToken?: string | null;
+	      clearVercelAccessToken?: boolean;
+	      vercelTeamId?: string | null;
+	    }) => request<PlatformIntegrationSettings>('/org/integrations/settings', { method: 'PUT', body: JSON.stringify(data) }),
+	    githubRepos: () => request<GithubRepositorySummary[]>('/org/integrations/github/repos'),
+	    vercelProjects: () => request<VercelProjectSummary[]>('/org/integrations/vercel/projects'),
+	  },
   agents: {
     list: () => request<Agent[]>('/agents'),
     get: (id: string) => request<Agent>(`/agents/${id}`),
@@ -180,7 +190,12 @@ export const api = {
   threads: {
     list: () => request<Thread[]>('/threads'),
     get: (id: string) => request<Thread>(`/threads/${id}`),
-    graph: () => request<{ nodes: Array<{ id: string; name: string; displayName: string; avatar: string | null; status: string; kind?: string; currentTask?: string | null; codexSessionId?: string; activeRunIds?: string[]; taskIds?: string[] }>; edges: CommEdge[] }>('/threads/graph'),
+    graph: (params?: { boardId?: string }) => {
+      const query = new URLSearchParams();
+      if (params?.boardId) query.set('boardId', params.boardId);
+      const qs = query.toString();
+      return request<{ nodes: Array<{ id: string; name: string; displayName: string; avatar: string | null; status: string; kind?: string; boardId?: string | null; boardName?: string | null; currentTask?: string | null; codexSessionId?: string; activeRunIds?: string[]; taskIds?: string[] }>; edges: CommEdge[] }>(`/threads/graph${qs ? `?${qs}` : ''}`);
+    },
   },
   sessions: {
     list: (params?: { agentId?: string; limit?: number }) => {
@@ -280,7 +295,10 @@ export const api = {
       request<Board>('/boards', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Record<string, unknown>) =>
       request<Board>(`/boards/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-    delete: (id: string) => request<void>(`/boards/${id}`, { method: 'DELETE' }),
+    delete: (id: string, options?: { deleteScopedData?: boolean }) => {
+      const qs = options?.deleteScopedData ? '?deleteScopedData=true' : '';
+      return request<void>(`/boards/${id}${qs}`, { method: 'DELETE' });
+    },
     startCollaboration: (id: string, data: {
       goal?: string;
       agents?: Array<{
@@ -311,8 +329,22 @@ export const api = {
         `/boards/${id}/collaboration/live-workflow/start`,
         { method: 'POST', body: JSON.stringify(data) },
       ),
-    addAgent: (id: string, data: { agentId: string; isLead?: boolean }) =>
-      request<Agent>(`/boards/${id}/agents`, { method: 'POST', body: JSON.stringify(data) }),
+    startLiveBlackboard: (id: string, data: {
+      goal?: string;
+      trigger: string;
+      priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+      maxRounds?: number;
+    }) =>
+      request<{ board: Board; conversationId: string; goal: string; trigger: string; agents: Agent[]; tasks: Task[]; thread: Thread; messages: Message[]; runJobs: unknown[] }>(
+        `/boards/${id}/collaboration/live-blackboard/start`,
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
+    liveBlackboardTrace: (id: string, conversationId?: string) => {
+      const qs = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : '';
+      return request<LiveBlackboardTrace>(`/boards/${id}/live-blackboard/trace${qs}`);
+    },
+	    addAgent: (id: string, data: { agentId: string; isLead?: boolean; integrationAccess?: Record<string, unknown> }) =>
+	      request<Agent>(`/boards/${id}/agents`, { method: 'POST', body: JSON.stringify(data) }),
     removeAgent: (id: string, agentId: string) =>
       request<void>(`/boards/${id}/agents/${agentId}`, { method: 'DELETE' }),
   },

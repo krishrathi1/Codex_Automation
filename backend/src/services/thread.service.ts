@@ -5,6 +5,8 @@ import { ADMIN_AGENT_NAME } from './system-agent.service.js';
 const tracer = trace.getTracer('nexus-thread');
 const MOTHER_CHAT_AGENT_NAME = '__mother_chat__';
 const VIRTUAL_ADMIN_NODE_ID = 'virtual:admin';
+const VIRTUAL_MOTHER_NODE_PREFIX = 'virtual:mother:';
+const ORG_MOTHER_SCOPE = 'organization';
 
 const agentSelectFields = {
   id: true,
@@ -18,6 +20,8 @@ const graphAgentSelectFields = {
   currentTask: true,
   identityProfile: true,
   enabled: true,
+  boardId: true,
+  gatewayAgentId: true,
   updatedAt: true,
 } as const;
 
@@ -49,6 +53,8 @@ interface GraphEdge {
   label: string;
   messageCount: number;
   lastMessage: string;
+  boardId?: string | null;
+  boardName?: string | null;
   threadIds: string[];
   codexSessionIds: string[];
   sessionIds: string[];
@@ -80,6 +86,10 @@ function roleFromAgentName(name: string) {
   return 'agent';
 }
 
+function virtualMotherNodeId(boardId?: string | null) {
+  return `${VIRTUAL_MOTHER_NODE_PREFIX}${boardId || ORG_MOTHER_SCOPE}`;
+}
+
 function edgeLabel(kind: GraphEdgeKind) {
   if (kind === 'admin_agent') return 'Admin chat';
   if (kind === 'admin_mother') return 'Mother Chat';
@@ -106,8 +116,15 @@ function semanticKind(metadata: JsonRecord, sourceName: string, targetName: stri
   return 'system';
 }
 
-function getOrCreateEdge(edgeMap: Map<string, GraphEdge>, source: string, target: string, kind: GraphEdgeKind, fallbackDate: Date) {
-  const key = `${source}->${target}::${kind}`;
+function getOrCreateEdge(
+  edgeMap: Map<string, GraphEdge>,
+  source: string,
+  target: string,
+  kind: GraphEdgeKind,
+  fallbackDate: Date,
+  scope?: { boardId?: string | null; boardName?: string | null },
+) {
+  const key = `${source}->${target}::${kind}::${scope?.boardId ?? ORG_MOTHER_SCOPE}`;
   const existing = edgeMap.get(key);
   if (existing) return existing;
 
@@ -118,6 +135,8 @@ function getOrCreateEdge(edgeMap: Map<string, GraphEdge>, source: string, target
     label: edgeLabel(kind),
     messageCount: 0,
     lastMessage: fallbackDate.toISOString(),
+    boardId: scope?.boardId ?? null,
+    boardName: scope?.boardName ?? null,
     threadIds: [],
     codexSessionIds: [],
     sessionIds: [],
@@ -163,12 +182,42 @@ export async function getThreadById(id: string, organizationId: string) {
   });
 }
 
-export async function getCommGraph(organizationId: string) {
-  const [agents, messages, runningSessions, openTasks, agentRunJobs] = await Promise.all([
+export async function getCommGraph(organizationId: string, options: { boardId?: string } = {}) {
+  const boardScope = options.boardId
+    ? await prisma.board.findFirst({
+        where: { id: options.boardId, organizationId },
+        select: { id: true, name: true, slug: true, updatedAt: true },
+      })
+    : null;
+  if (options.boardId && !boardScope) {
+    return { nodes: [], edges: [] };
+  }
+
+  const [
+    agents,
+    boards,
+    messages,
+    runningSessions,
+    openTasks,
+    agentRunJobs,
+  ] = await Promise.all([
     prisma.agent.findMany({
-      where: { organizationId },
+      where: options.boardId
+        ? {
+            organizationId,
+            OR: [
+              { boardId: options.boardId },
+              { name: { in: [ADMIN_AGENT_NAME, MOTHER_CHAT_AGENT_NAME] } },
+            ],
+          }
+        : { organizationId },
       orderBy: { name: 'asc' },
       select: graphAgentSelectFields,
+    }),
+    prisma.board.findMany({
+      where: options.boardId ? { id: options.boardId, organizationId } : { organizationId },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, slug: true, updatedAt: true },
     }),
     prisma.message.findMany({
       where: { thread: { organizationId } },
@@ -182,8 +231,8 @@ export async function getCommGraph(organizationId: string) {
         content: true,
         metadata: true,
         createdAt: true,
-        sender: { select: { id: true, name: true, displayName: true } },
-        receiver: { select: { id: true, name: true, displayName: true } },
+        sender: { select: { id: true, name: true, displayName: true, boardId: true } },
+        receiver: { select: { id: true, name: true, displayName: true, boardId: true } },
       },
     }),
     prisma.session.findMany({
@@ -192,14 +241,19 @@ export async function getCommGraph(organizationId: string) {
       select: { id: true, agentId: true, type: true, status: true, summary: true, startedAt: true },
     }),
     prisma.task.findMany({
-      where: { organizationId, status: { not: 'DONE' } },
+      where: {
+        organizationId,
+        status: { not: 'DONE' },
+        ...(options.boardId && { boardId: options.boardId }),
+      },
       orderBy: { updatedAt: 'desc' },
-      select: { id: true, agentId: true, title: true, status: true, priority: true },
+      select: { id: true, agentId: true, boardId: true, title: true, status: true, priority: true },
     }),
     prisma.agentRunJob.findMany({
       where: {
         organizationId,
         status: { not: 'CANCELLED' },
+        ...(options.boardId && { boardId: options.boardId }),
       },
       orderBy: { queuedAt: 'asc' },
       take: 500,
@@ -207,6 +261,7 @@ export async function getCommGraph(organizationId: string) {
         id: true,
         status: true,
         agentId: true,
+        boardId: true,
         taskId: true,
         threadId: true,
         codexSessionId: true,
@@ -219,10 +274,20 @@ export async function getCommGraph(organizationId: string) {
   const agentById = new Map(agents.map(agent => [agent.id, agent]));
   const adminAgent = agents.find(agent => agent.name === ADMIN_AGENT_NAME);
   const motherAgent = agents.find(agent => agent.name === MOTHER_CHAT_AGENT_NAME);
+  const boardsById = new Map(boards.map(board => [board.id, board]));
+  const allowedBoardIds = new Set(boards.map(board => board.id));
+  const graphBoardIds = new Set<string>();
+  const hasUngroupedScope = { value: false };
+  const hasUngroupedAgents = agents.some(agent => (
+    agent.name !== ADMIN_AGENT_NAME &&
+    agent.name !== MOTHER_CHAT_AGENT_NAME &&
+    !agent.boardId
+  ));
   const hasLegacyAdminMessages = messages.some(message => {
     const metadata = objectRecord(message.metadata);
     return message.senderId === message.receiverId && Boolean(stringValue(metadata.role));
   });
+  const needsAdminNode = Boolean(adminAgent) || hasLegacyAdminMessages || boards.length > 0;
   const adminNodeId = adminAgent?.id ?? VIRTUAL_ADMIN_NODE_ID;
   const taskIdsByAgent = new Map<string, string[]>();
   const activeRunIdsByAgent = new Map<string, string[]>();
@@ -238,14 +303,58 @@ export async function getCommGraph(organizationId: string) {
     codexSessionId: string | null;
   }>>();
 
+  function boardInfo(boardId?: string | null) {
+    if (!boardId) return { boardId: null, boardName: 'Organization' };
+    const board = boardsById.get(boardId);
+    return { boardId, boardName: board?.name ?? 'Unknown group' };
+  }
+
+  function rememberScope(boardId?: string | null) {
+    if (boardId) graphBoardIds.add(boardId);
+    else hasUngroupedScope.value = true;
+  }
+
+  function messageBoardId(message: typeof messages[number], metadata: JsonRecord) {
+    const metadataBoardId = stringValue(metadata.boardId);
+    if (metadataBoardId && allowedBoardIds.has(metadataBoardId)) return metadataBoardId;
+
+    const senderBoardId = message.sender.boardId;
+    const receiverBoardId = message.receiver.boardId;
+    if (senderBoardId && receiverBoardId && senderBoardId === receiverBoardId && allowedBoardIds.has(senderBoardId)) {
+      return senderBoardId;
+    }
+    if (senderBoardId && [ADMIN_AGENT_NAME, MOTHER_CHAT_AGENT_NAME].includes(message.receiver.name) && allowedBoardIds.has(senderBoardId)) {
+      return senderBoardId;
+    }
+    if (receiverBoardId && [ADMIN_AGENT_NAME, MOTHER_CHAT_AGENT_NAME].includes(message.sender.name) && allowedBoardIds.has(receiverBoardId)) {
+      return receiverBoardId;
+    }
+    return undefined;
+  }
+
+  function endpointNodeId(agentName: string, agentId: string, boardId?: string | null) {
+    if (agentName === MOTHER_CHAT_AGENT_NAME) return virtualMotherNodeId(boardId);
+    if (agentName === ADMIN_AGENT_NAME) return adminNodeId;
+    return agentId;
+  }
+
+  function endpointBelongsToScope(agentName: string, endpointBoardId: string | null, boardId?: string | null) {
+    if ([ADMIN_AGENT_NAME, MOTHER_CHAT_AGENT_NAME].includes(agentName)) return true;
+    return boardId ? endpointBoardId === boardId : !endpointBoardId;
+  }
+
   for (const task of openTasks) {
     if (!task.agentId) continue;
+    if (!agentById.has(task.agentId)) continue;
+    rememberScope(task.boardId);
     const ids = taskIdsByAgent.get(task.agentId) ?? [];
     ids.push(task.id);
     taskIdsByAgent.set(task.agentId, ids);
   }
   for (const job of agentRunJobs) {
     if (!job.agentId) continue;
+    if (!agentById.has(job.agentId)) continue;
+    rememberScope(job.boardId);
     if (job.status === 'RUNNING') {
       const ids = activeRunIdsByAgent.get(job.agentId) ?? [];
       ids.push(job.id);
@@ -281,13 +390,20 @@ export async function getCommGraph(organizationId: string) {
     }
   }
   for (const session of runningSessions) {
+    if (!agentById.has(session.agentId)) continue;
+    const sessionAgent = agentById.get(session.agentId);
+    if (options.boardId && sessionAgent?.boardId !== options.boardId) continue;
+    rememberScope(sessionAgent?.boardId);
     const ids = activeRunIdsByAgent.get(session.agentId) ?? [];
     ids.push(session.id);
     activeRunIdsByAgent.set(session.agentId, ids);
   }
 
-  const nodes = agents.map(agent => {
+  const nodes = agents
+    .filter(agent => agent.name !== MOTHER_CHAT_AGENT_NAME)
+    .map(agent => {
     const profile = objectRecord(agent.identityProfile);
+    if (agent.name !== ADMIN_AGENT_NAME) rememberScope(agent.boardId);
     return {
       id: agent.id,
       name: agent.name,
@@ -295,6 +411,8 @@ export async function getCommGraph(organizationId: string) {
       avatar: agent.avatar,
       status: agent.status,
       kind: roleFromAgentName(agent.name),
+      boardId: agent.boardId,
+      boardName: agent.boardId ? boardsById.get(agent.boardId)?.name ?? null : null,
       enabled: agent.enabled,
       currentTask: agent.currentTask,
       codexSessionId: stringValue(profile.codexCliSessionId) || stringValue(profile.activeWorkflowSessionId),
@@ -305,7 +423,7 @@ export async function getCommGraph(organizationId: string) {
     };
   });
 
-  if (!adminAgent && hasLegacyAdminMessages) {
+  if (!adminAgent && needsAdminNode) {
     nodes.push({
       id: adminNodeId,
       name: ADMIN_AGENT_NAME,
@@ -313,9 +431,79 @@ export async function getCommGraph(organizationId: string) {
       avatar: 'A',
       status: 'IDLE',
       kind: 'admin',
+      boardId: null,
+      boardName: null,
       enabled: false,
       currentTask: null,
       codexSessionId: undefined,
+      activeRunIds: [],
+      taskIds: [],
+      queuedRunIds: [],
+      failedRunIds: [],
+    });
+  }
+
+  if (boardScope) graphBoardIds.add(boardScope.id);
+  for (const agent of agents) {
+    if (agent.name === ADMIN_AGENT_NAME || agent.name === MOTHER_CHAT_AGENT_NAME) continue;
+    rememberScope(agent.boardId);
+  }
+
+  const motherProfile = objectRecord(motherAgent?.identityProfile);
+  const motherSessionsByBoard = objectRecord(motherProfile.codexCliSessionIdsByBoard);
+  function scopedMotherCodexSessionId(boardId: string) {
+    const sessionId = stringValue(motherSessionsByBoard[boardId]);
+    if (!sessionId) return undefined;
+    const globalSessions = [
+      stringValue(motherProfile.codexCliSessionId),
+      stringValue(motherProfile.codexSessionId),
+      stringValue(motherProfile.activeWorkflowSessionId),
+      motherAgent?.gatewayAgentId?.startsWith('codex:')
+        ? motherAgent.gatewayAgentId.slice('codex:'.length).trim()
+        : undefined,
+    ].filter((value): value is string => Boolean(value));
+    if (globalSessions.includes(sessionId)) return undefined;
+    const usedByAnotherBoard = Object.entries(motherSessionsByBoard).some(([otherBoardId, value]) => (
+      otherBoardId !== boardId && value === sessionId
+    ));
+    return usedByAnotherBoard ? undefined : sessionId;
+  }
+  for (const boardId of graphBoardIds) {
+    const board = boardsById.get(boardId);
+    nodes.push({
+      id: virtualMotherNodeId(boardId),
+      name: `${MOTHER_CHAT_AGENT_NAME}:${boardId}`,
+      displayName: `${board?.name ?? 'Group'} Mother Chat`,
+      avatar: 'M',
+      status: motherAgent?.status ?? 'IDLE',
+      kind: 'mother_chat',
+      boardId,
+      boardName: board?.name ?? null,
+      enabled: false,
+      currentTask: board?.name ? `Monitoring ${board.name}` : 'Monitoring group',
+      codexSessionId: scopedMotherCodexSessionId(boardId),
+      activeRunIds: [],
+      taskIds: [],
+      queuedRunIds: [],
+      failedRunIds: [],
+    });
+  }
+
+  const shouldShowOrganizationMother = !options.boardId && hasUngroupedScope.value && hasUngroupedAgents;
+
+  if (shouldShowOrganizationMother) {
+    nodes.push({
+      id: virtualMotherNodeId(null),
+      name: `${MOTHER_CHAT_AGENT_NAME}:${ORG_MOTHER_SCOPE}`,
+      displayName: 'Organization Mother Chat',
+      avatar: 'M',
+      status: motherAgent?.status ?? 'IDLE',
+      kind: 'mother_chat',
+      boardId: null,
+      boardName: 'Organization',
+      enabled: false,
+      currentTask: 'Monitoring ungrouped agents',
+      codexSessionId: stringValue(motherProfile.codexCliSessionId) || stringValue(motherProfile.activeWorkflowSessionId),
       activeRunIds: [],
       taskIds: [],
       queuedRunIds: [],
@@ -327,31 +515,70 @@ export async function getCommGraph(organizationId: string) {
 
   for (const message of messages) {
     const metadata = objectRecord(message.metadata);
+    const boardId = messageBoardId(message, metadata);
+    if (options.boardId && boardId !== options.boardId) continue;
+    if (!boardId) {
+      const senderBoardId = message.sender.boardId;
+      const receiverBoardId = message.receiver.boardId;
+      if (senderBoardId || receiverBoardId) continue;
+      if (message.sender.name !== MOTHER_CHAT_AGENT_NAME && message.receiver.name !== MOTHER_CHAT_AGENT_NAME) {
+        rememberScope(null);
+      }
+    } else {
+      rememberScope(boardId);
+    }
+    if (
+      !endpointBelongsToScope(message.sender.name, message.sender.boardId, boardId) ||
+      !endpointBelongsToScope(message.receiver.name, message.receiver.boardId, boardId)
+    ) {
+      continue;
+    }
+    const scope = boardInfo(boardId);
     const role = stringValue(metadata.role);
     const isLegacySelfChat = message.senderId === message.receiverId && Boolean(role);
     const isLegacyMotherChat = isLegacySelfChat && (
       message.sender.name === MOTHER_CHAT_AGENT_NAME || stringValue(metadata.systemRole) === 'mother-chat'
     );
 
-    let source = message.senderId;
-    let target = message.receiverId;
+    let source = endpointNodeId(message.sender.name, message.senderId, boardId);
+    let target = endpointNodeId(message.receiver.name, message.receiverId, boardId);
     let kind = semanticKind(metadata, message.sender.name, message.receiver.name);
 
     if (isLegacySelfChat) {
       kind = isLegacyMotherChat ? 'admin_mother' : 'admin_agent';
       if (role === 'user') {
         source = adminNodeId;
-        target = message.receiverId;
+        target = endpointNodeId(message.receiver.name, message.receiverId, boardId);
       } else {
-        source = message.senderId;
+        source = endpointNodeId(message.sender.name, message.senderId, boardId);
         target = adminNodeId;
       }
     }
 
-    if (!agentById.has(source) && source !== adminNodeId) continue;
-    if (!agentById.has(target) && target !== adminNodeId) continue;
+    // The topology is a control-plane view: admins talk to a scoped Mother Chat,
+    // and that Mother Chat observes/directs the group agents. Historical direct
+    // admin-agent chat rows are therefore projected through the scoped mother
+    // node instead of drawing noisy Admin -> Agent spokes.
+    if (kind === 'admin_agent') {
+      const motherNodeId = virtualMotherNodeId(boardId);
+      if (nodes.some(node => node.id === motherNodeId)) {
+        source = adminNodeId;
+        target = motherNodeId;
+        kind = 'admin_mother';
+      }
+    }
+    if (kind === 'admin_mother') {
+      const motherNodeId = virtualMotherNodeId(boardId);
+      if (nodes.some(node => node.id === motherNodeId)) {
+        source = adminNodeId;
+        target = motherNodeId;
+      }
+    }
 
-    const edge = getOrCreateEdge(edgeMap, source, target, kind, message.createdAt);
+    if (!nodes.some(node => node.id === source)) continue;
+    if (!nodes.some(node => node.id === target)) continue;
+
+    const edge = getOrCreateEdge(edgeMap, source, target, kind, message.createdAt, scope);
     edge.messageCount += 1;
     if (message.createdAt > new Date(edge.lastMessage)) {
       edge.lastMessage = message.createdAt.toISOString();
@@ -381,10 +608,30 @@ export async function getCommGraph(organizationId: string) {
     }
   }
 
-  if (motherAgent) {
+  if (motherAgent || graphBoardIds.size > 0 || shouldShowOrganizationMother) {
+    const motherScopes = [
+      ...Array.from(graphBoardIds).map(boardId => boardInfo(boardId)),
+      ...(shouldShowOrganizationMother ? [boardInfo(null)] : []),
+    ];
+    for (const scope of motherScopes) {
+      const motherNodeId = virtualMotherNodeId(scope.boardId);
+      if (!nodes.some(node => node.id === motherNodeId)) continue;
+      if (needsAdminNode) {
+        const adminEdge = getOrCreateEdge(edgeMap, adminNodeId, motherNodeId, 'admin_mother', new Date(), scope);
+        adminEdge.messageCount = Math.max(adminEdge.messageCount, 1);
+        adminEdge.observationLinks = [
+          { type: 'context', id: scope.boardId || ORG_MOTHER_SCOPE, label: `${scope.boardName} Mother Chat context`, status: 'SCOPED' },
+        ];
+      }
+    }
+
     for (const agent of agents) {
       if (agent.name === ADMIN_AGENT_NAME || agent.name === MOTHER_CHAT_AGENT_NAME) continue;
-      const edge = getOrCreateEdge(edgeMap, motherAgent.id, agent.id, 'mother_observation', agent.updatedAt);
+      if (options.boardId && agent.boardId !== options.boardId) continue;
+      const scope = boardInfo(agent.boardId);
+      const motherNodeId = virtualMotherNodeId(agent.boardId);
+      if (!nodes.some(node => node.id === motherNodeId)) continue;
+      const edge = getOrCreateEdge(edgeMap, motherNodeId, agent.id, 'mother_observation', agent.updatedAt, scope);
       edge.lastMessage = agent.updatedAt.toISOString();
       for (const id of activeRunIdsByAgent.get(agent.id) ?? []) pushUnique(edge.activeRunIds, id);
       for (const id of queuedRunIdsByAgent.get(agent.id) ?? []) pushUnique(edge.queuedRunIds, id);
@@ -420,6 +667,20 @@ export async function getCommGraph(organizationId: string) {
           .map(task => ({ type: 'task' as const, id: task.id, label: task.title, status: task.status })),
       ];
     }
+  }
+
+  const agentDisplayNameCounts = new Map<string, number>();
+  for (const node of nodes) {
+    if (node.kind !== 'agent') continue;
+    const key = node.displayName.trim().toLowerCase();
+    agentDisplayNameCounts.set(key, (agentDisplayNameCounts.get(key) ?? 0) + 1);
+  }
+  for (const node of nodes) {
+    if (node.kind !== 'agent') continue;
+    const key = node.displayName.trim().toLowerCase();
+    if ((agentDisplayNameCounts.get(key) ?? 0) <= 1) continue;
+    const suffix = node.boardName || node.boardId?.slice(0, 8) || node.id.slice(0, 8);
+    node.displayName = `${node.displayName} · ${suffix}`;
   }
 
   return {

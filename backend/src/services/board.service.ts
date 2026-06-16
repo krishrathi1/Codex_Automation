@@ -2,9 +2,78 @@ import { prisma } from '../lib/prisma.js';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { logger } from '../lib/logger.js';
 const tracer = trace.getTracer('nexus-board');
+const SYSTEM_AGENT_NAMES = ['__admin__', '__mother_chat__'];
+
+type JsonRecord = Record<string, unknown>;
 
 function toSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+}
+
+function objectRecord(value: unknown): JsonRecord {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as JsonRecord
+    : {};
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeResource(value: unknown) {
+  const record = objectRecord(value);
+  const id = stringValue(record.id);
+  const name = stringValue(record.name);
+  const fullName = stringValue(record.fullName);
+  if (!id && !name && !fullName) return null;
+  return {
+    ...record,
+    ...(id && { id }),
+    ...(name && { name }),
+    ...(fullName && { fullName }),
+  };
+}
+
+export function normalizeIntegrationScope(value: unknown) {
+  const scope = objectRecord(value);
+  const githubRepo = normalizeResource(scope.githubRepo);
+  const vercelProject = normalizeResource(scope.vercelProject);
+  return {
+    ...(githubRepo && { githubRepo }),
+    ...(vercelProject && { vercelProject }),
+  };
+}
+
+function withIntegrationScope(successMetrics: unknown, integrationScope: unknown) {
+  const metrics = objectRecord(successMetrics);
+  const scope = normalizeIntegrationScope(integrationScope);
+  if (Object.keys(scope).length === 0) return metrics;
+  return {
+    ...metrics,
+    integrationScope: scope,
+  };
+}
+
+function normalizeAgentIntegrationAccess(value: unknown, boardScope: JsonRecord) {
+  const access = objectRecord(value);
+  const github = objectRecord(access.github);
+  const vercel = objectRecord(access.vercel);
+  const mcp = objectRecord(access.mcp);
+  const githubRepo = normalizeResource(github.repo) || normalizeResource(boardScope.githubRepo);
+  const vercelProject = normalizeResource(vercel.project) || normalizeResource(boardScope.vercelProject);
+  return {
+    github: {
+      enabled: github.enabled !== false && Boolean(githubRepo),
+      repo: githubRepo,
+    },
+    vercel: {
+      enabled: vercel.enabled !== false && Boolean(vercelProject),
+      project: vercelProject,
+    },
+    mcp: {
+      vercel: mcp.vercel === true,
+    },
+  };
 }
 
 // Board Groups
@@ -78,6 +147,8 @@ export async function createBoard(organizationId: string, data: {
   boardGroupId?: string;
   boardType?: string;
   objective?: string;
+  successMetrics?: Record<string, unknown>;
+  integrationScope?: Record<string, unknown>;
   targetDate?: string;
   maxAgents?: number;
   requireApprovalForDone?: boolean;
@@ -96,6 +167,7 @@ export async function createBoard(organizationId: string, data: {
           boardGroupId: data.boardGroupId || null,
           boardType: data.boardType || 'goal',
           objective: data.objective || null,
+          successMetrics: withIntegrationScope(data.successMetrics, data.integrationScope) as any,
           targetDate: data.targetDate ? new Date(data.targetDate) : null,
           maxAgents: data.maxAgents ?? 3,
           requireApprovalForDone: data.requireApprovalForDone ?? true,
@@ -124,6 +196,8 @@ export async function updateBoard(id: string, organizationId: string, data: {
   boardGroupId?: string;
   boardType?: string;
   objective?: string;
+  successMetrics?: Record<string, unknown>;
+  integrationScope?: Record<string, unknown>;
   targetDate?: string | null;
   maxAgents?: number;
   requireApprovalForDone?: boolean;
@@ -135,6 +209,12 @@ export async function updateBoard(id: string, organizationId: string, data: {
     try {
       span.setAttribute('board.id', id);
       span.setAttribute('org.id', organizationId);
+      const existingBoard = data.integrationScope !== undefined
+        ? await prisma.board.findFirst({
+            where: { id, organizationId },
+            select: { successMetrics: true },
+          })
+        : null;
       const board = await prisma.board.update({
         where: { id, organizationId },
         data: {
@@ -144,6 +224,8 @@ export async function updateBoard(id: string, organizationId: string, data: {
           ...(data.boardGroupId !== undefined && { boardGroupId: data.boardGroupId || null }),
           ...(data.boardType !== undefined && { boardType: data.boardType }),
           ...(data.objective !== undefined && { objective: data.objective }),
+          ...(data.successMetrics !== undefined && { successMetrics: data.successMetrics as any }),
+          ...(data.integrationScope !== undefined && { successMetrics: withIntegrationScope(existingBoard?.successMetrics, data.integrationScope) as any }),
           ...(data.targetDate !== undefined && { targetDate: data.targetDate ? new Date(data.targetDate) : null }),
           ...(data.maxAgents !== undefined && { maxAgents: data.maxAgents }),
           ...(data.requireApprovalForDone !== undefined && { requireApprovalForDone: data.requireApprovalForDone }),
@@ -168,13 +250,81 @@ export async function updateBoard(id: string, organizationId: string, data: {
   });
 }
 
-export async function deleteBoard(id: string, organizationId: string) {
+export async function deleteBoard(
+  id: string,
+  organizationId: string,
+  options: { deleteScopedData?: boolean } = {},
+) {
   return tracer.startActiveSpan('board.delete', async (span) => {
     try {
       span.setAttribute('board.id', id);
       span.setAttribute('org.id', organizationId);
-      const result = await prisma.board.delete({ where: { id, organizationId } });
-      logger.info({ boardId: id, orgId: organizationId }, 'Board deleted');
+      span.setAttribute('board.deleteScopedData', Boolean(options.deleteScopedData));
+
+      const result = await prisma.$transaction(async (tx) => {
+        if (!options.deleteScopedData) {
+          const board = await tx.board.delete({ where: { id, organizationId } });
+          return { board, deletedAgentIds: [] as string[], deletedTaskIds: [] as string[] };
+        }
+
+        const [agents, tasks] = await Promise.all([
+          tx.agent.findMany({
+            where: {
+              organizationId,
+              boardId: id,
+              name: { notIn: SYSTEM_AGENT_NAMES },
+            },
+            select: { id: true },
+          }),
+          tx.task.findMany({
+            where: { organizationId, boardId: id },
+            select: { id: true },
+          }),
+        ]);
+
+        const deletedAgentIds = agents.map(agent => agent.id);
+        const deletedTaskIds = tasks.map(task => task.id);
+
+        if (deletedAgentIds.length > 0) {
+          await tx.message.deleteMany({
+            where: {
+              OR: [
+                { senderId: { in: deletedAgentIds } },
+                { receiverId: { in: deletedAgentIds } },
+              ],
+            },
+          });
+          await tx.agentRuntimeSession.deleteMany({
+            where: { organizationId, agentId: { in: deletedAgentIds } },
+          });
+          await tx.agentConversationCursor.deleteMany({
+            where: { organizationId, agentId: { in: deletedAgentIds } },
+          });
+          await tx.agent.deleteMany({
+            where: { organizationId, id: { in: deletedAgentIds } },
+          });
+        }
+
+        if (deletedTaskIds.length > 0) {
+          await tx.task.deleteMany({
+            where: { organizationId, id: { in: deletedTaskIds } },
+          });
+        }
+
+        await tx.productionErrorEvent.deleteMany({
+          where: { organizationId, boardId: id },
+        });
+
+        const board = await tx.board.delete({ where: { id, organizationId } });
+        return { board, deletedAgentIds, deletedTaskIds };
+      });
+
+      logger.info({
+        boardId: id,
+        orgId: organizationId,
+        deletedAgents: result.deletedAgentIds.length,
+        deletedTasks: result.deletedTaskIds.length,
+      }, 'Board deleted');
       return result;
     } catch (err) {
       span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
@@ -334,7 +484,13 @@ export async function getBoardGroupSnapshot(
   return { group, boards: boardSnapshots };
 }
 
-export async function addAgentToBoard(boardId: string, agentId: string, organizationId: string, isLead?: boolean) {
+export async function addAgentToBoard(
+  boardId: string,
+  agentId: string,
+  organizationId: string,
+  isLead?: boolean,
+  integrationAccess?: Record<string, unknown>,
+) {
   // Verify both agent and board belong to the same org
   const [agent, board] = await Promise.all([
     prisma.agent.findFirst({ where: { id: agentId, organizationId } }),
@@ -342,10 +498,19 @@ export async function addAgentToBoard(boardId: string, agentId: string, organiza
   ]);
   if (!agent) throw new Error('Agent not found');
   if (!board) throw new Error('Board not found');
+  const boardScope = objectRecord(objectRecord(board.successMetrics).integrationScope);
+  const access = normalizeAgentIntegrationAccess(integrationAccess, boardScope);
 
   return prisma.agent.update({
     where: { id: agentId, organizationId },
-    data: { boardId, isBoardLead: isLead ?? false },
+    data: {
+      boardId,
+      isBoardLead: isLead ?? false,
+      identityProfile: {
+        ...objectRecord(agent.identityProfile),
+        integrationAccess: access,
+      } as any,
+    },
   });
 }
 

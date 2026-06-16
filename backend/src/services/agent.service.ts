@@ -15,6 +15,43 @@ const PROVIDER_MODEL_MAP: Record<string, string> = {
 };
 const SYSTEM_AGENT_NAMES = ['__mother_chat__', ADMIN_AGENT_NAME];
 
+function normalizeVisibleAgentName(value: string) {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+async function ensureVisibleAgentNameAvailable(
+  organizationId: string,
+  displayName: string,
+  excludeAgentId?: string,
+) {
+  const normalized = normalizeVisibleAgentName(displayName);
+  if (!normalized) {
+    const err = new Error('Display Name is required') as Error & { statusCode?: number };
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const existingAgents = await prisma.agent.findMany({
+    where: {
+      organizationId,
+      name: { notIn: SYSTEM_AGENT_NAMES },
+      ...(excludeAgentId ? { id: { not: excludeAgentId } } : {}),
+    },
+    select: { id: true, displayName: true, board: { select: { name: true } } },
+  });
+  const duplicate = existingAgents.find(agent => (
+    normalizeVisibleAgentName(agent.displayName).toLowerCase() === normalized.toLowerCase()
+  ));
+  if (duplicate) {
+    const suffix = duplicate.board?.name ? ` in "${duplicate.board.name}"` : '';
+    const err = new Error(`Agent display name "${normalized}" is already used${suffix}. Use a unique sub-agent name for each group.`) as Error & { statusCode?: number };
+    err.statusCode = 409;
+    throw err;
+  }
+
+  return normalized;
+}
+
 async function resolveGatewayModel(organizationId: string): Promise<string | undefined> {
   const provider = await prisma.llmProvider.findFirst({
     where: { organizationId },
@@ -141,6 +178,7 @@ export async function createAgent(organizationId: string, data: {
   enabled?: boolean;
   gatewayId?: string;
 }) {
+  const displayName = await ensureVisibleAgentNameAvailable(organizationId, data.displayName);
   // Get org slug for gateway agent naming
   const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { slug: true } });
   const gatewayAgentName = org ? `${org.slug}--${data.name}` : data.name;
@@ -162,7 +200,7 @@ export async function createAgent(organizationId: string, data: {
     data: {
       organizationId,
       name: data.name,
-      displayName: data.displayName,
+      displayName,
       description: data.description,
       workspace: data.workspace ?? '',
       avatar: data.avatar ?? null,
@@ -352,7 +390,9 @@ export async function updateAgent(id: string, organizationId: string, data: {
   const runtimeIdentityProfile = await getRuntimeIdentityProfile(organizationId);
   const updateData: Record<string, unknown> = {};
   if (data.name !== undefined) updateData.name = data.name;
-  if (data.displayName !== undefined) updateData.displayName = data.displayName;
+  if (data.displayName !== undefined) {
+    updateData.displayName = await ensureVisibleAgentNameAvailable(organizationId, data.displayName, id);
+  }
   if (data.description !== undefined) updateData.description = data.description;
   if (data.workspace !== undefined) updateData.workspace = data.workspace;
   if (data.avatar !== undefined) updateData.avatar = data.avatar;

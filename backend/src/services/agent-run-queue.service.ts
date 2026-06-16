@@ -3,6 +3,7 @@ import type { Server as SocketIOServer } from 'socket.io';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import * as activityService from './activity.service.js';
+import { createAgentTaskAlert } from './alert.service.js';
 import * as llmProviderService from './llm-provider.service.js';
 import { getOrCreateAdminAgent } from './system-agent.service.js';
 import {
@@ -17,6 +18,18 @@ import {
   type NexusCodexEventType,
 } from './codex-cli.service.js';
 import { advanceProductionErrorPipelineAfterJob } from './production-error-pipeline.service.js';
+import {
+  LIVE_BLACKBOARD_SOURCE,
+  buildBlackboardTurnContext,
+  composeBlackboardAgentPrompt,
+  advanceBoardConversationRound,
+  finishBoardConversation,
+  getLiveBlackboardJobContext,
+  liveBlackboardCompletionSignal,
+  markBlackboardCursorSeen,
+  postBlackboardEvent,
+  upsertAgentRuntimeSession,
+} from './blackboard.service.js';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -53,6 +66,18 @@ type EnqueueLiveAgentWorkflowInput = {
   agents: Agent[];
   tasks: Task[];
   thread: Thread;
+};
+
+type EnqueueLiveBlackboardInput = {
+  organizationId: string;
+  board: Board;
+  conversationId: string;
+  goal: string;
+  agents: Agent[];
+  tasks: Task[];
+  thread: Thread;
+  round: number;
+  maxRounds: number;
 };
 
 let timer: NodeJS.Timeout | null = null;
@@ -95,6 +120,10 @@ function getLiveWorkflowContext(value: unknown) {
   const stepIndex = numberValue(context.stepIndex);
   const threadId = stringValue(context.threadId);
   const boardId = stringValue(context.boardId);
+  const previousJobId = stringValue(context.previousJobId) || null;
+  const previousAgentId = stringValue(context.previousAgentId) || null;
+  const currentAgentId = stringValue(context.currentAgentId) || null;
+  const nextAgentId = stringValue(context.nextAgentId) || null;
   const goal = stringValue(context.goal) || '';
   const trigger = stringValue(context.trigger) || goal;
   const stages = liveWorkflowStages(context.stages);
@@ -112,6 +141,10 @@ function getLiveWorkflowContext(value: unknown) {
     goal,
     trigger,
     stages,
+    previousJobId,
+    previousAgentId,
+    currentAgentId,
+    nextAgentId,
   };
 }
 
@@ -159,8 +192,8 @@ function liveWorkflowPrompt(options: {
     `Your stage work: ${options.stage.work}`,
     '',
     previousStages.length > 0
-      ? `Before acting, read the previous stage messages in the Nexus context packet. Previous stages: ${previousStages.map(stage => stage.displayName).join(' -> ')}.`
-      : 'You are the first agent. Convert the incoming event into an actionable diagnosis/handoff.',
+      ? `Read only PREVIOUS_WORKFLOW_OUTPUT in the Nexus context packet. That is the direct handoff from ${previousStages.at(-1)?.displayName || 'the previous agent'}. Do not redo earlier stages.`
+      : 'You are the first agent. Use the incoming event/request as the only user instruction and produce the planning handoff.',
     nextStage
       ? `Write your answer as a direct handoff to ${nextStage.displayName}. Include decisions, evidence, blockers, and exactly what ${nextStage.displayName} should do next.`
       : 'You are the final agent. Close the workflow with final status, evidence, artifacts changed or verified, and remaining risk.',
@@ -235,7 +268,8 @@ async function claimNextJob(filter: { organizationId?: string } = {}): Promise<A
 
 async function buildAgentRunContextPacket(job: AgentRunJobWithRelations) {
   const boardId = job.boardId;
-  const [messages, tasks, previousJobs, activities] = await Promise.all([
+  const liveWorkflowContext = getLiveWorkflowContext(job.contextPacket);
+  const [messages, tasks, previousJobs, activities, previousWorkflowJob, previousWorkflowMessage, mcpServers] = await Promise.all([
     prisma.message.findMany({
       where: { thread: { organizationId: job.organizationId } },
       orderBy: { createdAt: 'desc' },
@@ -282,6 +316,48 @@ async function buildAgentRunContextPacket(job: AgentRunJobWithRelations) {
       orderBy: { createdAt: 'desc' },
       take: 15,
     }),
+    liveWorkflowContext?.previousJobId
+      ? prisma.agentRunJob.findFirst({
+          where: {
+            id: liveWorkflowContext.previousJobId,
+            organizationId: job.organizationId,
+          },
+          include: {
+            agent: {
+              select: {
+                id: true,
+                displayName: true,
+              },
+            },
+          },
+        })
+      : Promise.resolve(null),
+    liveWorkflowContext?.previousAgentId && job.threadId
+      ? prisma.message.findFirst({
+          where: {
+            threadId: job.threadId,
+            senderId: liveWorkflowContext.previousAgentId,
+            receiverId: job.agentId,
+          },
+          orderBy: { createdAt: 'desc' },
+          include: {
+            sender: { select: { id: true, displayName: true, boardId: true } },
+            receiver: { select: { id: true, displayName: true, boardId: true } },
+          },
+        })
+      : Promise.resolve(null),
+    prisma.mcpServer.findMany({
+      where: {
+        agentId: job.agentId,
+        enabled: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        tools: {
+          orderBy: { name: 'asc' },
+        },
+      },
+    }),
   ]);
 
   const visibleMessages = boardId
@@ -295,6 +371,27 @@ async function buildAgentRunContextPacket(job: AgentRunJobWithRelations) {
 
   const latestJobSessionId = previousJobs.find(item => item.codexSessionId)?.codexSessionId ?? null;
   const resumeCodexSessionId = getAgentCodexSessionId(job.agent) || latestJobSessionId;
+  const liveBlackboardContext = getLiveBlackboardJobContext(job.contextPacket);
+  const liveBlackboard = liveBlackboardContext
+    ? await buildBlackboardTurnContext({
+        organizationId: job.organizationId,
+        boardId: liveBlackboardContext.boardId,
+        conversationId: liveBlackboardContext.conversationId,
+        agentId: job.agentId,
+      })
+	    : null;
+
+  const recentWorkflowMessages = previousWorkflowMessage
+    ? [{
+        id: previousWorkflowMessage.id,
+        threadId: previousWorkflowMessage.threadId,
+        from: previousWorkflowMessage.sender.displayName,
+        to: previousWorkflowMessage.receiver.displayName,
+        content: previousWorkflowMessage.content,
+        createdAt: previousWorkflowMessage.createdAt.toISOString(),
+        metadata: objectRecord(previousWorkflowMessage.metadata),
+      }]
+    : [];
 
   return {
     kind: 'nexus_agent_run_context',
@@ -313,6 +410,7 @@ async function buildAgentRunContextPacket(job: AgentRunJobWithRelations) {
       slug: job.board.slug,
       objective: job.board.objective,
       boardType: job.board.boardType,
+      integrationScope: objectRecord(objectRecord(job.board.successMetrics).integrationScope),
     } : null,
     agent: {
       id: job.agent.id,
@@ -321,7 +419,40 @@ async function buildAgentRunContextPacket(job: AgentRunJobWithRelations) {
       description: job.agent.description,
       currentTask: job.agent.currentTask,
       identityProfile: objectRecord(job.agent.identityProfile),
+      integrationAccess: objectRecord(objectRecord(job.agent.identityProfile).integrationAccess),
     },
+    mcpServers: mcpServers.map(server => ({
+      id: server.id,
+      name: server.name,
+      url: server.url,
+      transport: server.transport,
+      tools: server.tools.map(tool => ({
+        name: tool.name,
+        description: tool.description,
+      })),
+    })),
+    liveBlackboard,
+    liveWorkflow: liveWorkflowContext ? {
+      workflowId: liveWorkflowContext.workflowId,
+      stepIndex: liveWorkflowContext.stepIndex,
+      stepNumber: liveWorkflowContext.stepIndex + 1,
+      totalSteps: liveWorkflowContext.stages.length,
+      previousJobId: liveWorkflowContext.previousJobId,
+      previousAgentId: liveWorkflowContext.previousAgentId,
+      currentAgentId: liveWorkflowContext.currentAgentId,
+      nextAgentId: liveWorkflowContext.nextAgentId,
+      handoffMode: 'previous_output_only',
+    } : null,
+    previousWorkflowOutput: previousWorkflowJob ? {
+      jobId: previousWorkflowJob.id,
+      agentId: previousWorkflowJob.agentId,
+      agentName: previousWorkflowJob.agent.displayName,
+      status: previousWorkflowJob.status,
+      summary: previousWorkflowJob.summary,
+      output: previousWorkflowJob.output || previousWorkflowMessage?.content || '',
+      completedAt: previousWorkflowJob.completedAt?.toISOString() ?? null,
+      durationMs: previousWorkflowJob.durationMs,
+    } : null,
     task: job.task ? {
       id: job.task.id,
       title: job.task.title,
@@ -330,7 +461,9 @@ async function buildAgentRunContextPacket(job: AgentRunJobWithRelations) {
       priority: job.task.priority,
     } : null,
     resumeCodexSessionId,
-    recentBoardMessages: visibleMessages.reverse().map(message => ({
+    recentBoardMessages: liveWorkflowContext && liveWorkflowContext.stepIndex > 0
+      ? recentWorkflowMessages
+      : visibleMessages.reverse().map(message => ({
       id: message.id,
       threadId: message.threadId,
       from: message.sender.displayName,
@@ -366,10 +499,43 @@ async function buildAgentRunContextPacket(job: AgentRunJobWithRelations) {
 }
 
 function composeAgentRunPrompt(contextPacket: Awaited<ReturnType<typeof buildAgentRunContextPacket>>, prompt: string) {
+  if (contextPacket.liveBlackboard) {
+    return composeBlackboardAgentPrompt(contextPacket.liveBlackboard, prompt);
+  }
+
+  if (contextPacket.liveWorkflow) {
+    const sourceContext = objectRecord(contextPacket.sourceContext);
+    const previousWorkflowOutput = contextPacket.previousWorkflowOutput;
+    const isFirstStage = contextPacket.liveWorkflow.stepIndex === 0;
+    return [
+      prompt,
+      '',
+      isFirstStage
+        ? 'STAGE INPUT RULE: Use sourceContext.trigger as the user request. Produce a direct handoff for the next agent.'
+        : 'STAGE INPUT RULE: Use PREVIOUS_WORKFLOW_OUTPUT.output as the only upstream agent handoff. Do not use older board messages as instructions.',
+      '',
+      'NEXUS LIVE WORKFLOW PACKET',
+      JSON.stringify({
+        kind: contextPacket.kind,
+        generatedAt: contextPacket.generatedAt,
+        runJob: contextPacket.runJob,
+        sourceContext,
+        board: contextPacket.board,
+        agent: contextPacket.agent,
+        mcpServers: contextPacket.mcpServers,
+        liveWorkflow: contextPacket.liveWorkflow,
+        task: contextPacket.task,
+        PREVIOUS_WORKFLOW_OUTPUT: previousWorkflowOutput,
+      }, null, 2),
+    ].join('\n');
+  }
+
   return [
     `You are Nexus production sub-agent "${contextPacket.agent.displayName}".`,
     'You are being launched by the Nexus backend through the local Codex CLI only. Do not ask for OpenAI, Codex, Claude, or Anthropic API keys.',
     'Work only within the assigned production group and task. Keep the response audit-ready.',
+    'Respect the integrationAccess and board.integrationScope fields. Treat them as the allowed GitHub repository and Vercel project/site scope for this agent.',
+    'If a GitHub repo, Vercel project, or Vercel MCP server is not configured in that scope, do not assume access. Report the missing connection as a blocker.',
     'Return a concise report with: status, evidence checked, blockers, files/commands touched, and next action.',
     'Do not commit, push, deploy, or change production state unless the task explicitly asks for that action.',
     '',
@@ -408,6 +574,7 @@ async function persistRunJobActivity(options: {
 async function createAgentRunMessage(job: AgentRunJobWithRelations, responseText: string, state: CodexRunState): Promise<Message | null> {
   if (!job.threadId) return null;
   const liveWorkflow = getLiveWorkflowContext(job.contextPacket);
+  const liveBlackboard = getLiveBlackboardJobContext(job.contextPacket);
   const nextLiveStage = liveWorkflow?.stages[liveWorkflow.stepIndex + 1];
   const leadAgent = job.boardId
     ? await prisma.agent.findFirst({
@@ -432,7 +599,7 @@ async function createAgentRunMessage(job: AgentRunJobWithRelations, responseText
         role: 'assistant',
         runtime: 'codex-cli',
         conversationKind: 'agent_agent',
-        edgeSemantic: liveWorkflow || (leadAgent && leadAgent.id !== job.agentId) ? 'agent_to_agent' : 'agent_self_report',
+        edgeSemantic: liveBlackboard || liveWorkflow || (leadAgent && leadAgent.id !== job.agentId) ? 'agent_to_agent' : 'agent_self_report',
         boardId: job.boardId,
         boardName: job.board?.name ?? null,
         assignedTaskId: job.taskId,
@@ -448,7 +615,12 @@ async function createAgentRunMessage(job: AgentRunJobWithRelations, responseText
           workflowStepNumber: liveWorkflow.stepIndex + 1,
           nextAgentId: nextLiveStage?.agentId ?? null,
         }),
-        source: liveWorkflow ? 'live_agent_workflow' : 'agent_run_worker',
+        ...(liveBlackboard && {
+          conversationId: liveBlackboard.conversationId,
+          blackboardRound: liveBlackboard.round,
+          maxRounds: liveBlackboard.maxRounds,
+        }),
+        source: liveBlackboard ? LIVE_BLACKBOARD_SOURCE : liveWorkflow ? 'live_agent_workflow' : 'agent_run_worker',
       } as any,
     },
   });
@@ -510,6 +682,269 @@ async function createLiveWorkflowRunJob(options: {
         queuedAt: new Date().toISOString(),
       } as any,
     },
+  });
+}
+
+async function createLiveBlackboardRunJob(options: {
+  organizationId: string;
+  board: Pick<Board, 'id' | 'name'>;
+  thread: Pick<Thread, 'id'>;
+  conversationId: string;
+  goal: string;
+  agent: Agent;
+  agentIds: string[];
+  taskId: string | null;
+  taskIdsByAgentId: Record<string, string | null>;
+  round: number;
+  maxRounds: number;
+}) {
+  const prompt = [
+    `LIVE BLACKBOARD ROUND ${options.round}/${options.maxRounds}`,
+    `Goal: ${options.goal}`,
+    `Agent: ${options.agent.displayName}`,
+    'Read the blackboard context packet, reply only as this agent, and keep the turn short.',
+  ].join('\n');
+
+  return prisma.agentRunJob.create({
+    data: {
+      organizationId: options.organizationId,
+      boardId: options.board.id,
+      agentId: options.agent.id,
+      taskId: options.taskId,
+      threadId: options.thread.id,
+      prompt,
+      status: 'QUEUED',
+      contextPacket: {
+        source: LIVE_BLACKBOARD_SOURCE,
+        conversationId: options.conversationId,
+        boardId: options.board.id,
+        boardName: options.board.name,
+        threadId: options.thread.id,
+        goal: options.goal,
+        round: options.round,
+        maxRounds: options.maxRounds,
+        agentId: options.agent.id,
+        agentIds: options.agentIds,
+        taskIdsByAgentId: options.taskIdsByAgentId,
+        queuedAt: new Date().toISOString(),
+      } as any,
+    },
+  });
+}
+
+export async function enqueueLiveBlackboardRoundJobs(input: EnqueueLiveBlackboardInput) {
+  const agents = input.agents.slice(0, 4);
+  const taskIdsByAgentId = Object.fromEntries(
+    agents.map(agent => [
+      agent.id,
+      input.tasks.find(task => task.agentId === agent.id)?.id ?? null,
+    ]),
+  );
+  const agentIds = agents.map(agent => agent.id);
+
+  const jobs = await Promise.all(agents.map(agent => createLiveBlackboardRunJob({
+    organizationId: input.organizationId,
+    board: input.board,
+    thread: input.thread,
+    conversationId: input.conversationId,
+    goal: input.goal,
+    agent,
+    agentIds,
+    taskId: taskIdsByAgentId[agent.id] ?? null,
+    taskIdsByAgentId,
+    round: input.round,
+    maxRounds: input.maxRounds,
+  })));
+
+  await Promise.all(jobs.map(job => activityService.createActivity(input.organizationId, {
+    agentId: job.agentId,
+    type: 'TASK_START',
+    message: `Queued live blackboard round ${input.round}/${input.maxRounds} for ${input.board.name}`,
+    metadata: {
+      runtime: 'codex-cli',
+      source: LIVE_BLACKBOARD_SOURCE,
+      conversationId: input.conversationId,
+      agentRunJobId: job.id,
+      boardId: input.board.id,
+      taskId: job.taskId,
+      threadId: input.thread.id,
+      round: input.round,
+    },
+  }).catch(err => logger.warn({ err, jobId: job.id }, 'Failed to persist live blackboard queue activity'))));
+
+  return jobs;
+}
+
+async function advanceLiveBlackboardAfterJob(
+  job: AgentRunJobWithRelations,
+  responseText: string,
+  state: CodexRunState,
+  options: { io?: SocketIOServer } = {},
+) {
+  const liveBlackboard = getLiveBlackboardJobContext(job.contextPacket);
+  if (!liveBlackboard || !job.board || !job.threadId) return;
+
+  await postBlackboardEvent({
+    organizationId: job.organizationId,
+    boardId: liveBlackboard.boardId,
+    conversationId: liveBlackboard.conversationId,
+    senderAgentId: job.agentId,
+    runJobId: job.id,
+    taskId: job.taskId,
+    type: 'agent_message',
+    content: responseText,
+    metadata: {
+      source: LIVE_BLACKBOARD_SOURCE,
+      round: liveBlackboard.round,
+      agentRunJobId: job.id,
+      codexSessionId: state.codexSessionId,
+      nexusSessionId: job.nexusSessionId,
+      durationMs: job.durationMs,
+    },
+    io: options.io,
+  });
+
+  await markBlackboardCursorSeen({
+    organizationId: job.organizationId,
+    boardId: liveBlackboard.boardId,
+    conversationId: liveBlackboard.conversationId,
+    agentId: job.agentId,
+  }).catch(err => logger.warn({ err, jobId: job.id }, 'Failed to update live blackboard cursor'));
+
+  await upsertAgentRuntimeSession({
+    organizationId: job.organizationId,
+    boardId: liveBlackboard.boardId,
+    agentId: job.agentId,
+    codexSessionId: state.codexSessionId,
+    status: 'IDLE',
+    metadata: {
+      source: LIVE_BLACKBOARD_SOURCE,
+      conversationId: liveBlackboard.conversationId,
+      lastAgentRunJobId: job.id,
+      lastRound: liveBlackboard.round,
+    },
+  }).catch(err => logger.warn({ err, jobId: job.id }, 'Failed to mark live blackboard runtime session idle'));
+
+  const allConversationJobs = await prisma.agentRunJob.findMany({
+    where: {
+      organizationId: job.organizationId,
+      boardId: liveBlackboard.boardId,
+      threadId: liveBlackboard.threadId,
+    },
+    select: {
+      id: true,
+      agentId: true,
+      status: true,
+      contextPacket: true,
+    },
+  });
+  const roundJobs = allConversationJobs.filter(item => (
+    getLiveBlackboardJobContext(item.contextPacket)?.conversationId === liveBlackboard.conversationId
+    && getLiveBlackboardJobContext(item.contextPacket)?.round === liveBlackboard.round
+  ));
+  const terminalStatuses = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
+  if (roundJobs.length < liveBlackboard.agentIds.length || roundJobs.some(item => !terminalStatuses.has(item.status))) {
+    return;
+  }
+
+  const roundAdvance = await advanceBoardConversationRound({
+    conversationId: liveBlackboard.conversationId,
+    expectedCurrentRound: liveBlackboard.round - 1,
+  });
+  if (roundAdvance.count !== 1) return;
+
+  const roundEvents = await prisma.blackboardEvent.findMany({
+    where: {
+      organizationId: job.organizationId,
+      boardId: liveBlackboard.boardId,
+      conversationId: liveBlackboard.conversationId,
+      type: 'agent_message',
+    },
+    orderBy: { createdAt: 'desc' },
+    take: liveBlackboard.agentIds.length * liveBlackboard.round + 8,
+  });
+  const roundHasCompletionSignal = roundEvents.some(event => {
+    const metadata = objectRecord(event.metadata);
+    return numberValue(metadata.round) === liveBlackboard.round && liveBlackboardCompletionSignal(event.content);
+  });
+
+  if (roundHasCompletionSignal || liveBlackboard.round >= liveBlackboard.maxRounds) {
+    const reason = roundHasCompletionSignal
+      ? `A live blackboard agent emitted FINAL_DECISION in round ${liveBlackboard.round}.`
+      : `Reached max live blackboard rounds (${liveBlackboard.maxRounds}).`;
+    await finishBoardConversation({
+      organizationId: job.organizationId,
+      boardId: liveBlackboard.boardId,
+      conversationId: liveBlackboard.conversationId,
+      reason,
+      io: options.io,
+    });
+    await prisma.boardMemory.create({
+      data: {
+        boardId: liveBlackboard.boardId,
+        content: `${job.board.name} live blackboard ${liveBlackboard.conversationId} completed. Reason: ${reason}`,
+        tags: ['live-blackboard', 'agent-agent', 'mother-chat', 'completed'] as any,
+        isChat: true,
+        source: LIVE_BLACKBOARD_SOURCE,
+      },
+    }).catch(() => {});
+    options.io?.to(`org:${job.organizationId}`).emit('board:liveBlackboardCompleted', {
+      board: job.board,
+      conversationId: liveBlackboard.conversationId,
+      reason,
+      timestamp: new Date().toISOString(),
+    });
+    return;
+  }
+
+  const [conversation, agents, tasks] = await Promise.all([
+    prisma.boardConversation.findFirst({
+      where: {
+        id: liveBlackboard.conversationId,
+        organizationId: job.organizationId,
+        boardId: liveBlackboard.boardId,
+        status: 'RUNNING',
+      },
+    }),
+    prisma.agent.findMany({
+      where: {
+        organizationId: job.organizationId,
+        id: { in: liveBlackboard.agentIds },
+        enabled: true,
+      },
+    }),
+    prisma.task.findMany({
+      where: {
+        organizationId: job.organizationId,
+        id: { in: Object.values(liveBlackboard.taskIdsByAgentId).filter((taskId): taskId is string => Boolean(taskId)) },
+      },
+    }),
+  ]);
+  if (!conversation) return;
+
+  const orderedAgents = liveBlackboard.agentIds
+    .map(agentId => agents.find(agent => agent.id === agentId))
+    .filter((agent): agent is Agent => Boolean(agent));
+  if (orderedAgents.length === 0) return;
+
+  const nextJobs = await enqueueLiveBlackboardRoundJobs({
+    organizationId: job.organizationId,
+    board: job.board,
+    conversationId: liveBlackboard.conversationId,
+    goal: liveBlackboard.goal,
+    agents: orderedAgents,
+    tasks,
+    thread: { id: job.threadId } as Thread,
+    round: liveBlackboard.round + 1,
+    maxRounds: liveBlackboard.maxRounds,
+  });
+
+  options.io?.to(`org:${job.organizationId}`).emit('board:liveBlackboardAdvanced', {
+    board: job.board,
+    conversationId: liveBlackboard.conversationId,
+    round: liveBlackboard.round + 1,
+    runJobs: nextJobs,
+    timestamp: new Date().toISOString(),
   });
 }
 
@@ -748,6 +1183,9 @@ async function completeJob(
   io?.to(`org:${job.organizationId}`).emit('agent:updated', { id: job.agentId, status: 'IDLE' });
   if (job.taskId) io?.to(`org:${job.organizationId}`).emit('task:update', { id: job.taskId, status: 'REVIEW' });
 
+  await advanceLiveBlackboardAfterJob(job, responseText, state, { io })
+    .catch(err => logger.warn({ err, jobId: job.id }, 'Failed to advance live blackboard conversation'));
+
   await advanceLiveAgentWorkflowAfterJob(job, responseText, { io })
     .catch(err => logger.warn({ err, jobId: job.id }, 'Failed to advance live agent workflow'));
 
@@ -811,6 +1249,18 @@ async function failJob(
     },
   }).catch(() => {});
 
+  await createAgentTaskAlert(job.organizationId, {
+    agentId: job.agentId,
+    boardId: job.boardId,
+    taskId: job.taskId,
+    runJobId: job.id,
+    agentName: job.agent.displayName,
+    boardName: job.board?.name,
+    taskTitle: job.task?.title,
+    errorMessage,
+    durationMs,
+  }, io).catch(err => logger.warn({ err, jobId: job.id }, 'Failed to create agent task alert'));
+
   await prisma.agent.update({
     where: { id: job.agentId },
     data: { status: 'ERROR', lastHeartbeat: new Date() },
@@ -872,6 +1322,20 @@ async function processJob(job: AgentRunJobWithRelations, io?: SocketIOServer) {
       } as any,
     },
   });
+  const liveBlackboardRun = getLiveBlackboardJobContext(job.contextPacket);
+  if (liveBlackboardRun) {
+    await upsertAgentRuntimeSession({
+      organizationId: job.organizationId,
+      boardId: liveBlackboardRun.boardId,
+      agentId: job.agentId,
+      status: 'RUNNING',
+      metadata: {
+        agentRunJobId: job.id,
+        conversationId: liveBlackboardRun.conversationId,
+        round: liveBlackboardRun.round,
+      },
+    }).catch(err => logger.warn({ err, jobId: job.id }, 'Failed to mark live blackboard runtime session running'));
+  }
   io?.to(`org:${job.organizationId}`).emit('agent:updated', { id: job.agentId, status: 'ONLINE', currentTask: job.prompt });
 
   const contextPacket = await buildAgentRunContextPacket(job);

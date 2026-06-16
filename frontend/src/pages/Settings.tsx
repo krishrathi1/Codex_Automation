@@ -3,9 +3,9 @@ import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn, timeAgo } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
-import type { Organization, OrgMember, OrgApiKey } from '@/types';
+import type { GithubRepositorySummary, Organization, OrgMember, OrgApiKey, PlatformIntegrationSettings, VercelProjectSummary } from '@/types';
 
-type Tab = 'organization' | 'members' | 'api-keys';
+type Tab = 'organization' | 'members' | 'api-keys' | 'integrations';
 type OrgRole = 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER';
 
 const roleBadgeStyles: Record<OrgRole, string> = {
@@ -18,6 +18,46 @@ const roleBadgeStyles: Record<OrgRole, string> = {
 const ALL_ROLES: OrgRole[] = ['OWNER', 'ADMIN', 'MEMBER', 'VIEWER'];
 const INVITE_ROLES: OrgRole[] = ['ADMIN', 'MEMBER', 'VIEWER'];
 
+const EMPTY_GITHUB_SETTINGS: PlatformIntegrationSettings['github'] = {
+  configured: false,
+  tokenMasked: null,
+  updatedAt: null,
+};
+
+const EMPTY_VERCEL_SETTINGS: PlatformIntegrationSettings['vercel'] = {
+  configured: false,
+  tokenMasked: null,
+  teamId: null,
+  updatedAt: null,
+};
+
+function normalizeIntegrationSettings(
+  settings: Partial<PlatformIntegrationSettings> | null | undefined,
+): PlatformIntegrationSettings {
+  return {
+    github: {
+      ...EMPTY_GITHUB_SETTINGS,
+      ...(settings?.github ?? {}),
+    },
+    vercel: {
+      ...EMPTY_VERCEL_SETTINGS,
+      ...(settings?.vercel ?? {}),
+    },
+  };
+}
+
+function validateTokenInput(provider: 'GitHub' | 'Vercel', value: string) {
+  const token = value.trim();
+  if (!token) return null;
+  if (token.includes('...') || token.includes('…') || token.includes('*')) {
+    return `${provider} token looks like a masked or shortened value. Paste the raw token, not the display text.`;
+  }
+  if (!/^[\x21-\x7E]+$/.test(token)) {
+    return `${provider} token contains unsupported characters. Paste the raw token only.`;
+  }
+  return null;
+}
+
 export function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>('organization');
   const { user, orgRole } = useAuthStore();
@@ -29,6 +69,7 @@ export function Settings() {
     { key: 'organization', label: 'Organization' },
     { key: 'members', label: 'Members' },
     { key: 'api-keys', label: 'API Keys' },
+    { key: 'integrations', label: 'Integrations' },
   ];
 
   return (
@@ -62,6 +103,7 @@ export function Settings() {
         <MembersTab currentUserId={user?.id ?? ''} isAdmin={isAdmin} isOwner={isOwner} />
       )}
       {activeTab === 'api-keys' && <ApiKeysTab isAdmin={isAdmin} />}
+      {activeTab === 'integrations' && <IntegrationsTab isAdmin={isAdmin} />}
     </div>
   );
 }
@@ -191,6 +233,258 @@ function OrganizationTab() {
           </div>
         </form>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Integrations Tab
+// ---------------------------------------------------------------------------
+
+function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
+  const [settings, setSettings] = useState<PlatformIntegrationSettings | null>(null);
+  const [githubAccessToken, setGithubAccessToken] = useState('');
+  const [vercelAccessToken, setVercelAccessToken] = useState('');
+  const [vercelTeamId, setVercelTeamId] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [checking, setChecking] = useState<'github' | 'vercel' | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const fetchSettings = useCallback(async () => {
+    try {
+      const data = await api.org.integrationSettings();
+      const normalized = normalizeIntegrationSettings(data);
+      setSettings(normalized);
+      setVercelTeamId(normalized.vercel.teamId || '');
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to load integration settings' });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSettings();
+  }, [fetchSettings]);
+
+  const handleSave = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setMessage(null);
+    const githubTokenError = validateTokenInput('GitHub', githubAccessToken);
+    const vercelTokenError = validateTokenInput('Vercel', vercelAccessToken);
+    if (githubTokenError || vercelTokenError) {
+      setMessage({ type: 'error', text: githubTokenError || vercelTokenError || 'Invalid token' });
+      setSaving(false);
+      return;
+    }
+    try {
+      const updated = await api.org.updateIntegrationSettings({
+        githubAccessToken: githubAccessToken.trim() || undefined,
+        vercelAccessToken: vercelAccessToken.trim() || undefined,
+        vercelTeamId: vercelTeamId.trim() || null,
+      });
+      setSettings(normalizeIntegrationSettings(updated));
+      setGithubAccessToken('');
+      setVercelAccessToken('');
+      setMessage({ type: 'success', text: 'Integration settings saved' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to save integration settings' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCheckGithub = async () => {
+    setChecking('github');
+    setMessage(null);
+    try {
+      const repos = await api.org.githubRepos() as GithubRepositorySummary[];
+      setMessage({ type: 'success', text: `GitHub connected: ${repos.length} repositories found` });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'GitHub check failed' });
+    } finally {
+      setChecking(null);
+    }
+  };
+
+  const handleCheckVercel = async () => {
+    setChecking('vercel');
+    setMessage(null);
+    try {
+      const projects = await api.org.vercelProjects() as VercelProjectSummary[];
+      setMessage({ type: 'success', text: `Vercel connected: ${projects.length} projects found` });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Vercel check failed' });
+    } finally {
+      setChecking(null);
+    }
+  };
+
+  const handleClearGithub = async () => {
+    if (!githubSettings.configured || saving) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      const updated = await api.org.updateIntegrationSettings({
+        clearGithubAccessToken: true,
+      });
+      setSettings(normalizeIntegrationSettings(updated));
+      setGithubAccessToken('');
+      setMessage({ type: 'success', text: 'GitHub token cleared' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to clear GitHub token' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleClearVercel = async () => {
+    if (!vercelSettings.configured || saving) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      const updated = await api.org.updateIntegrationSettings({
+        clearVercelAccessToken: true,
+        vercelTeamId: vercelTeamId.trim() || null,
+      });
+      setSettings(normalizeIntegrationSettings(updated));
+      setVercelAccessToken('');
+      setMessage({ type: 'success', text: 'Vercel token cleared' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to clear Vercel token' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="text-gray-500 text-sm">Loading integrations...</div>;
+  }
+
+  const githubSettings = settings?.github ?? EMPTY_GITHUB_SETTINGS;
+  const vercelSettings = settings?.vercel ?? EMPTY_VERCEL_SETTINGS;
+
+  return (
+    <div className="max-w-3xl">
+      <form onSubmit={handleSave} className="rounded-xl border border-white/5 bg-surface-850 p-5">
+        <div className="mb-5">
+          <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
+            Repository and deployment access
+          </h3>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="rounded-lg border border-white/5 bg-surface-900 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-semibold text-white">GitHub</h4>
+                <p className="text-xs text-gray-500">{githubSettings.configured ? githubSettings.tokenMasked : 'Not connected'}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {githubSettings.configured && (
+                  <button
+                    type="button"
+                    onClick={handleClearGithub}
+                    disabled={!isAdmin || saving}
+                    className="rounded-lg border border-red-500/20 px-3 py-1.5 text-xs text-red-300 transition-colors hover:bg-red-500/10 disabled:opacity-50"
+                  >
+                    Clear
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleCheckGithub}
+                  disabled={!githubSettings.configured || checking === 'github'}
+                  className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:bg-white/5 disabled:opacity-50"
+                >
+                  {checking === 'github' ? 'Checking...' : 'Check'}
+                </button>
+              </div>
+            </div>
+            <label className="mb-1 block text-xs font-medium text-gray-400">Access token</label>
+            <input
+              type="password"
+              value={githubAccessToken}
+              onChange={event => setGithubAccessToken(event.target.value)}
+              disabled={!isAdmin}
+              placeholder={githubSettings.configured ? 'Paste a new token to replace' : 'ghp_...'}
+              className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
+            />
+          </div>
+
+          <div className="rounded-lg border border-white/5 bg-surface-900 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-semibold text-white">Vercel</h4>
+                <p className="text-xs text-gray-500">{vercelSettings.configured ? vercelSettings.tokenMasked : 'Not connected'}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {vercelSettings.configured && (
+                  <button
+                    type="button"
+                    onClick={handleClearVercel}
+                    disabled={!isAdmin || saving}
+                    className="rounded-lg border border-red-500/20 px-3 py-1.5 text-xs text-red-300 transition-colors hover:bg-red-500/10 disabled:opacity-50"
+                  >
+                    Clear
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleCheckVercel}
+                  disabled={!vercelSettings.configured || checking === 'vercel'}
+                  className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:bg-white/5 disabled:opacity-50"
+                >
+                  {checking === 'vercel' ? 'Checking...' : 'Check'}
+                </button>
+              </div>
+            </div>
+            <label className="mb-1 block text-xs font-medium text-gray-400">Access token</label>
+            <input
+              type="password"
+              value={vercelAccessToken}
+              onChange={event => setVercelAccessToken(event.target.value)}
+              disabled={!isAdmin}
+              placeholder={vercelSettings.configured ? 'Paste a new token to replace' : 'vercel token'}
+              className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
+            />
+            <label className="mb-1 mt-3 block text-xs font-medium text-gray-400">Team ID (optional)</label>
+            <input
+              value={vercelTeamId}
+              onChange={event => setVercelTeamId(event.target.value)}
+              disabled={!isAdmin}
+              placeholder="Leave blank to use the token's default scope"
+              className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
+            />
+            <p className="mt-2 text-xs text-gray-500">
+              Use this only when you need to force Nexus to a specific Vercel team. If the token already has the right default scope, leave it empty.
+            </p>
+          </div>
+        </div>
+
+        {message && (
+          <div className={cn(
+            'mt-4 rounded-lg border px-3 py-2 text-sm',
+            message.type === 'success'
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+              : 'border-red-500/30 bg-red-500/10 text-red-300',
+          )}>
+            {message.text}
+          </div>
+        )}
+
+        <div className="mt-5 flex justify-end">
+          <button
+            type="submit"
+            disabled={!isAdmin || saving}
+            className="rounded-lg bg-nexus-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-nexus-500 disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : 'Save integrations'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

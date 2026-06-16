@@ -5,8 +5,9 @@ import path from 'path';
 import { prisma } from '../lib/prisma.js';
 import { cleanupTestData, createTestUser } from './setup.js';
 import { buildMotherChatContext } from '../services/mother-chat.service.js';
-import { dispatchBoardTaskToAgents, startBoardAgentCollaboration } from '../services/board-collaboration.service.js';
+import { dispatchBoardTaskToAgents, startBoardAgentCollaboration, startLiveBlackboardConversation } from '../services/board-collaboration.service.js';
 import { processNextAgentRunJobForTest } from '../services/agent-run-queue.service.js';
+import { getLiveBlackboardJobContext } from '../services/blackboard.service.js';
 
 describe('agent run queue service', () => {
   const originalCodexCommand = process.env.CODEX_COMMAND;
@@ -144,5 +145,101 @@ if (args[0] === 'exec') {
     expect(context.messages.map(message => message.content).join('\n')).toContain('Mock agent report');
     expect(contextText).toContain('Agent run queue');
     expect(contextText).toContain('status=COMPLETED');
+  });
+
+  it('queues live blackboard turns and exposes agent-to-agent events to Mother Chat context', async () => {
+    await prisma.agentRunJob.deleteMany({ where: { organizationId: orgId, status: 'QUEUED' } });
+
+    const board = await prisma.board.create({
+      data: {
+        organizationId: orgId,
+        name: 'Live Blackboard Production',
+        slug: `live-blackboard-production-${Date.now()}`,
+        description: 'Live blackboard test room',
+        objective: 'Prove short-turn agents can talk through a shared blackboard',
+        maxAgents: 4,
+      },
+    });
+
+    const live = await startLiveBlackboardConversation(orgId, board.id, {
+      goal: 'Reach a production decision through live agent discussion.',
+      trigger: 'Each agent should state its position, answer peer objections, and move toward a final decision.',
+      maxRounds: 2,
+      agents: [
+        {
+          displayName: 'Intake Agent',
+          role: 'Requirement intake',
+          work: 'State the user requirement and ask one clarifying question.',
+          isLead: true,
+        },
+        {
+          displayName: 'Planner Agent',
+          role: 'Planning',
+          work: 'Answer intake and propose the smallest implementation plan.',
+        },
+        {
+          displayName: 'Reviewer Agent',
+          role: 'Review',
+          work: 'Challenge the plan and name the risk.',
+        },
+        {
+          displayName: 'Closer Agent',
+          role: 'Decision closer',
+          work: 'Track tradeoffs and prepare final decision language.',
+        },
+        {
+          displayName: 'Overflow Agent',
+          role: 'Should be capped out',
+          work: 'This agent should not be included.',
+        },
+      ],
+    });
+
+    expect(live.agents).toHaveLength(4);
+    expect(live.runJobs).toHaveLength(4);
+    expect(live.runJobs.every(job => job.status === 'QUEUED')).toBe(true);
+
+    for (let i = 0; i < 4; i += 1) {
+      await processNextAgentRunJobForTest({ organizationId: orgId });
+    }
+
+    const events = await prisma.blackboardEvent.findMany({
+      where: {
+        organizationId: orgId,
+        boardId: board.id,
+        conversationId: live.conversationId,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(events.some(event => event.type === 'admin_task')).toBe(true);
+    expect(events.filter(event => event.type === 'agent_message')).toHaveLength(4);
+    expect(events.map(event => event.content).join('\n')).toContain('Mock agent report');
+
+    const conversation = await prisma.boardConversation.findUniqueOrThrow({
+      where: { id: live.conversationId },
+    });
+    expect(conversation.status).toBe('RUNNING');
+    expect(conversation.currentRound).toBe(1);
+
+    const allConversationJobs = await prisma.agentRunJob.findMany({
+      where: {
+        organizationId: orgId,
+        boardId: board.id,
+        threadId: live.thread.id,
+      },
+    });
+    const liveConversationJobs = allConversationJobs.filter(job => (
+      getLiveBlackboardJobContext(job.contextPacket)?.conversationId === live.conversationId
+    ));
+    expect(liveConversationJobs).toHaveLength(8);
+    expect(liveConversationJobs.filter(job => job.status === 'QUEUED')).toHaveLength(4);
+
+    const { context, contextText } = await buildMotherChatContext(orgId, { boardId: board.id });
+    expect(context.counts.activeBlackboardConversations).toBe(1);
+    expect(context.counts.blackboardEvents).toBeGreaterThanOrEqual(5);
+    expect(context.blackboardConversations?.some(item => item.id === live.conversationId)).toBe(true);
+    expect(context.blackboardEvents?.some(event => event.type === 'agent_message')).toBe(true);
+    expect(contextText).toContain('Live blackboard conversations');
+    expect(contextText).toContain('Live blackboard events');
   });
 });

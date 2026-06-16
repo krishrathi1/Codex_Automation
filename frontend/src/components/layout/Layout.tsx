@@ -1,18 +1,22 @@
-import { Outlet } from 'react-router-dom';
+import { Link, Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { getSocket, connectSocket, disconnectSocket } from '../../lib/socket';
 import { useAuthStore } from '../../stores/auth-store';
 import { useAgentStore } from '../../stores/agent-store';
 import { useActivityStore } from '../../stores/activity-store';
 import { useTaskStore } from '../../stores/task-store';
-import type { Activity, Agent, Task } from '../../types';
+import type { Activity, Agent, AlertEvent, Task } from '../../types';
 
 export function Layout() {
-  const { fetchAgents, fetchStats, updateAgent } = useAgentStore();
+  const { fetchAgents, fetchStats, updateAgent, removeAgent: removeAgentFromStore } = useAgentStore();
   const addActivity = useActivityStore((s) => s.addActivity);
   const { setTask, removeTask } = useTaskStore();
   const { accessToken, isAuthenticated } = useAuthStore();
+  const [liveAlerts, setLiveAlerts] = useState<AlertEvent[]>([]);
+  const dismissAlert = (id: string) => {
+    setLiveAlerts((prev) => prev.filter((alert) => alert.id !== id));
+  };
 
   useEffect(() => {
     fetchAgents();
@@ -40,6 +44,11 @@ export function Layout() {
   useEffect(() => {
     const s = getSocket();
 
+    const handleNewAlert = (alert: AlertEvent) => {
+      setLiveAlerts((prev) => [alert, ...prev.filter((item) => item.id !== alert.id)].slice(0, 3));
+      window.setTimeout(() => dismissAlert(alert.id), 12000);
+    };
+
     s.on('agent:status', (agent: Agent) => {
       updateAgent(agent);
     });
@@ -66,6 +75,13 @@ export function Layout() {
       fetchStats();
     });
 
+    s.on('agent:deleted', ({ id }: { id: string }) => {
+      removeAgentFromStore(id);
+      fetchStats();
+    });
+
+    s.on('alert:new', handleNewAlert);
+
     return () => {
       s.off('agent:status');
       s.off('agent:heartbeat');
@@ -73,8 +89,10 @@ export function Layout() {
       s.off('task:update');
       s.off('task:delete');
       s.off('agent:message');
+      s.off('agent:deleted');
+      s.off('alert:new', handleNewAlert);
     };
-  }, [updateAgent, addActivity, setTask, removeTask]);
+  }, [updateAgent, addActivity, setTask, removeTask, removeAgentFromStore, fetchStats]);
 
   return (
     <div className="min-h-screen">
@@ -82,6 +100,45 @@ export function Layout() {
       <main className="ml-64 px-8 pb-8">
         <Outlet />
       </main>
+      {liveAlerts.length > 0 && (
+        <div className="fixed right-6 top-4 z-50 w-[420px] max-w-[calc(100vw-2rem)] space-y-3">
+          {liveAlerts.map((alert) => (
+            <div
+              key={alert.id}
+              className="rounded-xl border border-red-500/30 bg-surface-850 p-4 shadow-2xl shadow-black/30"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-red-400" />
+                    <span className="text-xs font-semibold uppercase tracking-wider text-red-200">
+                      Live alert
+                    </span>
+                    <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-gray-400">
+                      {alert.severity}
+                    </span>
+                  </div>
+                  <p className="mt-2 line-clamp-3 text-sm leading-5 text-gray-200">{alert.message}</p>
+                  <Link
+                    to="/alerts"
+                    className="mt-3 inline-flex text-xs font-medium text-nexus-300 hover:text-nexus-200"
+                  >
+                    Review alerts
+                  </Link>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => dismissAlert(alert.id)}
+                  className="text-lg leading-none text-gray-500 hover:text-white"
+                  aria-label="Dismiss alert"
+                >
+                  &times;
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

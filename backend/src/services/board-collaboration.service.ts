@@ -3,8 +3,9 @@ import type { Agent, AgentRunJob, Board, Message, Task, Thread } from '@prisma/c
 import { prisma } from '../lib/prisma.js';
 import * as activityService from './activity.service.js';
 import * as agentService from './agent.service.js';
-import { enqueueBoardAgentRunJobs, enqueueLiveAgentWorkflowInitialJob } from './agent-run-queue.service.js';
+import { enqueueBoardAgentRunJobs, enqueueLiveAgentWorkflowInitialJob, enqueueLiveBlackboardRoundJobs } from './agent-run-queue.service.js';
 import { getOrCreateAdminAgent } from './system-agent.service.js';
+import { LIVE_BLACKBOARD_DEFAULT_ROUNDS, LIVE_BLACKBOARD_MAX_AGENTS, createBoardConversation, postBlackboardEvent } from './blackboard.service.js';
 
 type AgentInput = {
   agentId?: string;
@@ -32,6 +33,15 @@ export type StartLiveAgentWorkflowInput = {
   trigger?: string;
   agents?: AgentInput[];
   priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+};
+
+export type StartLiveBlackboardInput = {
+  goal?: string;
+  trigger?: string;
+  query?: string;
+  agents?: AgentInput[];
+  priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  maxRounds?: number;
 };
 
 type BoardCollaborationAgent = Agent & {
@@ -154,6 +164,41 @@ function normalizeLiveAgentInputs(board: Pick<Board, 'slug'>, data: StartLiveAge
   }
 
   return defaultLiveWorkflowAgentInputs(board).map((agent, index) => ({
+    ...agent,
+    isLead: index === 0,
+  }));
+}
+
+function normalizeLiveBlackboardAgentInputs(board: Pick<Board, 'slug'>, data: StartLiveBlackboardInput, existingAgents: Agent[]): AgentInput[] {
+  if (Array.isArray(data.agents) && data.agents.length > 0) {
+    const defaults = defaultLiveWorkflowAgentInputs(board);
+    return data.agents.slice(0, LIVE_BLACKBOARD_MAX_AGENTS).map((item, index) => {
+      const fallback = defaults[index] ?? defaults[defaults.length - 1];
+      return {
+        agentId: item.agentId,
+        name: item.name || fallback.name,
+        displayName: item.displayName || fallback.displayName,
+        role: item.role || fallback.role,
+        work: item.work || fallback.work,
+        avatar: item.avatar || fallback.avatar,
+        isLead: item.isLead ?? index === 0,
+      };
+    });
+  }
+
+  if (existingAgents.length > 0) {
+    return existingAgents.slice(0, LIVE_BLACKBOARD_MAX_AGENTS).map((agent, index) => ({
+      agentId: agent.id,
+      name: agent.name,
+      displayName: agent.displayName,
+      role: agent.description,
+      work: agent.currentTask || agent.description || `Continue live blackboard turn ${index + 1}.`,
+      avatar: agent.avatar || String(index + 1),
+      isLead: index === 0 ? true : agent.isBoardLead,
+    }));
+  }
+
+  return defaultLiveWorkflowAgentInputs(board).slice(0, LIVE_BLACKBOARD_MAX_AGENTS).map((agent, index) => ({
     ...agent,
     isLead: index === 0,
   }));
@@ -696,5 +741,221 @@ export async function startLiveAgentWorkflow(
     thread,
     messages,
     runJobs: runJob ? [runJob] : [],
+  };
+}
+
+export async function startLiveBlackboardConversation(
+  organizationId: string,
+  boardId: string,
+  data: StartLiveBlackboardInput,
+): Promise<{
+  board: Board;
+  conversationId: string;
+  goal: string;
+  trigger: string;
+  agents: BoardCollaborationAgent[];
+  tasks: Task[];
+  thread: Thread;
+  messages: Message[];
+  runJobs: AgentRunJob[];
+}> {
+  const board = await prisma.board.findFirst({
+    where: { id: boardId, organizationId },
+  });
+  if (!board) {
+    const err = new Error('Board not found') as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const existingAgents = await prisma.agent.findMany({
+    where: {
+      organizationId,
+      boardId: board.id,
+      enabled: true,
+      name: { notIn: ['__mother_chat__', '__admin__'] },
+    },
+    orderBy: [
+      { isBoardLead: 'desc' },
+      { createdAt: 'asc' },
+    ],
+    take: LIVE_BLACKBOARD_MAX_AGENTS,
+  });
+
+  const goal = data.goal?.trim()
+    || board.objective?.trim()
+    || `Run live agent-to-agent work for ${board.name}.`;
+  const trigger = data.trigger?.trim() || data.query?.trim() || goal;
+  const maxRounds = Math.max(1, Math.min(data.maxRounds || LIVE_BLACKBOARD_DEFAULT_ROUNDS, 8));
+  const agentInputs = normalizeLiveBlackboardAgentInputs(board, data, existingAgents);
+  const agents = (await Promise.all(agentInputs.map(input => (
+    resolveCollaborationAgent(organizationId, board.id, input)
+  )))).slice(0, LIVE_BLACKBOARD_MAX_AGENTS);
+
+  if (agents.length === 0) {
+    const err = new Error('No enabled agents found in this production group') as Error & { statusCode?: number };
+    err.statusCode = 400;
+    throw err;
+  }
+
+  await Promise.all(agents.map((agent, index) => prisma.agent.update({
+    where: { id: agent.id, organizationId },
+    data: {
+      status: 'IDLE',
+      currentTask: null,
+      isBoardLead: index === 0,
+      agentToAgent: true,
+      updatedAt: new Date(),
+    },
+  })));
+
+  const priority = data.priority || 'HIGH';
+  const tasks = await Promise.all(agents.map((agent, index) => prisma.task.create({
+    data: {
+      organizationId,
+      boardId: board.id,
+      agentId: agent.id,
+      title: `${agent.assignedWork || trigger}`.slice(0, 180),
+      description: [
+        `Live blackboard conversation: ${goal}`,
+        `Trigger: ${trigger}`,
+        '',
+        `Participant ${index + 1}/${agents.length}: ${agent.displayName}`,
+        `Role: ${agent.collaborationRole}`,
+        'Mode: short Codex CLI turns through a shared group blackboard.',
+      ].join('\n'),
+      status: 'IN_PROGRESS',
+      priority,
+    },
+  })));
+
+  const thread = await prisma.thread.create({
+    data: {
+      organizationId,
+      title: `${board.name}: live blackboard`,
+    },
+  });
+  const adminAgent = await getOrCreateAdminAgent(organizationId);
+  const messages = [
+    await prisma.message.create({
+      data: {
+        threadId: thread.id,
+        senderId: adminAgent.id,
+        receiverId: agents[0].id,
+        content: [
+          `Live blackboard started: ${goal}`,
+          '',
+          `Trigger/request: ${trigger}`,
+          '',
+          `Participants: ${agents.map(agent => agent.displayName).join(', ')}`,
+          `Max agents: ${LIVE_BLACKBOARD_MAX_AGENTS}`,
+          `Max rounds: ${maxRounds}`,
+        ].join('\n'),
+        metadata: {
+          runtime: 'local-orchestration',
+          conversationKind: 'admin_agent',
+          edgeSemantic: 'admin_to_agent',
+          boardId: board.id,
+          boardName: board.name,
+          taskIds: tasks.map(task => task.id),
+          source: 'live_blackboard',
+        } as any,
+      },
+    }),
+  ];
+
+  const conversation = await createBoardConversation({
+    organizationId,
+    boardId: board.id,
+    threadId: thread.id,
+    title: `${board.name}: ${goal.slice(0, 120)}`,
+    goal,
+    maxRounds,
+    agents,
+    metadata: {
+      trigger,
+      maxAgents: LIVE_BLACKBOARD_MAX_AGENTS,
+      source: 'live_blackboard',
+    },
+  });
+
+  await prisma.message.update({
+    where: { id: messages[0].id },
+    data: {
+      metadata: {
+        ...(messages[0].metadata as Record<string, unknown>),
+        conversationId: conversation.id,
+      } as any,
+    },
+  }).catch(() => {});
+
+  await postBlackboardEvent({
+    organizationId,
+    boardId: board.id,
+    conversationId: conversation.id,
+    senderAgentId: adminAgent.id,
+    type: 'admin_task',
+    content: trigger,
+    metadata: {
+      source: 'live_blackboard',
+      goal,
+      maxRounds,
+      agentIds: agents.map(agent => agent.id),
+      taskIds: tasks.map(task => task.id),
+    },
+  });
+
+  await prisma.thread.update({
+    where: { id: thread.id },
+    data: { updatedAt: new Date() },
+  });
+
+  const runJobs = await enqueueLiveBlackboardRoundJobs({
+    organizationId,
+    board,
+    conversationId: conversation.id,
+    goal,
+    agents,
+    tasks,
+    thread,
+    round: 1,
+    maxRounds,
+  });
+
+  await Promise.all(agents.map((agent, index) => activityService.createActivity(organizationId, {
+    agentId: agent.id,
+    type: 'TASK_START',
+    message: `${agent.displayName} joined live blackboard conversation in ${board.name}`,
+    metadata: {
+      runtime: 'codex-cli',
+      source: 'live_blackboard',
+      conversationId: conversation.id,
+      boardId: board.id,
+      taskId: tasks[index]?.id ?? null,
+      round: 1,
+      maxRounds,
+    },
+  })));
+
+  await prisma.boardMemory.create({
+    data: {
+      boardId: board.id,
+      content: `Live blackboard ${conversation.id} started. Goal: ${goal}. Trigger: ${trigger}. Agents: ${agents.map(agent => agent.displayName).join(', ')}.`,
+      tags: ['live-blackboard', 'agent-agent', 'mother-chat', 'started'] as any,
+      isChat: true,
+      source: 'live_blackboard',
+    },
+  }).catch(() => {});
+
+  return {
+    board,
+    conversationId: conversation.id,
+    goal,
+    trigger,
+    agents,
+    tasks,
+    thread,
+    messages,
+    runJobs,
   };
 }
