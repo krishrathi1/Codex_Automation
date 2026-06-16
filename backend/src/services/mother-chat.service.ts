@@ -15,6 +15,11 @@ import {
   type NexusCodexEvent,
   type NexusCodexEventType,
 } from './codex-cli.service.js';
+import {
+  getActiveBoardConversationsForMotherChat,
+  getRecentBlackboardEventsForMotherChat,
+  serializeMotherChatBlackboardEvent,
+} from './blackboard.service.js';
 
 export const MOTHER_CHAT_AGENT_NAME = '__mother_chat__';
 
@@ -39,6 +44,7 @@ type MotherChatBoardScope = {
   description: string;
   objective: string | null;
   boardType: string;
+  successMetrics: unknown;
 };
 
 export interface MotherChatRunResult {
@@ -64,6 +70,46 @@ function stringValue(value: unknown) {
 function truncate(value: string | null | undefined, length = 240) {
   const text = value?.trim() || '';
   return text.length > length ? `${text.slice(0, length - 1)}...` : text;
+}
+
+function workflowMetadata(value: unknown) {
+  const packet = objectRecord(value);
+  const sourceContext = objectRecord(packet.sourceContext);
+  const liveWorkflow = objectRecord(packet.liveWorkflow);
+  const stages = Array.isArray(sourceContext.stages) ? sourceContext.stages : [];
+  const source = stringValue(packet.source) || stringValue(sourceContext.source);
+  const workflowId = stringValue(liveWorkflow.workflowId) || stringValue(packet.workflowId) || stringValue(sourceContext.workflowId);
+  const stepIndex = typeof liveWorkflow.stepIndex === 'number'
+    ? liveWorkflow.stepIndex
+    : typeof packet.stepIndex === 'number'
+      ? packet.stepIndex
+      : typeof sourceContext.stepIndex === 'number'
+        ? sourceContext.stepIndex
+        : null;
+  const totalSteps = typeof liveWorkflow.totalSteps === 'number'
+    ? liveWorkflow.totalSteps
+    : stages.length || null;
+
+  return {
+    isLiveWorkflow: source === 'live_agent_workflow' || Boolean(workflowId),
+    workflowId,
+    stepIndex,
+    stepNumber: typeof stepIndex === 'number' ? stepIndex + 1 : null,
+    totalSteps,
+    isFinalStep: typeof stepIndex === 'number' && typeof totalSteps === 'number'
+      ? stepIndex === totalSteps - 1
+      : false,
+  };
+}
+
+function outputForMotherChat(value: string | null | undefined, options: {
+  isLiveWorkflow: boolean;
+  isFinalStep: boolean;
+}) {
+  if (!value?.trim()) return null;
+  if (options.isFinalStep) return truncate(value, 8000);
+  if (options.isLiveWorkflow) return truncate(value, 3200);
+  return truncate(value, 900);
 }
 
 function activityTypeForEvent(eventType: NexusCodexEventType): ActivityType {
@@ -278,6 +324,7 @@ async function resolveBoardScope(organizationId: string, boardId?: string): Prom
       description: true,
       objective: true,
       boardType: true,
+      successMetrics: true,
     },
   });
   if (!board) {
@@ -324,6 +371,8 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
     approvals,
     agentRunJobs,
     productionErrorEvents,
+    boardConversations,
+    blackboardEvents,
   ] = await Promise.all([
     prisma.agent.findMany({
       where: nonMotherAgentWhere,
@@ -436,6 +485,8 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
         task: { select: { id: true, title: true, status: true } },
       },
     }),
+    getActiveBoardConversationsForMotherChat(organizationId, boardScope?.id),
+    getRecentBlackboardEventsForMotherChat(organizationId, boardScope?.id),
   ]);
 
   const visibleMessages = boardScope
@@ -462,6 +513,7 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
   const runningRunJobs = agentRunJobs.filter(job => job.status === 'RUNNING');
   const queuedRunJobs = agentRunJobs.filter(job => job.status === 'QUEUED');
   const failedRunJobs = agentRunJobs.filter(job => job.status === 'FAILED');
+  const activeBlackboardConversations = boardConversations.filter(conversation => conversation.status === 'RUNNING');
 
   const agentRows = agents.map(agent => {
     const profile = objectRecord(agent.identityProfile);
@@ -480,6 +532,7 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
       : null;
     const effectiveCodexSessionId = codexCliSessionId || codexSessionId || activeWorkflowSessionId || gatewayCodexSessionId || null;
     const runtimeConnected = agent.enabled && agentRuntime === 'codex-cli' && Boolean(effectiveCodexSessionId);
+    const integrationAccess = objectRecord(profile.integrationAccess);
     return {
       id: agent.id,
       name: agent.name,
@@ -495,6 +548,7 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
       codexSessionId,
       activeWorkflowSessionId,
       effectiveCodexSessionId,
+      integrationAccess,
       updatedAt: agent.updatedAt.toISOString(),
     };
   });
@@ -525,6 +579,9 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
       failedRunJobs: failedRunJobs.length,
       productionErrors: productionErrorEvents.length,
       activeProductionErrors: activeProductionErrors.length,
+      blackboardConversations: boardConversations.length,
+      activeBlackboardConversations: activeBlackboardConversations.length,
+      blackboardEvents: blackboardEvents.length,
     },
     agents: agentRows,
     sessions: sessions.map(session => ({
@@ -570,27 +627,38 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
       board: task.board?.name ?? null,
       updatedAt: task.updatedAt.toISOString(),
     })),
-    agentRunJobs: agentRunJobs.map(job => ({
-      id: job.id,
-      status: job.status,
-      agent: job.agent.displayName,
-      agentId: job.agentId,
-      board: job.board?.name ?? null,
-      boardId: job.boardId,
-      task: job.task?.title ?? null,
-      taskId: job.taskId,
-      prompt: truncate(job.prompt, 220),
-      summary: truncate(job.summary, 260) || null,
-      error: truncate(job.error, 260) || null,
-      codexSessionId: job.codexSessionId,
-      nexusSessionId: job.nexusSessionId,
-      attempt: job.attempt,
-      queuedAt: job.queuedAt.toISOString(),
-      startedAt: job.startedAt?.toISOString() ?? null,
-      completedAt: job.completedAt?.toISOString() ?? null,
-      durationMs: job.durationMs,
-      updatedAt: job.updatedAt.toISOString(),
-    })),
+    agentRunJobs: agentRunJobs.map(job => {
+      const workflow = workflowMetadata(job.contextPacket);
+      return {
+        id: job.id,
+        status: job.status,
+        agent: job.agent.displayName,
+        agentId: job.agentId,
+        board: job.board?.name ?? null,
+        boardId: job.boardId,
+        task: job.task?.title ?? null,
+        taskId: job.taskId,
+        prompt: truncate(job.prompt, 220),
+        summary: truncate(job.summary, 260) || null,
+        output: outputForMotherChat(job.output, {
+          isLiveWorkflow: workflow.isLiveWorkflow,
+          isFinalStep: workflow.isFinalStep,
+        }),
+        error: truncate(job.error, 260) || null,
+        codexSessionId: job.codexSessionId,
+        nexusSessionId: job.nexusSessionId,
+        workflowId: workflow.workflowId,
+        workflowStepNumber: workflow.stepNumber,
+        workflowTotalSteps: workflow.totalSteps,
+        workflowFinalStep: workflow.isFinalStep,
+        attempt: job.attempt,
+        queuedAt: job.queuedAt.toISOString(),
+        startedAt: job.startedAt?.toISOString() ?? null,
+        completedAt: job.completedAt?.toISOString() ?? null,
+        durationMs: job.durationMs,
+        updatedAt: job.updatedAt.toISOString(),
+      };
+    }),
     productionErrors: productionErrorEvents.map(error => ({
       id: error.id,
       source: error.source,
@@ -611,6 +679,20 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
       createdAt: error.createdAt.toISOString(),
       updatedAt: error.updatedAt.toISOString(),
     })),
+    blackboardConversations: boardConversations.map(conversation => ({
+      id: conversation.id,
+      boardId: conversation.boardId,
+      threadId: conversation.threadId,
+      title: conversation.title,
+      goal: truncate(conversation.goal, 260) || null,
+      status: conversation.status,
+      currentRound: conversation.currentRound,
+      maxRounds: conversation.maxRounds,
+      completedReason: truncate(conversation.completedReason, 260) || null,
+      createdAt: conversation.createdAt.toISOString(),
+      updatedAt: conversation.updatedAt.toISOString(),
+    })),
+    blackboardEvents: blackboardEvents.reverse().map(event => serializeMotherChatBlackboardEvent(event)),
     tokenUsage: tokenUsages.map(usage => ({
       id: usage.id,
       agent: usage.agent.displayName,
@@ -660,11 +742,11 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
 
   const contextText = [
     boardScope
-      ? `Nexus Mother Chat DB snapshot generated at ${context.generatedAt}. Scope: production board "${boardScope.name}" (${boardScope.id}). Objective: ${truncate(boardScope.objective, 180) || 'none'}.`
+      ? `Nexus Mother Chat DB snapshot generated at ${context.generatedAt}. Scope: production board "${boardScope.name}" (${boardScope.id}). Objective: ${truncate(boardScope.objective, 180) || 'none'}. Integration scope=${JSON.stringify(objectRecord(objectRecord(boardScope.successMetrics).integrationScope))}.`
       : `Nexus Mother Chat DB snapshot generated at ${context.generatedAt}. Scope: organization-wide.`,
-    `Counts: agents=${context.counts.agents}, runningSessions=${context.counts.runningSessions}, activeTasks=${context.counts.activeTasks}, activeRunJobs=${context.counts.activeRunJobs}, queuedRunJobs=${context.counts.queuedRunJobs}, runningRunJobs=${context.counts.runningRunJobs}, failedRunJobs=${context.counts.failedRunJobs}, productionErrors=${context.counts.productionErrors}, activeProductionErrors=${context.counts.activeProductionErrors}, recentMessages=${context.counts.recentMessages}, recentActivities=${context.counts.recentActivities}, recentErrors=${context.counts.recentErrors}, pendingApprovals=${context.counts.pendingApprovals}, recentTokens=${context.counts.tokensInWindow}.`,
+    `Counts: agents=${context.counts.agents}, runningSessions=${context.counts.runningSessions}, activeTasks=${context.counts.activeTasks}, activeRunJobs=${context.counts.activeRunJobs}, queuedRunJobs=${context.counts.queuedRunJobs}, runningRunJobs=${context.counts.runningRunJobs}, failedRunJobs=${context.counts.failedRunJobs}, productionErrors=${context.counts.productionErrors}, activeProductionErrors=${context.counts.activeProductionErrors}, blackboardConversations=${context.counts.blackboardConversations}, activeBlackboardConversations=${context.counts.activeBlackboardConversations}, blackboardEvents=${context.counts.blackboardEvents}, recentMessages=${context.counts.recentMessages}, recentActivities=${context.counts.recentActivities}, recentErrors=${context.counts.recentErrors}, pendingApprovals=${context.counts.pendingApprovals}, recentTokens=${context.counts.tokensInWindow}.`,
     formatSection('Agents', context.agents.map(agent =>
-      `- ${agent.displayName} (${agent.name}) status=${agent.status}, enabled=${agent.enabled}, runtime=${agent.agentRuntime || 'unknown'}, runtimeConnected=${agent.runtimeConnected ? 'yes' : 'no'}, currentTask=${truncate(agent.currentTask, 120) || 'none'}, effectiveCodexSessionId=${agent.effectiveCodexSessionId || 'none'}, codexCliSessionId=${agent.codexCliSessionId || 'none'}, activeWorkflowSessionId=${agent.activeWorkflowSessionId || 'none'}, lastHeartbeat=${agent.lastHeartbeat || 'none'}`
+      `- ${agent.displayName} (${agent.name}) status=${agent.status}, enabled=${agent.enabled}, runtime=${agent.agentRuntime || 'unknown'}, runtimeConnected=${agent.runtimeConnected ? 'yes' : 'no'}, currentTask=${truncate(agent.currentTask, 120) || 'none'}, effectiveCodexSessionId=${agent.effectiveCodexSessionId || 'none'}, codexCliSessionId=${agent.codexCliSessionId || 'none'}, activeWorkflowSessionId=${agent.activeWorkflowSessionId || 'none'}, integrationAccess=${JSON.stringify(agent.integrationAccess)}, lastHeartbeat=${agent.lastHeartbeat || 'none'}`
     )),
     formatSection('Recent sessions', context.sessions.map(session =>
       `- ${session.agent}: ${session.type}/${session.status}, id=${session.id}, tokens=${session.tokensUsed ?? 0}, summary=${truncate(session.summary, 180) || 'none'}`
@@ -678,8 +760,18 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
     formatSection('Tasks', context.tasks.map(task =>
       `- ${task.title} [${task.status}/${task.priority}] agent=${task.agent}, board=${task.board || 'none'}, id=${task.id}`
     )),
-    formatSection('Agent run queue', context.agentRunJobs.map(job =>
-      `- ${job.agent}: job=${job.id}, status=${job.status}, taskId=${job.taskId || 'none'}, prompt=${job.prompt}, codexSessionId=${job.codexSessionId || 'none'}, nexusSessionId=${job.nexusSessionId || 'none'}, durationMs=${job.durationMs ?? 'none'}, summary=${job.summary || job.error || 'none'}`
+    formatSection('Agent run queue', context.agentRunJobs.map(job => [
+      `- ${job.agent}: job=${job.id}, status=${job.status}, taskId=${job.taskId || 'none'}, prompt=${job.prompt}, codexSessionId=${job.codexSessionId || 'none'}, nexusSessionId=${job.nexusSessionId || 'none'}, durationMs=${job.durationMs ?? 'none'}, summary=${job.summary || job.error || 'none'}`,
+      job.workflowId
+        ? `  workflow=${job.workflowId}, step=${job.workflowStepNumber || 'unknown'}/${job.workflowTotalSteps || 'unknown'}, finalStep=${job.workflowFinalStep ? 'yes' : 'no'}`
+        : '',
+      job.output ? `  output=${job.output}` : '',
+    ].filter(Boolean).join('\n'))),
+    formatSection('Live blackboard conversations', context.blackboardConversations.map(conversation =>
+      `- ${conversation.title}: id=${conversation.id}, status=${conversation.status}, round=${conversation.currentRound}/${conversation.maxRounds}, goal=${conversation.goal || 'none'}, completedReason=${conversation.completedReason || 'none'}`
+    )),
+    formatSection('Live blackboard events', context.blackboardEvents.map(event =>
+      `- ${event.createdAt} ${event.type} ${event.from} -> ${event.to}: ${event.content}`
     )),
     formatSection('Production error pipeline', context.productionErrors.map(error =>
       `- ${error.createdAt} ${error.title} status=${error.status}, source=${error.source}, severity=${error.severity}, taskId=${error.taskId || 'none'}, taskStatus=${error.taskStatus || 'none'}, debugRunJobId=${error.debugRunJobId || 'none'}, reviewRunJobId=${error.reviewRunJobId || 'none'}, commitRunJobId=${error.commitRunJobId || 'none'}, fingerprint=${error.fingerprint}`

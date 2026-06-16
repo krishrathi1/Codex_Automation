@@ -36,6 +36,10 @@ export async function cleanupTestData(orgId: string) {
   await prisma.metricSnapshot.deleteMany({ where: { organizationId: orgId } });
   await prisma.tokenUsage.deleteMany({ where: { organizationId: orgId } });
   await prisma.session.deleteMany({ where: { organizationId: orgId } });
+  await prisma.agentRuntimeSession.deleteMany({ where: { organizationId: orgId } });
+  await prisma.agentConversationCursor.deleteMany({ where: { organizationId: orgId } });
+  await prisma.blackboardEvent.deleteMany({ where: { organizationId: orgId } });
+  await prisma.boardConversation.deleteMany({ where: { organizationId: orgId } });
   await prisma.productionErrorEvent.deleteMany({ where: { organizationId: orgId } });
   await prisma.agentRunJob.deleteMany({ where: { organizationId: orgId } });
   await prisma.message.deleteMany({

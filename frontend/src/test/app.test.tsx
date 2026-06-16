@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -736,6 +736,7 @@ describe('Auth Store', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Sidebar } from '../components/layout/Sidebar';
+import { Settings } from '../pages/Settings';
 
 describe('Component Rendering', () => {
   beforeEach(() => {
@@ -849,6 +850,36 @@ describe('Component Rendering', () => {
 
       const settingsLink = screen.getByText('Settings').closest('a');
       expect(settingsLink).toHaveAttribute('href', '/settings');
+    });
+  });
+
+  describe('Settings', () => {
+    it('renders integrations when provider settings are partially missing', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          github: {
+            configured: false,
+            tokenMasked: null,
+            updatedAt: null,
+          },
+        }),
+        status: 200,
+      });
+      global.fetch = mockFetch;
+
+      render(<Settings />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Integrations' }));
+
+      expect(await screen.findByText('Repository and deployment access')).toBeInTheDocument();
+      expect(screen.getAllByText('Not connected')).toHaveLength(2);
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/org/integrations/settings',
+        expect.objectContaining({
+          credentials: 'include',
+        }),
+      );
     });
   });
 });

@@ -8,8 +8,8 @@
     "build": "tsc -b && vite build && node scripts/prerender.mjs",
     "build:no-prerender": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "VITE_AUTH_DISABLED=false vitest run",
+    "test:watch": "VITE_AUTH_DISABLED=false vitest"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",

@@ -4,7 +4,7 @@ import { Bot, CheckCircle2, Clock3, FolderKanban, MessageSquare, Plus, RefreshCw
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn, timeAgo } from '@/lib/utils';
-import type { Board, BoardGroup, Task } from '@/types';
+import type { Board, BoardGroup, GithubRepositorySummary, Task, VercelProjectSummary } from '@/types';
 
 interface ProductionBoard extends Board {
   boardGroup?: { id: string; name: string } | null;
@@ -58,6 +58,7 @@ export function Dashboard() {
       boardType: data.boardType,
       maxAgents: data.maxAgents,
       boardGroupId: data.boardGroupId || undefined,
+      integrationScope: data.integrationScope,
     }) as ProductionBoard;
     setBoards(prev => [board, ...prev]);
     setShowCreate(false);
@@ -208,6 +209,9 @@ function ProductionGroupCard({ board, tasks }: { board: ProductionBoard; tasks: 
   const summary = taskSummary(tasks);
   const progress = summary.total > 0 ? Math.round((summary.done / summary.total) * 100) : 0;
   const agentCount = board._count?.agents ?? 0;
+  const integrationScope = ((board.successMetrics as Record<string, unknown> | null | undefined)?.integrationScope ?? {}) as Record<string, any>;
+  const githubRepo = integrationScope.githubRepo?.fullName as string | undefined;
+  const vercelProject = integrationScope.vercelProject?.name as string | undefined;
 
   return (
     <div className="rounded-lg border border-white/5 bg-surface-850 p-5 transition-colors hover:border-nexus-500/30">
@@ -228,6 +232,13 @@ function ProductionGroupCard({ board, tasks }: { board: ProductionBoard; tasks: 
         <Metric icon={Clock3} label="Active" value={summary.active} />
         <Metric icon={CheckCircle2} label="Done" value={summary.done} />
       </div>
+
+      {(githubRepo || vercelProject) && (
+        <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-gray-400">
+          {githubRepo && <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1">{githubRepo}</span>}
+          {vercelProject && <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1">{vercelProject}</span>}
+        </div>
+      )}
 
       <div className="mt-4">
         <div className="mb-1 flex items-center justify-between text-xs">
@@ -280,6 +291,10 @@ interface CreateProductionGroupData {
   boardType: string;
   maxAgents: number;
   boardGroupId?: string;
+  integrationScope?: {
+    githubRepo?: GithubRepositorySummary;
+    vercelProject?: VercelProjectSummary;
+  };
 }
 
 function CreateProductionGroupModal({
@@ -297,8 +312,54 @@ function CreateProductionGroupModal({
   const [boardType, setBoardType] = useState('continuous');
   const [maxAgents, setMaxAgents] = useState(5);
   const [boardGroupId, setBoardGroupId] = useState('');
+  const [repos, setRepos] = useState<GithubRepositorySummary[]>([]);
+  const [projects, setProjects] = useState<VercelProjectSummary[]>([]);
+  const [resourcesLoading, setResourcesLoading] = useState(true);
+  const [githubResourcesError, setGithubResourcesError] = useState<string | null>(null);
+  const [vercelResourcesError, setVercelResourcesError] = useState<string | null>(null);
+  const [githubRepoFullName, setGithubRepoFullName] = useState('');
+  const [vercelProjectId, setVercelProjectId] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadResources() {
+      setResourcesLoading(true);
+      setGithubResourcesError(null);
+      setVercelResourcesError(null);
+      try {
+        const settings = await api.org.integrationSettings();
+        const [repoResult, projectResult] = await Promise.allSettled([
+          settings.github.configured
+            ? api.org.githubRepos()
+            : Promise.resolve([] as GithubRepositorySummary[]),
+          settings.vercel.configured
+            ? api.org.vercelProjects()
+            : Promise.resolve([] as VercelProjectSummary[]),
+        ]);
+        if (cancelled) return;
+        if (repoResult.status === 'fulfilled') {
+          setRepos(repoResult.value as GithubRepositorySummary[]);
+        }
+        if (projectResult.status === 'fulfilled') {
+          setProjects(projectResult.value as VercelProjectSummary[]);
+        }
+        if (repoResult.status === 'rejected') {
+          setGithubResourcesError(repoResult.reason instanceof Error ? repoResult.reason.message : 'Failed to load GitHub repositories');
+        }
+        if (projectResult.status === 'rejected') {
+          setVercelResourcesError(projectResult.reason instanceof Error ? projectResult.reason.message : 'Failed to load Vercel projects');
+        }
+      } finally {
+        if (!cancelled) setResourcesLoading(false);
+      }
+    }
+    loadResources();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -313,6 +374,10 @@ function CreateProductionGroupModal({
         boardType,
         maxAgents,
         boardGroupId: boardGroupId || undefined,
+        integrationScope: {
+          ...(githubRepoFullName && { githubRepo: repos.find(repo => repo.fullName === githubRepoFullName) }),
+          ...(vercelProjectId && { vercelProject: projects.find(project => project.id === vercelProjectId) }),
+        },
       });
     } catch (err) {
       setError((err as Error).message);
@@ -407,6 +472,57 @@ function CreateProductionGroupModal({
                   <option key={group.id} value={group.id}>{group.name}</option>
                 ))}
               </select>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-white/5 bg-surface-900 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500">Connected resources</label>
+              {resourcesLoading && <span className="text-[11px] text-gray-600">Loading...</span>}
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-400">GitHub repository</label>
+                <select
+                  value={githubRepoFullName}
+                  onChange={event => setGithubRepoFullName(event.target.value)}
+                  className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-nexus-500"
+                >
+                  <option value="">No repository</option>
+                  {repos.map(repo => (
+                    <option key={repo.id} value={repo.fullName}>
+                      {repo.fullName}{repo.private ? ' (private)' : ''}
+                    </option>
+                  ))}
+                </select>
+                {githubResourcesError && (
+                  <p className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                    {githubResourcesError}{' '}
+                    <Link to="/settings" className="text-amber-100 underline">Settings</Link>
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-400">Vercel website</label>
+                <select
+                  value={vercelProjectId}
+                  onChange={event => setVercelProjectId(event.target.value)}
+                  className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-nexus-500"
+                >
+                  <option value="">No website</option>
+                  {projects.map(project => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}{project.productionUrl ? ` (${project.productionUrl})` : ''}
+                    </option>
+                  ))}
+                </select>
+                {vercelResourcesError && (
+                  <p className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                    {vercelResourcesError}{' '}
+                    <Link to="/settings" className="text-amber-100 underline">Settings</Link>
+                  </p>
+                )}
+              </div>
             </div>
           </div>
 

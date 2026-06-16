@@ -138,31 +138,35 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  members              OrgMember[]
-  agents               Agent[]
-  activities           Activity[]
-  tasks                Task[]
-  threads              Thread[]
-  sessions             Session[]
-  tokenUsages          TokenUsage[]
-  metrics              MetricSnapshot[]
-  alertRules           AlertRule[]
-  alertEvents          AlertEvent[]
-  commands             Command[]
-  apiKeys              OrgApiKey[]
-  gateways             Gateway[]
-  llmProviders         LlmProvider[]
-  usageCredit          UsageCredit?
-  boards               Board[]
-  boardGroups          BoardGroup[]
-  tags                 Tag[]
-  customFieldDefs      TaskCustomFieldDefinition[]
-  marketplaceSkills    MarketplaceSkill[]
-  skillPacks           SkillPack[]
-  invites              OrgInvite[]
-  soulTemplates        SoulTemplate[]
-  agentRunJobs         AgentRunJob[]
-  productionErrorEvents ProductionErrorEvent[]
+  members                  OrgMember[]
+  agents                   Agent[]
+  activities               Activity[]
+  tasks                    Task[]
+  threads                  Thread[]
+  sessions                 Session[]
+  tokenUsages              TokenUsage[]
+  metrics                  MetricSnapshot[]
+  alertRules               AlertRule[]
+  alertEvents              AlertEvent[]
+  commands                 Command[]
+  apiKeys                  OrgApiKey[]
+  gateways                 Gateway[]
+  llmProviders             LlmProvider[]
+  usageCredit              UsageCredit?
+  boards                   Board[]
+  boardGroups              BoardGroup[]
+  tags                     Tag[]
+  customFieldDefs          TaskCustomFieldDefinition[]
+  marketplaceSkills        MarketplaceSkill[]
+  skillPacks               SkillPack[]
+  invites                  OrgInvite[]
+  soulTemplates            SoulTemplate[]
+  agentRunJobs             AgentRunJob[]
+  productionErrorEvents    ProductionErrorEvent[]
+  boardConversations       BoardConversation[]
+  blackboardEvents         BlackboardEvent[]
+  agentConversationCursors AgentConversationCursor[]
+  agentRuntimeSessions     AgentRuntimeSession[]
 
   @@index([slug])
 }
@@ -288,8 +292,8 @@ model Agent {
 
   activities       Activity[]
   tasks            Task[]
-  sentMessages     Message[]        @relation("SentMessages")
-  receivedMessages Message[]        @relation("ReceivedMessages")
+  sentMessages     Message[]          @relation("SentMessages")
+  receivedMessages Message[]          @relation("ReceivedMessages")
   sessions         Session[]
   tokenUsages      TokenUsage[]
   metrics          MetricSnapshot[]
@@ -301,7 +305,7 @@ model Agent {
   agentSkills      AgentSkill[]
   integrations     AgentIntegration[]
   soulTemplateId   String?
-  runJobs           AgentRunJob[]
+  runJobs          AgentRunJob[]
 
   @@unique([organizationId, name])
   @@index([organizationId])
@@ -329,29 +333,29 @@ model Activity {
 }
 
 model Task {
-  id             String     @id @default(uuid())
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  title          String
-  description    String?
-  status         TaskStatus @default(BACKLOG)
-  priority       Priority   @default(MEDIUM)
-  agentId        String?
-  agent          Agent?     @relation(fields: [agentId], references: [id], onDelete: SetNull)
-  boardId          String?
-  board            Board?     @relation(fields: [boardId], references: [id], onDelete: SetNull)
-  fingerprintHash  String?
-  createdAt        DateTime   @default(now())
-  updatedAt        DateTime   @updatedAt
+  id              String       @id @default(uuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  title           String
+  description     String?
+  status          TaskStatus   @default(BACKLOG)
+  priority        Priority     @default(MEDIUM)
+  agentId         String?
+  agent           Agent?       @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  boardId         String?
+  board           Board?       @relation(fields: [boardId], references: [id], onDelete: SetNull)
+  fingerprintHash String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 
-  approvals          Approval[]
-  approvalLinks      ApprovalTaskLink[]
-  dependentOn        TaskDependency[] @relation("DependentOn")
-  blocking           TaskDependency[] @relation("Blocking")
-  tags               TagAssignment[]
-  customFieldValues  TaskCustomFieldValue[]
-  fingerprint        TaskFingerprint?
-  runJobs            AgentRunJob[]
+  approvals             Approval[]
+  approvalLinks         ApprovalTaskLink[]
+  dependentOn           TaskDependency[]       @relation("DependentOn")
+  blocking              TaskDependency[]       @relation("Blocking")
+  tags                  TagAssignment[]
+  customFieldValues     TaskCustomFieldValue[]
+  fingerprint           TaskFingerprint?
+  runJobs               AgentRunJob[]
   productionErrorEvents ProductionErrorEvent[]
 
   @@index([organizationId])
@@ -364,14 +368,15 @@ model Task {
 // ─── Inter-Agent Communication ──────────────────────────
 
 model Thread {
-  id             String       @id @default(uuid())
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  title          String?
-  messages       Message[]
-  runJobs        AgentRunJob[]
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  id                 String              @id @default(uuid())
+  organizationId     String
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  title              String?
+  messages           Message[]
+  runJobs            AgentRunJob[]
+  boardConversations BoardConversation[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   @@index([organizationId])
 }
@@ -420,33 +425,33 @@ model Session {
 // ─── Local Codex Agent Run Queue ───────────────────────
 
 model AgentRunJob {
-  id             String            @id @default(uuid())
-  organizationId String
-  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  boardId        String?
-  board          Board?            @relation(fields: [boardId], references: [id], onDelete: SetNull)
-  agentId        String
-  agent          Agent             @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  taskId         String?
-  task           Task?             @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  threadId       String?
-  thread         Thread?           @relation(fields: [threadId], references: [id], onDelete: SetNull)
-  status         AgentRunJobStatus @default(QUEUED)
-  prompt         String            @db.Text
-  contextPacket  Json?
-  output         String?           @db.Text
-  summary        String?           @db.Text
-  error          String?           @db.Text
-  codexSessionId String?
+  id                  String            @id @default(uuid())
+  organizationId      String
+  organization        Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  boardId             String?
+  board               Board?            @relation(fields: [boardId], references: [id], onDelete: SetNull)
+  agentId             String
+  agent               Agent             @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  taskId              String?
+  task                Task?             @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  threadId            String?
+  thread              Thread?           @relation(fields: [threadId], references: [id], onDelete: SetNull)
+  status              AgentRunJobStatus @default(QUEUED)
+  prompt              String            @db.Text
+  contextPacket       Json?
+  output              String?           @db.Text
+  summary             String?           @db.Text
+  error               String?           @db.Text
+  codexSessionId      String?
   staleCodexSessionId String?
-  nexusSessionId String?
-  attempt        Int               @default(0)
-  queuedAt       DateTime          @default(now())
-  startedAt      DateTime?
-  completedAt    DateTime?
-  durationMs     Int?
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  nexusSessionId      String?
+  attempt             Int               @default(0)
+  queuedAt            DateTime          @default(now())
+  startedAt           DateTime?
+  completedAt         DateTime?
+  durationMs          Int?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
 
   @@index([organizationId])
   @@index([boardId])
@@ -455,6 +460,106 @@ model AgentRunJob {
   @@index([threadId])
   @@index([status])
   @@index([queuedAt])
+}
+
+// ─── Live Group Blackboard ────────────────────────────
+
+model BoardConversation {
+  id              String       @id @default(uuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  boardId         String
+  board           Board        @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  threadId        String?
+  thread          Thread?      @relation(fields: [threadId], references: [id], onDelete: SetNull)
+  title           String
+  goal            String?      @db.Text
+  status          String       @default("RUNNING")
+  maxRounds       Int          @default(3)
+  currentRound    Int          @default(0)
+  completedReason String?      @db.Text
+  metadata        Json?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  events  BlackboardEvent[]
+  cursors AgentConversationCursor[]
+
+  @@index([organizationId])
+  @@index([boardId])
+  @@index([threadId])
+  @@index([status])
+  @@index([updatedAt])
+}
+
+model BlackboardEvent {
+  id              String            @id @default(uuid())
+  organizationId  String
+  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  boardId         String
+  board           Board             @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  conversationId  String
+  conversation    BoardConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderAgentId   String?
+  receiverAgentId String?
+  runJobId        String?
+  taskId          String?
+  type            String
+  content         String            @db.Text
+  metadata        Json?
+  createdAt       DateTime          @default(now())
+
+  @@index([organizationId])
+  @@index([boardId])
+  @@index([conversationId])
+  @@index([senderAgentId])
+  @@index([receiverAgentId])
+  @@index([runJobId])
+  @@index([createdAt])
+}
+
+model AgentConversationCursor {
+  id              String            @id @default(uuid())
+  organizationId  String
+  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  boardId         String
+  board           Board             @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  conversationId  String
+  conversation    BoardConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  agentId         String
+  lastSeenEventAt DateTime?
+  lastSeenEventId String?
+  turnsTaken      Int               @default(0)
+  lastQueuedAt    DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([conversationId, agentId])
+  @@index([organizationId])
+  @@index([boardId])
+  @@index([agentId])
+}
+
+model AgentRuntimeSession {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  boardId        String
+  board          Board        @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  agentId        String
+  codexSessionId String?
+  status         String       @default("IDLE")
+  lockedUntil    DateTime?
+  lastUsedAt     DateTime?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([boardId, agentId])
+  @@index([organizationId])
+  @@index([boardId])
+  @@index([agentId])
+  @@index([status])
 }
 
 // ─── Production Error Automation ───────────────────────
@@ -655,15 +760,15 @@ model Gateway {
 // ─── LLM Providers ────────────────────────────────────
 
 model LlmProvider {
-  id              String          @id @default(uuid())
-  organizationId  String
-  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  provider        String
-  mode            LlmProviderMode @default(PLATFORM)
-  apiKey          String?
-  isActive        Boolean         @default(true)
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  id             String          @id @default(uuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  provider       String
+  mode           LlmProviderMode @default(PLATFORM)
+  apiKey         String?
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   @@unique([organizationId, provider])
   @@index([organizationId])
@@ -683,39 +788,43 @@ model UsageCredit {
 // ─── Boards ───────────────────────────────────────────
 
 model Board {
-  id                      String       @id @default(uuid())
-  organizationId          String
-  organization            Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  name                    String
-  slug                    String
-  description             String       @default("")
-  gatewayId               String?
-  gateway                 Gateway?     @relation(fields: [gatewayId], references: [id], onDelete: SetNull)
-  boardGroupId            String?
-  boardGroup              BoardGroup?  @relation(fields: [boardGroupId], references: [id], onDelete: SetNull)
-  boardType               String       @default("goal")
-  objective               String?
-  successMetrics          Json?
-  targetDate              DateTime?
-  maxAgents                            Int          @default(3)
-  requireApprovalForDone               Boolean      @default(true)
-  requireReviewBeforeDone              Boolean      @default(false)
-  blockStatusChangesWithPendingApproval Boolean     @default(false)
-  onlyLeadCanChangeStatus              Boolean      @default(false)
-  createdAt                            DateTime     @default(now())
-  updatedAt                            DateTime     @updatedAt
+  id                                    String       @id @default(uuid())
+  organizationId                        String
+  organization                          Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name                                  String
+  slug                                  String
+  description                           String       @default("")
+  gatewayId                             String?
+  gateway                               Gateway?     @relation(fields: [gatewayId], references: [id], onDelete: SetNull)
+  boardGroupId                          String?
+  boardGroup                            BoardGroup?  @relation(fields: [boardGroupId], references: [id], onDelete: SetNull)
+  boardType                             String       @default("goal")
+  objective                             String?
+  successMetrics                        Json?
+  targetDate                            DateTime?
+  maxAgents                             Int          @default(3)
+  requireApprovalForDone                Boolean      @default(true)
+  requireReviewBeforeDone               Boolean      @default(false)
+  blockStatusChangesWithPendingApproval Boolean      @default(false)
+  onlyLeadCanChangeStatus               Boolean      @default(false)
+  createdAt                             DateTime     @default(now())
+  updatedAt                             DateTime     @updatedAt
 
-  tasks              Task[]
-  agents             Agent[]
-  approvals          Approval[]
-  memory             BoardMemory[]
-  webhooks           BoardWebhook[]
-  onboardingSessions BoardOnboardingSession[]
-  customFields       BoardTaskCustomField[]
-  memberAccess       OrgMemberBoardAccess[]
-  inviteAccess       OrgInviteBoardAccess[]
-  runJobs            AgentRunJob[]
+  tasks                 Task[]
+  agents                Agent[]
+  approvals             Approval[]
+  memory                BoardMemory[]
+  webhooks              BoardWebhook[]
+  onboardingSessions    BoardOnboardingSession[]
+  customFields          BoardTaskCustomField[]
+  memberAccess          OrgMemberBoardAccess[]
+  inviteAccess          OrgInviteBoardAccess[]
+  runJobs               AgentRunJob[]
   productionErrorEvents ProductionErrorEvent[]
+  conversations         BoardConversation[]
+  blackboardEvents      BlackboardEvent[]
+  conversationCursors   AgentConversationCursor[]
+  runtimeSessions       AgentRuntimeSession[]
 
   @@unique([organizationId, slug])
   @@index([organizationId])
@@ -723,14 +832,14 @@ model Board {
 }
 
 model BoardGroup {
-  id              String       @id @default(uuid())
-  organizationId  String
-  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  name            String
-  slug            String
-  description     String       @default("")
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  slug           String
+  description    String       @default("")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
   boards      Board[]
   groupMemory BoardGroupMemory[]
@@ -841,11 +950,11 @@ model TagAssignment {
 // ─── Task Fingerprints ───────────────────────────────
 
 model TaskFingerprint {
-  id              String @id @default(uuid())
+  id              String   @id @default(uuid())
   boardId         String
   fingerprintHash String
-  taskId          String @unique
-  task            Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId          String   @unique
+  task            Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
   createdAt       DateTime @default(now())
 
   @@unique([boardId, fingerprintHash])
@@ -855,17 +964,17 @@ model TaskFingerprint {
 // ─── Custom Fields ───────────────────────────────────
 
 model TaskCustomFieldDefinition {
-  id              String              @id @default(uuid())
+  id              String                @id @default(uuid())
   organizationId  String
-  organization    Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization    Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   fieldKey        String
   label           String
-  fieldType       CustomFieldType     @default(TEXT)
+  fieldType       CustomFieldType       @default(TEXT)
   uiVisibility    CustomFieldVisibility @default(ALWAYS)
   validationRegex String?
   defaultValue    String?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
 
   boardFields BoardTaskCustomField[]
   values      TaskCustomFieldValue[]
@@ -917,8 +1026,8 @@ model MarketplaceSkill {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
-  installedOn  GatewayInstalledSkill[]
-  agentSkills  AgentSkill[]
+  installedOn GatewayInstalledSkill[]
+  agentSkills AgentSkill[]
 
   @@unique([organizationId, name])
   @@index([organizationId])
@@ -994,14 +1103,14 @@ model BoardWebhook {
 }
 
 model BoardWebhookPayload {
-  id          String   @id @default(uuid())
+  id          String       @id @default(uuid())
   webhookId   String
   webhook     BoardWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
   payload     Json
   headers     Json?
   sourceIp    String?
   contentType String?
-  receivedAt  DateTime @default(now())
+  receivedAt  DateTime     @default(now())
 
   @@index([webhookId])
   @@index([receivedAt])
@@ -1109,29 +1218,29 @@ enum ChannelType {
 }
 
 model AgentIntegration {
-  id              String      @id @default(uuid())
-  agentId         String
-  agent           Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  channel         ChannelType
-  enabled         Boolean     @default(true)
+  id      String      @id @default(uuid())
+  agentId String
+  agent   Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  channel ChannelType
+  enabled Boolean     @default(true)
 
   // Credentials
-  botToken        String?
-  appToken        String?
-  serviceAccount  Json?
-  webhookUrl      String?
+  botToken       String?
+  appToken       String?
+  serviceAccount Json?
+  webhookUrl     String?
 
   // Channel policies
-  dmPolicy        String      @default("open")
-  groupPolicy     String      @default("open")
+  dmPolicy    String @default("open")
+  groupPolicy String @default("open")
 
   // Status
-  status          String      @default("disconnected")
+  status          String    @default("disconnected")
   lastError       String?
   lastConnectedAt DateTime?
 
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([agentId, channel])
   @@index([agentId])

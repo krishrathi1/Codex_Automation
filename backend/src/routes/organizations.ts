@@ -3,6 +3,7 @@ import { z } from 'zod';
 import * as orgService from '../services/org.service.js';
 import * as inviteService from '../services/invite.service.js';
 import * as boardAccessService from '../services/board-access.service.js';
+import * as platformIntegrations from '../services/platform-integrations.service.js';
 import { requireRole } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 
@@ -26,6 +27,14 @@ const createApiKeySchema = z.object({
   name: z.string().min(1),
 });
 
+const integrationSettingsSchema = z.object({
+  githubAccessToken: z.string().optional().nullable(),
+  clearGithubAccessToken: z.boolean().optional(),
+  vercelAccessToken: z.string().optional().nullable(),
+  clearVercelAccessToken: z.boolean().optional(),
+  vercelTeamId: z.string().optional().nullable(),
+});
+
 // GET / — get organization details
 router.get('/', async (req, res) => {
   const org = await orgService.getOrganization(req.organizationId!);
@@ -37,6 +46,43 @@ router.get('/', async (req, res) => {
 router.patch('/', requireRole('OWNER', 'ADMIN'), validate(updateOrgSchema), async (req, res) => {
   const org = await orgService.updateOrganization(req.organizationId!, req.body);
   res.json(org);
+});
+
+// GET /integrations/settings — connection status without returning raw secrets
+router.get('/integrations/settings', requireRole('OWNER', 'ADMIN'), async (req, res) => {
+  const settings = await platformIntegrations.getIntegrationSettings(req.organizationId!);
+  res.json(settings);
+});
+
+// PUT /integrations/settings — save GitHub/Vercel credentials in org settings
+router.put('/integrations/settings', requireRole('OWNER', 'ADMIN'), validate(integrationSettingsSchema), async (req, res) => {
+  try {
+    const settings = await platformIntegrations.updateIntegrationSettings(req.organizationId!, req.body);
+    res.json(settings);
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
+});
+
+router.get('/integrations/github/repos', requireRole('OWNER', 'ADMIN'), async (req, res) => {
+  try {
+    const repos = await platformIntegrations.listGithubRepositories(req.organizationId!);
+    res.json(repos);
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
+});
+
+router.get('/integrations/vercel/projects', requireRole('OWNER', 'ADMIN'), async (req, res) => {
+  try {
+    const projects = await platformIntegrations.listVercelProjects(req.organizationId!);
+    res.json(projects);
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
 });
 
 // GET /members — list members

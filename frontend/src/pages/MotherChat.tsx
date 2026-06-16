@@ -226,6 +226,7 @@ export function MotherChat() {
   const [sending, setSending] = useState(false);
   const [dispatchingAll, setDispatchingAll] = useState(false);
   const [startingLiveWorkflow, setStartingLiveWorkflow] = useState(false);
+  const [startingLiveBlackboard, setStartingLiveBlackboard] = useState(false);
   const [startingA2A, setStartingA2A] = useState(false);
   const [showA2AStarter, setShowA2AStarter] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -327,6 +328,11 @@ export function MotherChat() {
       if (!scopedBoardId || event.board?.id !== scopedBoardId) return;
       loadContext().catch(() => {});
     };
+    const handleBoardLiveBlackboard = (event: { board?: { id?: string }; boardId?: string | null }) => {
+      const boardId = event.board?.id ?? event.boardId ?? null;
+      if (!scopedBoardId || boardId !== scopedBoardId) return;
+      loadContext().catch(() => {});
+    };
     const handleAgentRunJobUpdate = (event: { boardId?: string | null }) => {
       if ((event.boardId ?? null) !== (scopedBoardId ?? null)) return;
       loadContext().catch(() => {});
@@ -338,6 +344,11 @@ export function MotherChat() {
     socket.on('board:liveWorkflowStarted', handleBoardLiveWorkflow);
     socket.on('board:liveWorkflowAdvanced', handleBoardLiveWorkflow);
     socket.on('board:liveWorkflowCompleted', handleBoardLiveWorkflow);
+    socket.on('board:liveBlackboardStarted', handleBoardLiveBlackboard);
+    socket.on('board:liveBlackboardAdvanced', handleBoardLiveBlackboard);
+    socket.on('board:liveBlackboardCompleted', handleBoardLiveBlackboard);
+    socket.on('blackboard:event', handleBoardLiveBlackboard);
+    socket.on('blackboard:conversationCompleted', handleBoardLiveBlackboard);
     socket.on('agent-run-job:update', handleAgentRunJobUpdate);
     return () => {
       socket.off('mother-chat:event', handleMotherChatEvent);
@@ -346,6 +357,11 @@ export function MotherChat() {
       socket.off('board:liveWorkflowStarted', handleBoardLiveWorkflow);
       socket.off('board:liveWorkflowAdvanced', handleBoardLiveWorkflow);
       socket.off('board:liveWorkflowCompleted', handleBoardLiveWorkflow);
+      socket.off('board:liveBlackboardStarted', handleBoardLiveBlackboard);
+      socket.off('board:liveBlackboardAdvanced', handleBoardLiveBlackboard);
+      socket.off('board:liveBlackboardCompleted', handleBoardLiveBlackboard);
+      socket.off('blackboard:event', handleBoardLiveBlackboard);
+      socket.off('blackboard:conversationCompleted', handleBoardLiveBlackboard);
       socket.off('agent-run-job:update', handleAgentRunJobUpdate);
     };
   }, [scopedBoardId]);
@@ -355,7 +371,7 @@ export function MotherChat() {
   }, [messages]);
 
   async function handleSend() {
-    if (!input.trim() || sending || dispatchingAll || startingLiveWorkflow) return;
+    if (!input.trim() || sending || dispatchingAll || startingLiveWorkflow || startingLiveBlackboard) return;
 
     const requestId = newRequestId();
     streamedResponseRequestsRef.current[requestId] = false;
@@ -372,6 +388,13 @@ export function MotherChat() {
       : null;
     if (liveWorkflowCommand?.[1]) {
       await handleStartLiveWorkflow(liveWorkflowCommand[1]);
+      return;
+    }
+    const liveBlackboardCommand = scopedBoardId
+      ? content.match(/^\/(?:blackboard|live-chat|agent-chat)\s+(.+)/i)
+      : null;
+    if (liveBlackboardCommand?.[1]) {
+      await handleStartLiveBlackboard(liveBlackboardCommand[1]);
       return;
     }
 
@@ -555,6 +578,65 @@ export function MotherChat() {
     }
   }
 
+  async function handleStartLiveBlackboard(triggerOverride?: string) {
+    if (!scopedBoardId || startingLiveBlackboard) return;
+    const trigger = (triggerOverride ?? input).trim();
+    if (!trigger) return;
+
+    const requestId = newRequestId();
+    setMessages(prev => [
+      ...prev,
+      {
+        id: `live-blackboard-user-${requestId}`,
+        role: 'user',
+        content: `Start live agent chat: ${trigger}`,
+        timestamp: new Date().toISOString(),
+        requestId,
+      },
+    ]);
+    setInput('');
+    setStartingLiveBlackboard(true);
+    setError(null);
+
+    try {
+      const response = await api.boards.startLiveBlackboard(scopedBoardId, {
+        goal: context?.scope?.board?.objective || 'Run live agent-to-agent production chat.',
+        trigger,
+        priority: 'HIGH',
+        maxRounds: 3,
+      });
+      setMessages(prev => [
+        ...prev,
+        {
+          id: `live-blackboard-assistant-${requestId}`,
+          role: 'assistant',
+          content: [
+            `Started live blackboard ${response.conversationId}.`,
+            `Agents: ${response.agents.map(agent => agent.displayName).join(', ')}`,
+            `Round 1 queued jobs: ${response.runJobs.length}`,
+          ].join('\n'),
+          timestamp: new Date().toISOString(),
+          requestId,
+        },
+      ]);
+      await loadContext();
+    } catch (err) {
+      setMessages(prev => [
+        ...prev,
+        {
+          id: `live-blackboard-error-${requestId}`,
+          role: 'assistant',
+          content: `Error: ${(err as Error).message}`,
+          timestamp: new Date().toISOString(),
+          requestId,
+        },
+      ]);
+      setError((err as Error).message);
+    } finally {
+      setStartingLiveBlackboard(false);
+    }
+  }
+
   function handleKeyDown(event: React.KeyboardEvent) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -608,7 +690,7 @@ export function MotherChat() {
             <button
               type="button"
               onClick={() => setShowA2AStarter(true)}
-              disabled={startingA2A || startingLiveWorkflow}
+              disabled={startingA2A || startingLiveWorkflow || startingLiveBlackboard}
               className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <GitBranch className="h-3.5 w-3.5" />
@@ -618,12 +700,30 @@ export function MotherChat() {
             <button
               type="button"
               onClick={() => handleStartLiveWorkflow(input || 'Investigate the latest production issue, hand off through diagnosis, code fix, verification, and release audit.')}
-              disabled={startingLiveWorkflow}
+              disabled={startingLiveWorkflow || startingLiveBlackboard}
               className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-200 transition-colors hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Zap className="h-3.5 w-3.5" />
               {startingLiveWorkflow ? 'Starting live...' : 'Start live workflow'}
             </button>
+
+            <button
+              type="button"
+              onClick={() => handleStartLiveBlackboard(input || 'Debate the current production decision, ask each other questions, answer objections, and close with FINAL_DECISION when ready.')}
+              disabled={startingLiveBlackboard || startingLiveWorkflow}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-violet-500/20 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-200 transition-colors hover:bg-violet-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <GitBranch className="h-3.5 w-3.5" />
+              {startingLiveBlackboard ? 'Starting chat...' : 'Start live chat'}
+            </button>
+
+            <Link
+              to={`/production/${scopedBoardId}/trace`}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-xs font-semibold text-gray-300 transition-colors hover:bg-white/5"
+            >
+              <Activity className="h-3.5 w-3.5" />
+              Trace live chat
+            </Link>
 
             <section>
               <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
@@ -659,6 +759,8 @@ export function MotherChat() {
               <div className="grid grid-cols-2 gap-2">
                 <StatTile label="Tasks" value={context?.counts.activeTasks ?? 0} icon={CheckCircle2} />
                 <StatTile label="Errors" value={context?.counts.recentErrors ?? 0} icon={AlertTriangle} />
+                <StatTile label="Live chats" value={context?.counts.activeBlackboardConversations ?? 0} icon={GitBranch} />
+                <StatTile label="Events" value={context?.counts.blackboardEvents ?? 0} icon={Activity} />
               </div>
             </section>
           </div>
@@ -747,7 +849,7 @@ export function MotherChat() {
               value={input}
               onChange={event => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={sending || dispatchingAll}
+              disabled={sending || dispatchingAll || startingLiveBlackboard}
               rows={2}
               placeholder={scopedBoard ? `Ask about ${scopedBoard.name}...` : 'Ask Mother Chat...'}
               className="min-h-[48px] flex-1 resize-none rounded-xl border border-white/10 bg-surface-850 px-4 py-3 text-sm text-white placeholder-gray-600 focus:border-nexus-500 focus:outline-none disabled:opacity-50"
@@ -755,7 +857,7 @@ export function MotherChat() {
             {scopedBoardId && (
               <button
                 onClick={() => handleDispatchAll()}
-                disabled={!input.trim() || sending || dispatchingAll}
+                disabled={!input.trim() || sending || dispatchingAll || startingLiveBlackboard}
                 className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 text-sm font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Assign all agents"
               >
@@ -765,7 +867,7 @@ export function MotherChat() {
             )}
             <button
               onClick={handleSend}
-              disabled={!input.trim() || sending || dispatchingAll}
+              disabled={!input.trim() || sending || dispatchingAll || startingLiveBlackboard}
               className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-nexus-600 text-white transition-colors hover:bg-nexus-500 disabled:cursor-not-allowed disabled:opacity-50"
               title="Send"
             >
@@ -788,6 +890,7 @@ export function MotherChat() {
             <StatTile label="Tasks" value={context?.counts.activeTasks ?? 0} icon={CheckCircle2} />
             <StatTile label="Runs" value={context?.counts.activeRunJobs ?? 0} icon={Activity} />
             <StatTile label="Errors" value={(context?.counts.recentErrors ?? 0) + (context?.counts.failedRunJobs ?? 0)} icon={AlertTriangle} />
+            <StatTile label="Live chats" value={context?.counts.activeBlackboardConversations ?? 0} icon={GitBranch} />
             <StatTile label="Approvals" value={context?.counts.pendingApprovals ?? 0} icon={Activity} />
             <StatTile label="Tokens" value={context?.counts.tokensInWindow ?? 0} icon={Zap} />
           </div>
@@ -834,6 +937,33 @@ export function MotherChat() {
                 </div>
               ))}
               {context && (context.agentRunJobs ?? []).length === 0 && <p className="text-sm text-gray-500">No local Codex runs</p>}
+            </div>
+          </section>
+
+          <section>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Live Blackboard</h3>
+            <div className="space-y-2">
+              {(context?.blackboardConversations ?? []).slice(0, 3).map(conversation => (
+                <div key={conversation.id} className="rounded-lg border border-violet-500/10 bg-violet-500/5 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-sm text-white">{conversation.title}</p>
+                    <span className="shrink-0 rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-200">
+                      {conversation.currentRound}/{conversation.maxRounds}
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-gray-400">{conversation.goal || conversation.completedReason || conversation.status}</p>
+                </div>
+              ))}
+              {(context?.blackboardEvents ?? []).slice(-4).map(event => (
+                <div key={event.id} className="rounded-lg border border-white/5 bg-surface-850 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-xs font-medium text-violet-200">{event.from}{' -> '}{event.to}</p>
+                    <span className="text-[10px] text-gray-600">{new Date(event.createdAt).toLocaleTimeString()}</span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-gray-400">{event.content}</p>
+                </div>
+              ))}
+              {context && (context.blackboardConversations ?? []).length === 0 && <p className="text-sm text-gray-500">No live blackboard conversations</p>}
             </div>
           </section>
 

@@ -3,12 +3,24 @@ import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom'
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import type { Agent, Gateway, McpServer, McpTool, SoulTemplate, MarketplaceSkill, AgentSkill, AgentIntegration, ChannelType } from '@/types';
+import type { Agent, Board, Gateway, GithubRepositorySummary, McpServer, McpTool, SoulTemplate, MarketplaceSkill, AgentSkill, AgentIntegration, ChannelType, VercelProjectSummary } from '@/types';
 
 interface McpServerWithTools extends McpServer {
   tools?: McpTool[];
   _loadingTools?: boolean;
   _expanded?: boolean;
+}
+
+const VERCEL_MCP_URL = 'https://mcp.vercel.com';
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function boardIntegrationScope(board: Board | null) {
+  return objectRecord(objectRecord(board?.successMetrics).integrationScope);
 }
 
 // ── Emoji Picker ─────────────────────────────────────────
@@ -133,6 +145,8 @@ export function AgentCreate() {
   const [nameManuallyEdited, setNameManuallyEdited] = useState(false);
   const [gatewayId, setGatewayId] = useState('');
   const [gateways, setGateways] = useState<Gateway[]>([]);
+  const [currentBoardId, setCurrentBoardId] = useState(boardId || '');
+  const [board, setBoard] = useState<Board | null>(null);
 
   // Advanced settings
   const [showAdvanced, setShowAdvanced] = useState(isEditMode);
@@ -147,6 +161,19 @@ export function AgentCreate() {
   const [addingMcp, setAddingMcp] = useState(false);
   const [refreshingServer, setRefreshingServer] = useState<string | null>(null);
   const [deletingServer, setDeletingServer] = useState<string | null>(null);
+  const [addingVercelMcp, setAddingVercelMcp] = useState(false);
+
+  // Repository and deployment access state
+  const [repos, setRepos] = useState<GithubRepositorySummary[]>([]);
+  const [projects, setProjects] = useState<VercelProjectSummary[]>([]);
+  const [resourcesLoading, setResourcesLoading] = useState(false);
+  const [githubResourcesError, setGithubResourcesError] = useState<string | null>(null);
+  const [vercelResourcesError, setVercelResourcesError] = useState<string | null>(null);
+  const [githubAccessEnabled, setGithubAccessEnabled] = useState(true);
+  const [vercelAccessEnabled, setVercelAccessEnabled] = useState(true);
+  const [vercelMcpEnabled, setVercelMcpEnabled] = useState(false);
+  const [githubRepoFullName, setGithubRepoFullName] = useState('');
+  const [vercelProjectId, setVercelProjectId] = useState('');
 
   // Soul template state
   const [soulTemplates, setSoulTemplates] = useState<SoulTemplate[]>([]);
@@ -200,8 +227,20 @@ export function AgentCreate() {
         setAgentToAgent(agent.agentToAgent ?? false);
         setSoulMd(agent.soulMd || '');
         setGatewayId(agent.gatewayId || '');
+        setCurrentBoardId(agent.boardId || boardId || '');
         setSelectedTemplateId(agent.soulTemplateId || '');
         setNameManuallyEdited(true);
+        const integrationAccess = objectRecord(agent.identityProfile?.integrationAccess);
+        const github = objectRecord(integrationAccess.github);
+        const vercel = objectRecord(integrationAccess.vercel);
+        const mcp = objectRecord(integrationAccess.mcp);
+        setGithubAccessEnabled(github.enabled !== false);
+        setVercelAccessEnabled(vercel.enabled !== false);
+        setVercelMcpEnabled(mcp.vercel === true);
+        const githubRepo = objectRecord(github.repo);
+        const vercelProject = objectRecord(vercel.project);
+        if (typeof githubRepo.fullName === 'string') setGithubRepoFullName(githubRepo.fullName);
+        if (typeof vercelProject.id === 'string') setVercelProjectId(vercelProject.id);
 
         // Load agent skills
         if (agent.agentSkills) {
@@ -231,6 +270,55 @@ export function AgentCreate() {
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }, [id]);
+
+  useEffect(() => {
+    if (!currentBoardId) return;
+    api.boards.get(currentBoardId)
+      .then((data) => {
+        setBoard(data);
+        const scope = boardIntegrationScope(data);
+        const githubRepo = objectRecord(scope.githubRepo);
+        const vercelProject = objectRecord(scope.vercelProject);
+        if (!githubRepoFullName && typeof githubRepo.fullName === 'string') setGithubRepoFullName(githubRepo.fullName);
+        if (!vercelProjectId && typeof vercelProject.id === 'string') setVercelProjectId(vercelProject.id);
+      })
+      .catch(() => {});
+  }, [currentBoardId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadResources() {
+      setResourcesLoading(true);
+      setGithubResourcesError(null);
+      setVercelResourcesError(null);
+      try {
+        const settings = await api.org.integrationSettings();
+        const [repoResult, projectResult] = await Promise.allSettled([
+          settings.github.configured
+            ? api.org.githubRepos()
+            : Promise.resolve([] as GithubRepositorySummary[]),
+          settings.vercel.configured
+            ? api.org.vercelProjects()
+            : Promise.resolve([] as VercelProjectSummary[]),
+        ]);
+        if (cancelled) return;
+        if (repoResult.status === 'fulfilled') setRepos(repoResult.value as GithubRepositorySummary[]);
+        if (projectResult.status === 'fulfilled') setProjects(projectResult.value as VercelProjectSummary[]);
+        if (repoResult.status === 'rejected') {
+          setGithubResourcesError(repoResult.reason instanceof Error ? repoResult.reason.message : 'Failed to load GitHub repositories');
+        }
+        if (projectResult.status === 'rejected') {
+          setVercelResourcesError(projectResult.reason instanceof Error ? projectResult.reason.message : 'Failed to load Vercel projects');
+        }
+      } finally {
+        if (!cancelled) setResourcesLoading(false);
+      }
+    }
+    loadResources();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Load MCP servers in edit mode
   const fetchMcpServers = useCallback(async () => {
@@ -313,6 +401,37 @@ export function AgentCreate() {
     }));
   };
 
+  const buildIntegrationAccess = (overrides?: { vercelMcp?: boolean }) => {
+    const selectedRepo = repos.find(repo => repo.fullName === githubRepoFullName);
+    const selectedProject = projects.find(project => project.id === vercelProjectId);
+    const scope = boardIntegrationScope(board);
+    const boardRepo = objectRecord(scope.githubRepo);
+    const boardProject = objectRecord(scope.vercelProject);
+    return {
+      github: {
+        enabled: githubAccessEnabled && Boolean(selectedRepo || boardRepo.fullName),
+        repo: selectedRepo || (boardRepo.fullName ? boardRepo : null),
+      },
+      vercel: {
+        enabled: vercelAccessEnabled && Boolean(selectedProject || boardProject.id),
+        project: selectedProject || (boardProject.id ? boardProject : null),
+      },
+      mcp: {
+        vercel: overrides?.vercelMcp ?? vercelMcpEnabled,
+      },
+    };
+  };
+
+  const ensureVercelMcpServer = async (agentId: string) => {
+    const servers = await api.mcp.list(agentId) as McpServer[];
+    if (servers.some(server => server.url === VERCEL_MCP_URL)) return;
+    await api.mcp.add(agentId, {
+      name: 'Vercel',
+      url: VERCEL_MCP_URL,
+      transport: 'STREAMABLE_HTTP',
+    });
+  };
+
   // Skill toggle
   const handleSkillToggle = (skillId: string) => {
     setSelectedSkillIds(prev => {
@@ -348,16 +467,22 @@ export function AgentCreate() {
         heartbeatInterval,
         enabled,
         agentToAgent,
-        soulMd: soulMd.trim() || undefined,
-        soulTemplateId: selectedTemplateId || null,
-        gatewayId: shouldSendGateway ? gatewayId : undefined,
-      };
+	        soulMd: soulMd.trim() || undefined,
+	        soulTemplateId: selectedTemplateId || null,
+	        gatewayId: shouldSendGateway ? gatewayId : undefined,
+	        identityProfile: {
+	          integrationAccess: buildIntegrationAccess(),
+	        },
+	      };
       const skillIdsArray = Array.from(selectedSkillIds);
 
-      if (isEditMode && id) {
-        await api.agents.update(id, data);
+	      if (isEditMode && id) {
+	        await api.agents.update(id, data);
+	        if (vercelMcpEnabled) {
+	          await ensureVercelMcpServer(id);
+	        }
 
-        // Sync skills: compute diff
+	        // Sync skills: compute diff
         const currentSkillIds = new Set(agentSkills.map(s => s.skillId));
         // Remove deselected
         for (const sid of currentSkillIds) {
@@ -384,10 +509,10 @@ export function AgentCreate() {
         navigate(`/agents/${id}`);
       } else {
         data.skillIds = skillIdsArray;
-        const created = (await api.agents.create(data)) as Agent;
-        if (boardId) {
-          await api.boards.addAgent(boardId, { agentId: created.id });
-        }
+	        const created = (await api.agents.create(data)) as Agent;
+	        if (boardId) {
+	          await api.boards.addAgent(boardId, { agentId: created.id, integrationAccess: buildIntegrationAccess() });
+	        }
 
         // Update customizations for newly created agent
         for (const sid of selectedSkillIds) {
@@ -401,15 +526,19 @@ export function AgentCreate() {
         }
 
         // Save integrations configured during creation
-        for (const channel of ['TELEGRAM', 'SLACK', 'GOOGLE_CHAT'] as ChannelType[]) {
+	        for (const channel of ['TELEGRAM', 'SLACK', 'GOOGLE_CHAT'] as ChannelType[]) {
           const integ = integrations[channel];
           const hasCredentials = integ.botToken || integ.appToken || integ.serviceAccount || integ.webhookUrl;
           if (hasCredentials) {
             await api.agents.upsertIntegration(created.id, channel, integ as Record<string, unknown>);
-          }
-        }
+	          }
+	        }
 
-        navigate(returnTo || `/agents/${created.id}`);
+	        if (vercelMcpEnabled) {
+	          await ensureVercelMcpServer(created.id);
+	        }
+
+	        navigate(returnTo || `/agents/${created.id}`);
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to save agent');
@@ -450,6 +579,31 @@ export function AgentCreate() {
       console.error('Failed to add MCP server:', err);
     } finally {
       setAddingMcp(false);
+    }
+  };
+
+  const handleConnectVercelMcp = async () => {
+    if (!id) return;
+    const existing = mcpServers.find(server => server.url === VERCEL_MCP_URL);
+    if (existing) {
+      setVercelMcpEnabled(true);
+      await api.agents.update(id, { identityProfile: { integrationAccess: buildIntegrationAccess({ vercelMcp: true }) } });
+      return;
+    }
+    setAddingVercelMcp(true);
+    try {
+      await api.mcp.add(id, {
+        name: 'Vercel',
+        url: VERCEL_MCP_URL,
+        transport: 'STREAMABLE_HTTP',
+      });
+      setVercelMcpEnabled(true);
+      await api.agents.update(id, { identityProfile: { integrationAccess: buildIntegrationAccess({ vercelMcp: true }) } });
+      await fetchMcpServers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to connect Vercel MCP');
+    } finally {
+      setAddingVercelMcp(false);
     }
   };
 
@@ -612,8 +766,8 @@ export function AgentCreate() {
                 </div>
 
                 {/* Agent-to-Agent Toggle */}
-                <div className="col-span-2">
-                  <div className="flex items-center justify-between px-4 py-3 rounded-lg bg-surface-900 border border-white/10">
+	                <div className="col-span-2">
+	                  <div className="flex items-center justify-between px-4 py-3 rounded-lg bg-surface-900 border border-white/10">
                     <div>
                       <p className="text-sm font-medium text-white">Agent-to-Agent (A2A)</p>
                       <p className="text-xs text-gray-500 mt-0.5">
@@ -635,9 +789,115 @@ export function AgentCreate() {
                         )}
                       />
                     </button>
-                  </div>
-                </div>
-              </div>
+	                  </div>
+	                </div>
+
+	                {/* Repository and deployment access */}
+	                <div className="col-span-2 rounded-lg border border-white/10 bg-surface-900 p-4">
+	                  <div className="mb-3 flex items-center justify-between gap-3">
+	                    <div>
+	                      <p className="text-sm font-medium text-white">Repository and website access</p>
+	                      {board && <p className="mt-0.5 text-xs text-gray-500">{board.name}</p>}
+	                    </div>
+	                    {resourcesLoading && <span className="text-[11px] text-gray-600">Loading...</span>}
+	                  </div>
+	                  <div className="grid gap-3 md:grid-cols-2">
+	                    <div>
+	                      <div className="mb-1 flex items-center justify-between gap-2">
+	                        <label className="block text-xs font-medium text-gray-400">GitHub repository</label>
+	                        <button
+	                          type="button"
+	                          onClick={() => setGithubAccessEnabled(!githubAccessEnabled)}
+	                          className={cn(
+	                            'relative h-5 w-9 rounded-full transition-colors',
+	                            githubAccessEnabled ? 'bg-nexus-500' : 'bg-gray-600'
+	                          )}
+	                        >
+	                          <div className={cn(
+	                            'absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform',
+	                            githubAccessEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+	                          )} />
+	                        </button>
+	                      </div>
+	                      <select
+	                        value={githubRepoFullName}
+	                        onChange={(e) => setGithubRepoFullName(e.target.value)}
+	                        disabled={!githubAccessEnabled}
+	                        className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-nexus-500/50 disabled:opacity-50"
+	                      >
+	                        <option value="">No repository</option>
+	                        {repos.map(repo => (
+	                          <option key={repo.id} value={repo.fullName}>
+	                            {repo.fullName}{repo.private ? ' (private)' : ''}
+	                          </option>
+	                        ))}
+	                      </select>
+	                      {githubResourcesError && (
+	                        <p className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+	                          {githubResourcesError}{' '}
+	                          <Link to="/settings" className="text-amber-100 underline">Settings</Link>
+	                        </p>
+	                      )}
+	                    </div>
+	                    <div>
+	                      <div className="mb-1 flex items-center justify-between gap-2">
+	                        <label className="block text-xs font-medium text-gray-400">Vercel website</label>
+	                        <button
+	                          type="button"
+	                          onClick={() => setVercelAccessEnabled(!vercelAccessEnabled)}
+	                          className={cn(
+	                            'relative h-5 w-9 rounded-full transition-colors',
+	                            vercelAccessEnabled ? 'bg-nexus-500' : 'bg-gray-600'
+	                          )}
+	                        >
+	                          <div className={cn(
+	                            'absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform',
+	                            vercelAccessEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+	                          )} />
+	                        </button>
+	                      </div>
+	                      <select
+	                        value={vercelProjectId}
+	                        onChange={(e) => setVercelProjectId(e.target.value)}
+	                        disabled={!vercelAccessEnabled}
+	                        className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-nexus-500/50 disabled:opacity-50"
+	                      >
+	                        <option value="">No website</option>
+	                        {projects.map(project => (
+	                          <option key={project.id} value={project.id}>
+	                            {project.name}{project.productionUrl ? ` (${project.productionUrl})` : ''}
+	                          </option>
+	                        ))}
+	                      </select>
+	                      {vercelResourcesError && (
+	                        <p className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+	                          {vercelResourcesError}{' '}
+	                          <Link to="/settings" className="text-amber-100 underline">Settings</Link>
+	                        </p>
+	                      )}
+	                    </div>
+	                  </div>
+	                  <div className="mt-3 flex items-center justify-between rounded-lg border border-white/5 bg-surface-850 px-3 py-2">
+	                    <div>
+	                      <p className="text-xs font-medium text-gray-300">Vercel MCP</p>
+	                      <p className="text-[11px] text-gray-600">{VERCEL_MCP_URL}</p>
+	                    </div>
+	                    <button
+	                      type="button"
+	                      onClick={() => setVercelMcpEnabled(!vercelMcpEnabled)}
+	                      className={cn(
+	                        'relative h-5 w-9 rounded-full transition-colors',
+	                        vercelMcpEnabled ? 'bg-emerald-500' : 'bg-gray-600'
+	                      )}
+	                    >
+	                      <div className={cn(
+	                        'absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform',
+	                        vercelMcpEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+	                      )} />
+	                    </button>
+	                  </div>
+	                </div>
+	              </div>
 
               {/* Gateway warning — only when no auto-provisioning and no gateways */}
               {gatewayInfo && !gatewayInfo.hasDefaultConfig && gatewayInfo.gatewayCount === 0 && (
@@ -1166,18 +1426,27 @@ export function AgentCreate() {
           {isEditMode && id && (
             <div className="w-1/3 flex flex-col gap-4">
               <div className="rounded-xl border border-white/5 bg-surface-850 p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-semibold text-white">MCP Servers</h3>
-                  <button
+	                <div className="flex items-center justify-between mb-4">
+	                  <h3 className="text-sm font-semibold text-white">MCP Servers</h3>
+	                  <button
                     type="button"
                     onClick={() => setShowAddMcp(!showAddMcp)}
                     className="px-3 py-1.5 rounded-lg text-xs font-medium bg-nexus-600 text-white hover:bg-nexus-500 transition-all"
-                  >
-                    {showAddMcp ? 'Cancel' : '+ Add Server'}
-                  </button>
-                </div>
+	                  >
+	                    {showAddMcp ? 'Cancel' : '+ Add Server'}
+	                  </button>
+	                </div>
 
-                {/* Add MCP server inline form */}
+	                <button
+	                  type="button"
+	                  onClick={handleConnectVercelMcp}
+	                  disabled={addingVercelMcp}
+	                  className="mb-4 w-full rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-300 transition-colors hover:bg-emerald-500/15 disabled:opacity-50"
+	                >
+	                  {addingVercelMcp ? 'Connecting Vercel MCP...' : 'Connect Vercel MCP'}
+	                </button>
+
+	                {/* Add MCP server inline form */}
                 {showAddMcp && (
                   <div className="mb-4 p-3 rounded-lg bg-surface-900 border border-white/10 space-y-3">
                     <div>

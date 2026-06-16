@@ -43,7 +43,7 @@ import errorEventRoutes from './routes/error-events.js';
 import { connectAllGateways, setSocketIO } from './services/gateway.service.js';
 import { getCodexCliDiagnostics, isCodexCliRuntimeEnabled } from './services/codex-cli.service.js';
 import { ensureDevelopmentAdminUser } from './services/dev-admin.service.js';
-import { startAgentRunWorker } from './services/agent-run-queue.service.js';
+import { startAgentRunWorker, stopAgentRunWorker } from './services/agent-run-queue.service.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -174,6 +174,39 @@ app.set('io', io);
 
 // Share Socket.io with gateway service for event forwarding
 setSocketIO(io);
+
+let shuttingDown = false;
+
+async function shutdown(signal: NodeJS.Signals) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info({ signal }, 'Shutting down Nexus backend');
+
+  stopAgentRunWorker();
+  io.close();
+
+  await new Promise<void>((resolve) => {
+    httpServer.close((err) => {
+      if (err) logger.warn({ err }, 'HTTP server close returned an error during shutdown');
+      resolve();
+    });
+  });
+  await prisma.$disconnect().catch(err => logger.warn({ err }, 'Failed to disconnect Prisma during shutdown'));
+  process.exit(0);
+}
+
+process.once('SIGTERM', () => {
+  void shutdown('SIGTERM');
+});
+
+process.once('SIGINT', () => {
+  void shutdown('SIGINT');
+});
+
+httpServer.on('error', (err: NodeJS.ErrnoException) => {
+  logger.error({ err }, 'Nexus backend HTTP server error');
+  process.exit(1);
+});
 
 async function start() {
   await ensureDevelopmentAdminUser();
