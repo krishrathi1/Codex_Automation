@@ -1102,7 +1102,7 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
       nexusSessionId: chatSession.id,
       durationMs,
       usage: state.usage,
-      model: process.env.CODEX_MODEL?.trim() || 'codex-cli',
+      model: process.env.CLAUDE_MODEL?.trim() || process.env.CODEX_MODEL?.trim() || 'claude-cli',
     };
   } catch (err) {
     const durationMs = Date.now() - startedAt;
