@@ -34,7 +34,14 @@ export function isSigNozConfigured(cfg?: Pick<SigNozConfig, 'endpoint' | 'apiKey
 }
 
 function baseUrl(cfg: SigNozConfig) {
-  return cfg.endpoint.trim().replace(/\/+$/, '');
+  const raw = cfg.endpoint.trim();
+  // Be forgiving: users often paste a full URL with a path/query (e.g. a
+  // dashboard or password-reset link). The query API lives at the origin.
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return raw.replace(/\/+$/, '');
+  }
 }
 
 function headers(cfg: SigNozConfig): Record<string, string> {
@@ -196,7 +203,18 @@ export async function checkSigNozConnection(cfg: SigNozConfig): Promise<{ ok: bo
         compositeQuery: { queries: [{ type: 'builder_query', spec: { name: 'A', signal: 'logs', offset: 0, limit: 1 } }] },
       }),
     });
-    if (res.ok) return { ok: true, detail: 'Connected to SigNoz.' };
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
+      return { ok: true, detail: 'Connected to SigNoz.' };
+    }
+    if (res.ok) {
+      // Reachable host but the query API did not answer with JSON — almost always
+      // a wrong endpoint (e.g. a dashboard/login URL instead of the base host).
+      return {
+        ok: false,
+        detail: 'Reached the host but not the SigNoz query API. Use the base URL only, e.g. https://<tenant>.<region>.signoz.cloud (no path).',
+      };
+    }
     const detail = await res.text().catch(() => res.statusText);
     return { ok: false, detail: `SigNoz returned ${res.status}: ${detail.slice(0, 200)}` };
   } catch (err) {
