@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as motherChatService from '../services/mother-chat.service.js';
-import * as codexCliService from '../services/codex-cli.service.js';
+import * as codexCliService from '../services/claude-cli.service.js';
 
 const router = Router();
 
@@ -51,7 +51,7 @@ router.post('/message', async (req, res) => {
       runId: result.codexSessionId,
       codexSessionId: result.codexSessionId,
       sessionId: result.nexusSessionId,
-      runtime: 'codex-cli',
+      runtime: 'claude-cli',
       usage: result.usage,
     });
   } catch (err) {
