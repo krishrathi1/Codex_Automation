@@ -147,6 +147,7 @@ export function AgentCreate() {
   const [gateways, setGateways] = useState<Gateway[]>([]);
   const [currentBoardId, setCurrentBoardId] = useState(boardId || '');
   const [board, setBoard] = useState<Board | null>(null);
+  const [boards, setBoards] = useState<Board[]>([]);
 
   // Advanced settings
   const [showAdvanced, setShowAdvanced] = useState(isEditMode);
@@ -208,6 +209,7 @@ export function AgentCreate() {
     api.gateways.defaults().then(setGatewayInfo).catch(() => {});
     api.soulTemplates.list().then(setSoulTemplates).catch(() => {});
     api.skills.marketplace().then(setAvailableSkills).catch(() => {});
+    api.boards.list().then(setBoards).catch(() => {});
   }, []);
 
   // Load agent data in edit mode
@@ -510,8 +512,9 @@ export function AgentCreate() {
       } else {
         data.skillIds = skillIdsArray;
 	        const created = (await api.agents.create(data)) as Agent;
-	        if (boardId) {
-	          await api.boards.addAgent(boardId, { agentId: created.id, integrationAccess: buildIntegrationAccess() });
+	        const targetBoardId = currentBoardId || boardId;
+	        if (targetBoardId) {
+	          await api.boards.addAgent(targetBoardId, { agentId: created.id, integrationAccess: buildIntegrationAccess() });
 	        }
 
         // Update customizations for newly created agent
@@ -764,6 +767,30 @@ export function AgentCreate() {
                     className="w-full px-3 py-2 rounded-lg bg-surface-900 border border-white/10 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-nexus-500/50 resize-y"
                   />
                 </div>
+
+                {/* Production Group (board) — only when creating, not editing */}
+                {!isEditMode && (
+                  <div className="col-span-2">
+                    <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                      Production Group
+                      {boardId && <span className="text-gray-600 font-normal"> (preselected)</span>}
+                    </label>
+                    <select
+                      value={currentBoardId}
+                      onChange={(e) => setCurrentBoardId(e.target.value)}
+                      disabled={Boolean(boardId)}
+                      className="w-full px-3 py-2 rounded-lg bg-surface-900 border border-white/10 text-sm text-white focus:outline-none focus:border-nexus-500/50 disabled:opacity-50"
+                    >
+                      <option value="">No production group (standalone agent)</option>
+                      {boards.map((b) => (
+                        <option key={b.id} value={b.id}>{b.name}</option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-[11px] text-gray-600">
+                      Attach this agent to a production group so it appears on that board.
+                    </p>
+                  </div>
+                )}
 
                 {/* Agent-to-Agent Toggle */}
 	                <div className="col-span-2">
