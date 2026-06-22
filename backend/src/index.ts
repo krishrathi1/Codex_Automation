@@ -43,7 +43,7 @@ import errorEventRoutes from './routes/error-events.js';
 import mutualFundMonitorRoutes from './routes/mutual-fund-monitor.js';
 import { connectAllGateways, setSocketIO } from './services/gateway.service.js';
 import { startMutualFundMonitor, stopMutualFundMonitor } from './services/mutual-fund-monitor.service.js';
-import { getCodexCliDiagnostics, isCodexCliRuntimeEnabled } from './services/claude-cli.service.js';
+import { getClaudeCliDiagnostics, isCodexCliRuntimeEnabled } from './services/claude-cli.service.js';
 import { ensureDevelopmentAdminUser } from './services/dev-admin.service.js';
 import { startAgentRunWorker, stopAgentRunWorker } from './services/agent-run-queue.service.js';
 
@@ -229,7 +229,7 @@ async function start() {
 
   // Connect to all gateways on startup unless local Claude CLI is the selected runtime.
   if (isCodexCliRuntimeEnabled()) {
-    const diagnostics = await getCodexCliDiagnostics();
+    const diagnostics = await getClaudeCliDiagnostics();
     const logPayload = {
       selectedCommand: diagnostics.selectedCommand,
       configuredCommand: diagnostics.configuredCommand,

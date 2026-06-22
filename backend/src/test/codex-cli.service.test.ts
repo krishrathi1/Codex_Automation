@@ -40,6 +40,7 @@ describe('claude-cli service helpers', () => {
     expect(buildCodexExecArgs({})).toEqual([
       '--output-format',
       'stream-json',
+      '--verbose',
     ]);
   });
 
@@ -50,6 +51,7 @@ describe('claude-cli service helpers', () => {
     })).toEqual([
       '--output-format',
       'stream-json',
+      '--verbose',
       '--model',
       'claude-opus-4-8',
       '--resume',

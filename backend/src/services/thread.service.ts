@@ -98,7 +98,7 @@ function edgeLabel(kind: GraphEdgeKind) {
   return 'System';
 }
 
-function codexSessionIdFromMetadata(metadata: JsonRecord) {
+function claudeSessionIdFromMetadata(metadata: JsonRecord) {
   return stringValue(metadata.codexSessionId)
     || stringValue(metadata.codexCliSessionId)
     || stringValue(metadata.activeWorkflowSessionId)
@@ -451,7 +451,7 @@ export async function getCommGraph(organizationId: string, options: { boardId?: 
 
   const motherProfile = objectRecord(motherAgent?.identityProfile);
   const motherSessionsByBoard = objectRecord(motherProfile.codexCliSessionIdsByBoard);
-  function scopedMotherCodexSessionId(boardId: string) {
+  function scopedMotherClaudeSessionId(boardId: string) {
     const sessionId = stringValue(motherSessionsByBoard[boardId]);
     if (!sessionId) return undefined;
     const globalSessions = [
@@ -481,7 +481,7 @@ export async function getCommGraph(organizationId: string, options: { boardId?: 
       boardName: board?.name ?? null,
       enabled: false,
       currentTask: board?.name ? `Monitoring ${board.name}` : 'Monitoring group',
-      codexSessionId: scopedMotherCodexSessionId(boardId),
+      codexSessionId: scopedMotherClaudeSessionId(boardId),
       activeRunIds: [],
       taskIds: [],
       queuedRunIds: [],
@@ -584,7 +584,7 @@ export async function getCommGraph(organizationId: string, options: { boardId?: 
       edge.lastMessage = message.createdAt.toISOString();
     }
     pushUnique(edge.threadIds, message.threadId);
-    pushUnique(edge.codexSessionIds, codexSessionIdFromMetadata(metadata));
+    pushUnique(edge.codexSessionIds, claudeSessionIdFromMetadata(metadata));
     pushUnique(edge.sessionIds, stringValue(metadata.nexusSessionId));
 
     for (const endpoint of [source, target]) {
@@ -601,7 +601,7 @@ export async function getCommGraph(organizationId: string, options: { boardId?: 
         content: message.content.slice(0, 240),
         createdAt: message.createdAt.toISOString(),
         threadId: message.threadId,
-        codexSessionId: codexSessionIdFromMetadata(metadata),
+        codexSessionId: claudeSessionIdFromMetadata(metadata),
         nexusSessionId: stringValue(metadata.nexusSessionId),
         requestId: stringValue(metadata.requestId),
       });

@@ -5,7 +5,7 @@ import { encryptField, decryptField } from '../lib/crypto.js';
 import { logger } from '../lib/logger.js';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { syncPendingAgents } from './agent.service.js';
-import { isCodexCliRuntimeEnabled } from './claude-cli.service.js';
+import { isCodexCliRuntimeEnabled as isClaudeCliRuntimeEnabled } from './claude-cli.service.js';
 import type { GatewayStatus } from '@prisma/client';
 import type { Server as SocketIOServer } from 'socket.io';
 
@@ -243,7 +243,7 @@ function subscribeGatewayEvents(gatewayId: string, organizationId: string) {
  * Returns null if env vars are not configured.
  */
 export async function ensureDefaultGateway(organizationId: string): Promise<string | null> {
-  if (isCodexCliRuntimeEnabled()) return null;
+  if (isClaudeCliRuntimeEnabled()) return null;
 
   const defaultUrl = process.env.DEFAULT_GATEWAY_URL;
   const defaultToken = process.env.DEFAULT_GATEWAY_TOKEN;

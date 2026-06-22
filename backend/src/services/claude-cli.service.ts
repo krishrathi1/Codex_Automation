@@ -13,11 +13,11 @@ import { getOrCreateAdminAgent } from './system-agent.service.js';
 const SESSION_ID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const CLAUDE_CLI_RUNTIME_VALUES = new Set(['claude-cli', 'claude']);
 const DEFAULT_OPERATION_TIMEOUT_MS = 15 * 60 * 1000;
-const runningCodexAgentRuns = new Set<string>();
+const runningClaudeAgentRuns = new Set<string>();
 
 type JsonRecord = Record<string, unknown>;
 
-export interface CodexCliUsage {
+export interface ClaudeCliUsage {
   inputTokens: number;
   cachedInputTokens: number;
   outputTokens: number;
@@ -50,7 +50,7 @@ interface ClaudeMessage {
 }
 
 // The raw JSON events from Claude CLI --output-format stream-json
-export interface CodexJsonEvent {
+export interface ClaudeJsonEvent {
   type?: string;
   subtype?: string;
   session_id?: string;
@@ -66,7 +66,7 @@ export interface CodexJsonEvent {
   [key: string]: unknown;
 }
 
-export type NexusCodexEventType =
+export type NexusClaudeEventType =
   | 'response'
   | 'activity'
   | 'tool_call'
@@ -78,32 +78,32 @@ export type NexusCodexEventType =
   | 'response_end'
   | 'error';
 
-export interface NexusCodexEvent {
-  type: NexusCodexEventType;
+export interface NexusClaudeEvent {
+  type: NexusClaudeEventType;
   content: string;
   metadata?: JsonRecord;
 }
 
-export interface CodexRunState {
+export interface ClaudeRunState {
   codexSessionId: string | null;
   result: string;
-  usage: CodexCliUsage | null;
+  usage: ClaudeCliUsage | null;
   errorMessage: string | null;
   rawStdout: string;
   stderr: string;
 }
 
-export interface CodexCliRunResult {
+export interface ClaudeCliRunResult {
   status: 'finished' | 'failed';
   result: string;
   codexSessionId: string | null;
   nexusSessionId: string;
   durationMs: number;
-  usage: CodexCliUsage | null;
+  usage: ClaudeCliUsage | null;
   model: string;
 }
 
-interface SendCodexCliAgentMessageOptions {
+interface SendClaudeCliAgentMessageOptions {
   organizationId: string;
   agent: PrismaAgent;
   message: string;
@@ -146,8 +146,8 @@ function expandHome(input: string) {
   return input.startsWith('~/') ? path.join(os.homedir(), input.slice(2)) : input;
 }
 
-export function resolveCodexCwd(agent?: Pick<PrismaAgent, 'workspace'>) {
-  const configured = process.env.CLAUDE_WORKSPACE_ROOT || process.env.CODEX_WORKSPACE_ROOT || agent?.workspace;
+export function resolveClaudeCwd(agent?: Pick<PrismaAgent, 'workspace'>) {
+  const configured = process.env.CLAUDE_WORKSPACE_ROOT || agent?.workspace;
   if (!configured?.trim()) return projectRoot();
 
   const expanded = expandHome(configured.trim());
@@ -163,7 +163,7 @@ function normalizeSessionId(sessionId: unknown): string | undefined {
   return stripped.match(SESSION_ID_PATTERN)?.[0] || stripped;
 }
 
-export function getAgentCodexSessionId(agent: Pick<PrismaAgent, 'identityProfile' | 'gatewayAgentId'>) {
+export function getAgentClaudeSessionId(agent: Pick<PrismaAgent, 'identityProfile' | 'gatewayAgentId'>) {
   const profile = objectRecord(agent.identityProfile);
 
   // Priority: claudeCliSessionId > codexCliSessionId (compat) > codexSessionId (compat) > activeWorkflowSessionId > gatewayAgentId
@@ -187,7 +187,7 @@ function getAgentChatThreadId(agent: Pick<PrismaAgent, 'identityProfile'>) {
   return typeof profile.nexusChatThreadId === 'string' ? profile.nexusChatThreadId : undefined;
 }
 
-function getCodexSessionIdFromMetadata(metadata: unknown) {
+function getClaudeSessionIdFromMetadata(metadata: unknown) {
   const data = objectRecord(metadata);
   return (
     normalizeSessionId(data.claudeCliSessionId) ||
@@ -199,7 +199,7 @@ function getCodexSessionIdFromMetadata(metadata: unknown) {
   );
 }
 
-function isConfirmedCodexSessionMetadata(metadata: unknown) {
+function isConfirmedClaudeSessionMetadata(metadata: unknown) {
   const data = objectRecord(metadata);
   return (
     data.claudeSessionConfirmed === true ||
@@ -208,7 +208,7 @@ function isConfirmedCodexSessionMetadata(metadata: unknown) {
   );
 }
 
-export async function getThreadCodexSessionId(threadId: string, organizationId?: string) {
+export async function getThreadClaudeSessionId(threadId: string, organizationId?: string) {
   const messages = await prisma.message.findMany({
     where: {
       threadId,
@@ -220,8 +220,8 @@ export async function getThreadCodexSessionId(threadId: string, organizationId?:
   });
 
   for (const message of messages) {
-    const codexSessionId = getCodexSessionIdFromMetadata(message.metadata);
-    if (codexSessionId && isConfirmedCodexSessionMetadata(message.metadata)) return codexSessionId;
+    const claudeSessionId = getClaudeSessionIdFromMetadata(message.metadata);
+    if (claudeSessionId && isConfirmedClaudeSessionMetadata(message.metadata)) return claudeSessionId;
   }
 
   return undefined;
@@ -358,7 +358,7 @@ function runCliProbe(command: string, args: string[], timeoutMs = 5000): Promise
   });
 }
 
-export async function resolveCodexCommand() {
+export async function resolveClaudeCommand() {
   const configured = configuredClaudeCommand();
   if (configured) {
     if (configured.mustBeFilePath) {
@@ -386,7 +386,7 @@ export async function resolveCodexCommand() {
   );
 }
 
-export async function getCodexCliDiagnostics(agent?: Pick<PrismaAgent, 'workspace'>) {
+export async function getClaudeCliDiagnostics(agent?: Pick<PrismaAgent, 'workspace'>) {
   const installation = await validateInstallation();
   const authentication = installation.ok ? await validateAuthentication() : {
     ok: false,
@@ -411,7 +411,7 @@ export async function getCodexCliDiagnostics(agent?: Pick<PrismaAgent, 'workspac
       } : null,
     } : null,
     selectedCommand: installation.command,
-    cwd: resolveCodexCwd(agent),
+    cwd: resolveClaudeCwd(agent),
     model: process.env.CLAUDE_MODEL?.trim() || 'claude-cli-default',
     installation,
     authentication,
@@ -427,7 +427,7 @@ function diagnosticError(message: string, statusCode = 500) {
 
 export async function validateInstallation() {
   try {
-    const command = await resolveCodexCommand();
+    const command = await resolveClaudeCommand();
     const result = await runCliProbe(command, ['--version']);
     return {
       ok: result.ok,
@@ -448,7 +448,7 @@ export async function validateAuthentication() {
   // Claude authenticates via ANTHROPIC_API_KEY or stored OAuth.
   // There is no "login status" subcommand; a successful --version probe means auth is configured.
   try {
-    const command = await resolveCodexCommand();
+    const command = await resolveClaudeCommand();
     const result = await runCliProbe(command, ['--version']);
     return {
       ok: result.ok,
@@ -464,12 +464,12 @@ export async function validateAuthentication() {
   }
 }
 
-export function buildCodexExecArgs(options: {
+export function buildClaudeExecArgs(options: {
   cwd?: string;
   sessionId?: string | null;
   model?: string;
 }) {
-  const args: string[] = ['--output-format', 'stream-json'];
+  const args: string[] = ['--output-format', 'stream-json', '--verbose'];
   if (options.model) args.push('--model', options.model);
   const sid = normalizeSessionId(options.sessionId);
   if (sid) args.push('--resume', sid);
@@ -477,13 +477,13 @@ export function buildCodexExecArgs(options: {
 }
 
 function buildRuntimeClaudeExecArgs(sessionId?: string | null) {
-  return buildCodexExecArgs({
+  return buildClaudeExecArgs({
     sessionId,
     model: process.env.CLAUDE_MODEL?.trim() || undefined,
   });
 }
 
-export function isCodexResumeUnavailableError(err: unknown) {
+export function isClaudeResumeUnavailableError(err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
   return (
     /session.*not.?found/i.test(message) ||
@@ -492,7 +492,7 @@ export function isCodexResumeUnavailableError(err: unknown) {
   );
 }
 
-function usageFromClaudeEvent(usage?: ClaudeUsageEvent): CodexCliUsage | null {
+function usageFromClaudeEvent(usage?: ClaudeUsageEvent): ClaudeCliUsage | null {
   if (!usage) return null;
   const inputTokens = (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
   return {
@@ -503,7 +503,7 @@ function usageFromClaudeEvent(usage?: ClaudeUsageEvent): CodexCliUsage | null {
   };
 }
 
-export function applyCodexJsonEvent(event: CodexJsonEvent, state: CodexRunState): NexusCodexEvent[] {
+export function applyClaudeJsonEvent(event: ClaudeJsonEvent, state: ClaudeRunState): NexusClaudeEvent[] {
   const eventType = event.type;
 
   // --- Claude stream-json events ---
@@ -527,7 +527,7 @@ export function applyCodexJsonEvent(event: CodexJsonEvent, state: CodexRunState)
     const blocks: ClaudeContentBlock[] = Array.isArray(event.message.content)
       ? event.message.content
       : [];
-    const nexusEvents: NexusCodexEvent[] = [];
+    const nexusEvents: NexusClaudeEvent[] = [];
 
     for (const block of blocks) {
       if (block.type === 'text' && typeof block.text === 'string') {
@@ -584,7 +584,7 @@ export function applyCodexJsonEvent(event: CodexJsonEvent, state: CodexRunState)
   return [{ type: 'activity', content: eventType || 'Claude event', metadata: { event } }];
 }
 
-function activityTypeForEvent(eventType: NexusCodexEventType): ActivityType {
+function activityTypeForEvent(eventType: NexusClaudeEventType): ActivityType {
   if (eventType === 'error') return 'ERROR';
   if (eventType === 'response') return 'MESSAGE';
   return 'SYSTEM';
@@ -597,7 +597,7 @@ function emitChatEvent(options: {
   nexusSessionId: string;
   codexSessionId?: string | null;
   requestId?: string;
-  event: NexusCodexEvent;
+  event: NexusClaudeEvent;
 }) {
   options.io?.to(`org:${options.organizationId}`).emit('agent:chat:event', {
     agentId: options.agentId,
@@ -618,7 +618,7 @@ async function persistActivity(options: {
   nexusSessionId: string;
   codexSessionId?: string | null;
   requestId?: string;
-  event: NexusCodexEvent;
+  event: NexusClaudeEvent;
 }) {
   const message = options.event.content.slice(0, 500) || options.event.type;
   return activityService.createActivity(options.organizationId, {
@@ -706,9 +706,9 @@ async function updateAgentSession(agent: PrismaAgent, claudeSessionId: string, n
   });
 }
 
-function createCodexRunState(existingCodexSessionId?: string | null): CodexRunState {
+function createClaudeRunState(existingClaudeSessionId?: string | null): ClaudeRunState {
   return {
-    codexSessionId: existingCodexSessionId ?? null,
+    codexSessionId: existingClaudeSessionId ?? null,
     result: '',
     usage: null,
     errorMessage: null,
@@ -717,18 +717,18 @@ function createCodexRunState(existingCodexSessionId?: string | null): CodexRunSt
   };
 }
 
-export function runCodexCliPrompt(options: {
+export function runClaudeCliPrompt(options: {
   command: string;
   args: string[];
   cwd: string;
   prompt: string;
-  existingCodexSessionId?: string | null;
-  onEvent: (event: NexusCodexEvent, state: CodexRunState) => Promise<void>;
+  existingClaudeSessionId?: string | null;
+  onEvent: (event: NexusClaudeEvent, state: ClaudeRunState) => Promise<void>;
 }) {
   const timeoutMs = readNumberEnv('CLAUDE_OPERATION_TIMEOUT_MS', DEFAULT_OPERATION_TIMEOUT_MS);
-  const state = createCodexRunState(options.existingCodexSessionId);
+  const state = createClaudeRunState(options.existingClaudeSessionId);
 
-  return new Promise<CodexRunState>((resolve, reject) => {
+  return new Promise<ClaudeRunState>((resolve, reject) => {
     let stdoutBuffer = '';
     let settled = false;
     const child = spawn(options.command, options.args, {
@@ -762,8 +762,8 @@ export function runCodexCliPrompt(options: {
       const trimmed = line.trim();
       if (!trimmed) return Promise.resolve();
       try {
-        const event = JSON.parse(trimmed) as CodexJsonEvent;
-        const translated = applyCodexJsonEvent(event, state);
+        const event = JSON.parse(trimmed) as ClaudeJsonEvent;
+        const translated = applyClaudeJsonEvent(event, state);
         return translated.reduce(
           (promise, nextEvent) => promise.then(() => options.onEvent(nextEvent, state)),
           Promise.resolve(),
@@ -835,28 +835,28 @@ export function runCodexCliPrompt(options: {
   });
 }
 
-export async function runCodexCliPromptWithResumeRecovery(options: {
+export async function runClaudeCliPromptWithResumeRecovery(options: {
   command: string;
   cwd: string;
   prompt: string;
-  existingCodexSessionId?: string | null;
-  onEvent: (event: NexusCodexEvent, state: CodexRunState) => Promise<void>;
+  existingClaudeSessionId?: string | null;
+  onEvent: (event: NexusClaudeEvent, state: ClaudeRunState) => Promise<void>;
   logContext?: JsonRecord;
 }) {
-  const run = (sessionId?: string | null) => runCodexCliPrompt({
+  const run = (sessionId?: string | null) => runClaudeCliPrompt({
     command: options.command,
     args: buildRuntimeClaudeExecArgs(sessionId),
     cwd: options.cwd,
-    existingCodexSessionId: sessionId,
+    existingClaudeSessionId: sessionId,
     prompt: options.prompt,
     onEvent: options.onEvent,
   });
 
   try {
-    return await run(options.existingCodexSessionId);
+    return await run(options.existingClaudeSessionId);
   } catch (err) {
-    const staleSessionId = normalizeSessionId(options.existingCodexSessionId);
-    if (!staleSessionId || !isCodexResumeUnavailableError(err)) {
+    const staleSessionId = normalizeSessionId(options.existingClaudeSessionId);
+    if (!staleSessionId || !isClaudeResumeUnavailableError(err)) {
       throw err;
     }
 
@@ -873,25 +873,25 @@ export async function runCodexCliPromptWithResumeRecovery(options: {
         resumeRecovery: true,
         staleCodexSessionId: staleSessionId,
       },
-    }, createCodexRunState(null));
+    }, createClaudeRunState(null));
 
     return run(null);
   }
 }
 
-export async function sendCodexCliAgentMessage(options: SendCodexCliAgentMessageOptions): Promise<CodexCliRunResult> {
+export async function sendClaudeCliAgentMessage(options: SendClaudeCliAgentMessageOptions): Promise<ClaudeCliRunResult> {
   if (!options.message.trim()) {
     throw diagnosticError('message is required', 400);
   }
 
   const agentRunKey = `${options.organizationId}:${options.agent.id}`;
-  if (runningCodexAgentRuns.has(agentRunKey)) {
+  if (runningClaudeAgentRuns.has(agentRunKey)) {
     throw diagnosticError(
       `Claude CLI is already processing a message for ${options.agent.displayName}. Wait for that response to finish before sending another message.`,
       409,
     );
   }
-  runningCodexAgentRuns.add(agentRunKey);
+  runningClaudeAgentRuns.add(agentRunKey);
 
   try {
     const installation = await validateInstallation();
@@ -905,11 +905,11 @@ export async function sendCodexCliAgentMessage(options: SendCodexCliAgentMessage
     }
 
     const command = installation.command;
-    const cwd = resolveCodexCwd(options.agent);
+    const cwd = resolveClaudeCwd(options.agent);
     const thread = await upsertAgentChatThread(options.agent);
-    const threadCodexSessionId = await getThreadCodexSessionId(thread.id, options.organizationId);
-    const agentCodexSessionId = getAgentCodexSessionId(options.agent);
-    const existingCodexSessionId = threadCodexSessionId || agentCodexSessionId;
+    const threadClaudeSessionId = await getThreadClaudeSessionId(thread.id, options.organizationId);
+    const agentClaudeSessionId = getAgentClaudeSessionId(options.agent);
+    const existingClaudeSessionId = threadClaudeSessionId || agentClaudeSessionId;
     const adminAgent = await getOrCreateAdminAgent(options.organizationId);
     const chatSession = await prisma.session.create({
       data: {
@@ -934,7 +934,7 @@ export async function sendCodexCliAgentMessage(options: SendCodexCliAgentMessage
           conversationKind: 'admin_agent',
           edgeSemantic: 'admin_to_agent',
           nexusSessionId: chatSession.id,
-          resumeCodexSessionId: existingCodexSessionId ?? null,
+          resumeCodexSessionId: existingClaudeSessionId ?? null,
           requestId: options.requestId ?? null,
         } as any,
       },
@@ -947,17 +947,17 @@ export async function sendCodexCliAgentMessage(options: SendCodexCliAgentMessage
       agentId: options.agent.id,
       command,
       cwd,
-      resume: Boolean(existingCodexSessionId),
-      sessionSource: threadCodexSessionId ? 'thread' : agentCodexSessionId ? 'agent' : 'new',
+      resume: Boolean(existingClaudeSessionId),
+      sessionSource: threadClaudeSessionId ? 'thread' : agentClaudeSessionId ? 'agent' : 'new',
       threadId: thread.id,
       nexusSessionId: chatSession.id,
     }, 'Starting Claude CLI agent chat');
 
     try {
-      const state = await runCodexCliPromptWithResumeRecovery({
+      const state = await runClaudeCliPromptWithResumeRecovery({
         command,
         cwd,
-        existingCodexSessionId,
+        existingClaudeSessionId,
         prompt: composeAgentPrompt(options.agent, options.message),
         logContext: {
           agentId: options.agent.id,
@@ -1048,7 +1048,7 @@ export async function sendCodexCliAgentMessage(options: SendCodexCliAgentMessage
         }).catch(err => logger.warn({ err }, 'Failed to record Claude CLI token usage'));
       }
 
-      const responseEndEvent: NexusCodexEvent = {
+      const responseEndEvent: NexusClaudeEvent = {
         type: 'response_end',
         content: 'Claude response complete',
         metadata: { usage: state.usage },
@@ -1100,28 +1100,28 @@ export async function sendCodexCliAgentMessage(options: SendCodexCliAgentMessage
       await prisma.agent.update({ where: { id: options.agent.id }, data: { status: 'ERROR' } }).catch(() => {});
       options.io?.to(`org:${options.organizationId}`).emit('agent:updated', { id: options.agent.id, status: 'ERROR' });
 
-      const errorEvent: NexusCodexEvent = { type: 'error', content: errorMessage };
+      const errorEvent: NexusClaudeEvent = { type: 'error', content: errorMessage };
       emitChatEvent({
         io: options.io,
         organizationId: options.organizationId,
         agentId: options.agent.id,
         nexusSessionId: chatSession.id,
-        codexSessionId: existingCodexSessionId,
+        codexSessionId: existingClaudeSessionId,
         requestId: options.requestId,
         event: errorEvent,
       });
       throw err;
     }
   } finally {
-    runningCodexAgentRuns.delete(agentRunKey);
+    runningClaudeAgentRuns.delete(agentRunKey);
   }
 }
 
-export async function getCodexCliAgentMessages(agent: PrismaAgent, limit = 50) {
+export async function getClaudeCliAgentMessages(agent: PrismaAgent, limit = 50) {
   const threadId = getAgentChatThreadId(agent);
   if (!threadId) {
     return {
-      sessionKey: getAgentCodexSessionId(agent) || '',
+      sessionKey: getAgentClaudeSessionId(agent) || '',
       messages: [],
     };
   }
@@ -1135,10 +1135,10 @@ export async function getCodexCliAgentMessages(agent: PrismaAgent, limit = 50) {
     take: limit,
   });
 
-  const threadCodexSessionId = await getThreadCodexSessionId(threadId, agent.organizationId);
+  const threadClaudeSessionId = await getThreadClaudeSessionId(threadId, agent.organizationId);
 
   return {
-    sessionKey: threadCodexSessionId || getAgentCodexSessionId(agent) || '',
+    sessionKey: threadClaudeSessionId || getAgentClaudeSessionId(agent) || '',
     messages: messages.reverse().map(message => {
       const metadata = objectRecord(message.metadata);
       const role = metadata.role === 'assistant' ? 'assistant' : 'user';
@@ -1150,3 +1150,26 @@ export async function getCodexCliAgentMessages(agent: PrismaAgent, limit = 50) {
     }),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Backward-compat aliases — callers that imported the old Codex-named exports
+// continue to work without modification.
+// ---------------------------------------------------------------------------
+export type CodexCliUsage = ClaudeCliUsage;
+export type CodexJsonEvent = ClaudeJsonEvent;
+export type NexusCodexEventType = NexusClaudeEventType;
+export type NexusCodexEvent = NexusClaudeEvent;
+export type CodexRunState = ClaudeRunState;
+export type CodexCliRunResult = ClaudeCliRunResult;
+export { resolveClaudeCwd as resolveCodexCwd };
+export { resolveClaudeCommand as resolveCodexCommand };
+export { getClaudeCliDiagnostics as getCodexCliDiagnostics };
+export { getThreadClaudeSessionId as getThreadCodexSessionId };
+export { buildClaudeExecArgs as buildCodexExecArgs };
+export { sendClaudeCliAgentMessage as sendCodexCliAgentMessage };
+export { getClaudeCliAgentMessages as getCodexCliAgentMessages };
+export { runClaudeCliPrompt as runCodexCliPrompt };
+export { applyClaudeJsonEvent as applyCodexJsonEvent };
+export { isClaudeResumeUnavailableError as isCodexResumeUnavailableError };
+export { runClaudeCliPromptWithResumeRecovery as runCodexCliPromptWithResumeRecovery };
+export { getAgentClaudeSessionId as getAgentCodexSessionId };

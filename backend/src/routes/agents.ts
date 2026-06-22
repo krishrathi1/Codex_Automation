@@ -5,7 +5,7 @@ import * as agentSkillService from '../services/agent-skill.service.js';
 import * as integrationService from '../services/integration.service.js';
 import * as activityService from '../services/activity.service.js';
 import * as llmProviderService from '../services/llm-provider.service.js';
-import * as codexCliService from '../services/claude-cli.service.js';
+import * as claudeCliService from '../services/claude-cli.service.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { getGatewayClient } from '../openclaw/client.js';
@@ -13,14 +13,14 @@ import type { Agent as PrismaAgent, AgentStatus, ChannelType } from '@prisma/cli
 
 const router = Router();
 
-async function handleCodexCliChat(req: Request, res: Response, agent: PrismaAgent) {
+async function handleClaudeCliChat(req: Request, res: Response, agent: PrismaAgent) {
   const message = req.body.message as string;
   if (!message) {
     return res.status(400).json({ error: 'message is required' });
   }
 
   try {
-    const result = await codexCliService.sendCodexCliAgentMessage({
+    const result = await claudeCliService.sendClaudeCliAgentMessage({
       organizationId: req.organizationId!,
       agent,
       message,
@@ -192,10 +192,10 @@ router.post('/:id/chat', async (req, res) => {
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
     if (
-      codexCliService.isCodexCliRuntimeEnabled() ||
-      Boolean(codexCliService.getAgentCodexSessionId(agent))
+      claudeCliService.isCodexCliRuntimeEnabled() ||
+      Boolean(claudeCliService.getAgentClaudeSessionId(agent))
     ) {
-      return handleCodexCliChat(req, res, agent);
+      return handleClaudeCliChat(req, res, agent);
     }
 
     if (!agent.gatewayId || !agent.gatewayAgentId) {
@@ -533,12 +533,12 @@ router.get('/:id/chat/history', async (req, res) => {
       where: { id: req.params.id, organizationId: req.organizationId! },
     });
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    if (codexCliService.isCodexCliRuntimeEnabled() || codexCliService.getAgentCodexSessionId(agent)) {
+    if (claudeCliService.isCodexCliRuntimeEnabled() || claudeCliService.getAgentClaudeSessionId(agent)) {
       try {
-        const history = await codexCliService.getCodexCliAgentMessages(agent, Number(req.query.limit) || 50);
+        const history = await claudeCliService.getClaudeCliAgentMessages(agent, Number(req.query.limit) || 50);
         return res.json(history);
       } catch {
-        return res.json({ sessionKey: codexCliService.getAgentCodexSessionId(agent) || '', messages: [] });
+        return res.json({ sessionKey: claudeCliService.getAgentClaudeSessionId(agent) || '', messages: [] });
       }
     }
     if (!agent.gatewayId || !agent.gatewayAgentId) {

@@ -6,14 +6,14 @@ import * as activityService from './activity.service.js';
 import * as llmProviderService from './llm-provider.service.js';
 import { ADMIN_AGENT_NAME, getOrCreateAdminAgent } from './system-agent.service.js';
 import {
-  getThreadCodexSessionId,
-  resolveCodexCwd,
-  runCodexCliPromptWithResumeRecovery,
+  getThreadClaudeSessionId,
+  resolveClaudeCwd,
+  runClaudeCliPromptWithResumeRecovery,
   validateAuthentication,
   validateInstallation,
-  type CodexCliUsage,
-  type NexusCodexEvent,
-  type NexusCodexEventType,
+  type ClaudeCliUsage,
+  type NexusClaudeEvent,
+  type NexusClaudeEventType,
 } from './claude-cli.service.js';
 import {
   getActiveBoardConversationsForMotherChat,
@@ -53,7 +53,7 @@ export interface MotherChatRunResult {
   codexSessionId: string | null;
   nexusSessionId: string;
   durationMs: number;
-  usage: CodexCliUsage | null;
+  usage: ClaudeCliUsage | null;
   model: string;
 }
 
@@ -112,7 +112,7 @@ function outputForMotherChat(value: string | null | undefined, options: {
   return truncate(value, 900);
 }
 
-function activityTypeForEvent(eventType: NexusCodexEventType): ActivityType {
+function activityTypeForEvent(eventType: NexusClaudeEventType): ActivityType {
   if (eventType === 'error') return 'ERROR';
   if (eventType === 'response') return 'MESSAGE';
   return 'SYSTEM';
@@ -127,14 +127,14 @@ function getMotherThreadId(agent: { identityProfile: unknown }, boardId?: string
   return typeof profile.motherChatThreadId === 'string' ? profile.motherChatThreadId : undefined;
 }
 
-function getMotherCodexSessionId(agent: { identityProfile: unknown; gatewayAgentId: string | null }, boardId?: string) {
+function getMotherClaudeSessionId(agent: { identityProfile: unknown; gatewayAgentId: string | null }, boardId?: string) {
   const profile = objectRecord(agent.identityProfile);
   if (boardId) {
     const boardSessions = objectRecord(profile.codexCliSessionIdsByBoard);
     const sessionId = typeof boardSessions[boardId] === 'string' ? boardSessions[boardId] as string : undefined;
     return isMotherSessionReusableForScope(agent, boardId, sessionId) ? sessionId : undefined;
   }
-  return getProfileCodexSessionId(agent);
+  return getProfileClaudeSessionId(agent);
 }
 
 function isMotherSessionReusableForScope(
@@ -160,7 +160,7 @@ function isMotherSessionReusableForScope(
   ));
 }
 
-function getProfileCodexSessionId(agent: { identityProfile: unknown; gatewayAgentId: string | null }) {
+function getProfileClaudeSessionId(agent: { identityProfile: unknown; gatewayAgentId: string | null }) {
   const profile = objectRecord(agent.identityProfile);
   for (const key of ['codexCliSessionId', 'codexSessionId', 'activeWorkflowSessionId']) {
     const value = profile[key];
@@ -184,7 +184,7 @@ async function getOrCreateMotherAgent(organizationId: string) {
       organizationId,
       name: MOTHER_CHAT_AGENT_NAME,
       displayName: 'Mother Chat',
-      description: 'Nexus system agent for organization-wide Codex CLI monitoring.',
+      description: 'Nexus system agent for organization-wide Claude CLI monitoring.',
       workspace: process.env.CLAUDE_WORKSPACE_ROOT || process.env.CODEX_WORKSPACE_ROOT || '',
       status: 'IDLE',
       enabled: false,
@@ -292,7 +292,7 @@ function emitMotherChatEvent(options: {
   nexusSessionId: string;
   codexSessionId?: string | null;
   requestId?: string;
-  event: NexusCodexEvent;
+  event: NexusClaudeEvent;
 }) {
   options.io?.to(`org:${options.organizationId}`).emit('mother-chat:event', {
     sessionId: options.nexusSessionId,
@@ -314,14 +314,14 @@ async function persistMotherActivity(options: {
   nexusSessionId: string;
   codexSessionId?: string | null;
   requestId?: string;
-  event: NexusCodexEvent;
+  event: NexusClaudeEvent;
 }) {
   return activityService.createActivity(options.organizationId, {
     agentId: options.motherAgentId,
     type: activityTypeForEvent(options.event.type),
     message: (options.event.content || options.event.type).slice(0, 500),
     metadata: {
-      runtime: 'codex-cli',
+      runtime: 'claude-cli',
       systemRole: 'mother-chat',
       boardId: options.boardId ?? null,
       nexusEventType: options.event.type,
@@ -564,7 +564,7 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
       ? agent.gatewayAgentId.slice('codex:'.length).trim()
       : null;
     const effectiveCodexSessionId = codexCliSessionId || codexSessionId || activeWorkflowSessionId || gatewayCodexSessionId || null;
-    const runtimeConnected = agent.enabled && agentRuntime === 'codex-cli' && Boolean(effectiveCodexSessionId);
+    const runtimeConnected = agent.enabled && agentRuntime === 'claude-cli' && Boolean(effectiveCodexSessionId);
     const integrationAccess = objectRecord(profile.integrationAccess);
     return {
       id: agent.id,
@@ -841,10 +841,10 @@ export async function buildMotherChatContext(organizationId: string, options: Mo
 
 function composeMotherPrompt(contextText: string, message: string) {
   return [
-    'You are Nexus Mother Chat, the admin-facing control-plane assistant for a multi-agent Codex CLI system.',
+    'You are Nexus Mother Chat, the admin-facing control-plane assistant for a multi-agent Claude CLI system.',
     'Use only the Nexus DB snapshot below as operational truth. If the snapshot does not contain enough information, say what is missing.',
     'Answer like an operations lead: concise, specific, and grounded in agent names, task/session IDs, statuses, errors, and token usage when relevant.',
-    'Do not ask for OpenAI or Codex API keys. Nexus uses the local Codex CLI login.',
+    'Do not ask for OpenAI or Anthropic API keys. Nexus uses the local Claude CLI login.',
     '',
     'NEXUS DB SNAPSHOT',
     contextText,
@@ -870,7 +870,7 @@ export async function getMotherChatHistory(
   const threadId = getMotherThreadId(motherAgent, boardScope?.id);
   if (!threadId) {
     return {
-      sessionKey: getMotherCodexSessionId(motherAgent, boardScope?.id) || '',
+      sessionKey: getMotherClaudeSessionId(motherAgent, boardScope?.id) || '',
       messages: [],
     };
   }
@@ -884,13 +884,13 @@ export async function getMotherChatHistory(
     take: limit,
   });
 
-  const rawThreadCodexSessionId = await getThreadCodexSessionId(threadId, organizationId);
-  const threadCodexSessionId = isMotherSessionReusableForScope(motherAgent, boardScope?.id, rawThreadCodexSessionId)
-    ? rawThreadCodexSessionId
+  const rawThreadClaudeSessionId = await getThreadClaudeSessionId(threadId, organizationId);
+  const threadClaudeSessionId = isMotherSessionReusableForScope(motherAgent, boardScope?.id, rawThreadClaudeSessionId)
+    ? rawThreadClaudeSessionId
     : undefined;
 
   return {
-    sessionKey: threadCodexSessionId || getMotherCodexSessionId(motherAgent, boardScope?.id) || '',
+    sessionKey: threadClaudeSessionId || getMotherClaudeSessionId(motherAgent, boardScope?.id) || '',
     messages: messages.reverse().map(message => {
       const metadata = objectRecord(message.metadata);
       return {
@@ -914,14 +914,14 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
 
   const installation = await validateInstallation();
   if (!installation.ok || !installation.command) {
-    const err = new Error(`Codex CLI installation check failed: ${installation.details}`) as Error & { statusCode?: number };
+    const err = new Error(`Claude CLI installation check failed: ${installation.details}`) as Error & { statusCode?: number };
     err.statusCode = 503;
     throw err;
   }
 
   const authentication = await validateAuthentication();
   if (!authentication.ok) {
-    const err = new Error(`Codex CLI authentication check failed. Run "codex login" locally. Details: ${authentication.details}`) as Error & { statusCode?: number };
+    const err = new Error(`Claude CLI authentication check failed. Run "claude login" locally. Details: ${authentication.details}`) as Error & { statusCode?: number };
     err.statusCode = 503;
     throw err;
   }
@@ -930,14 +930,14 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
   const boardScope = await resolveBoardScope(options.organizationId, options.boardId);
   const thread = await upsertMotherThread(motherAgent, boardScope);
   const adminAgent = await getOrCreateAdminAgent(options.organizationId);
-  const rawThreadCodexSessionId = await getThreadCodexSessionId(thread.id, options.organizationId);
-  const threadCodexSessionId = isMotherSessionReusableForScope(motherAgent, boardScope?.id, rawThreadCodexSessionId)
-    ? rawThreadCodexSessionId
+  const rawThreadClaudeSessionId = await getThreadClaudeSessionId(thread.id, options.organizationId);
+  const threadClaudeSessionId = isMotherSessionReusableForScope(motherAgent, boardScope?.id, rawThreadClaudeSessionId)
+    ? rawThreadClaudeSessionId
     : undefined;
-  const agentCodexSessionId = getMotherCodexSessionId(motherAgent, boardScope?.id);
-  const existingCodexSessionId = threadCodexSessionId || agentCodexSessionId;
+  const agentClaudeSessionId = getMotherClaudeSessionId(motherAgent, boardScope?.id);
+  const existingClaudeSessionId = threadClaudeSessionId || agentClaudeSessionId;
   const { context, contextText } = await buildMotherChatContext(options.organizationId, { boardId: boardScope?.id });
-  const cwd = resolveCodexCwd(motherAgent);
+  const cwd = resolveClaudeCwd(motherAgent);
   const command = installation.command;
   const chatSession = await prisma.session.create({
     data: {
@@ -958,14 +958,14 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
       content: options.message,
       metadata: {
         role: 'user',
-        runtime: 'codex-cli',
+        runtime: 'claude-cli',
         systemRole: 'mother-chat',
         conversationKind: 'admin_mother',
         edgeSemantic: 'admin_to_mother_chat',
         boardId: boardScope?.id ?? null,
         boardName: boardScope?.name ?? null,
         nexusSessionId: chatSession.id,
-        resumeCodexSessionId: existingCodexSessionId ?? null,
+        resumeCodexSessionId: existingClaudeSessionId ?? null,
         requestId: options.requestId ?? null,
         contextCounts: context.counts,
       } as any,
@@ -977,18 +977,18 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
   logger.info({
     command,
     cwd,
-    resume: Boolean(existingCodexSessionId),
-    sessionSource: threadCodexSessionId ? 'thread' : agentCodexSessionId ? 'agent' : 'new',
+    resume: Boolean(existingClaudeSessionId),
+    sessionSource: threadClaudeSessionId ? 'thread' : agentClaudeSessionId ? 'agent' : 'new',
     threadId: thread.id,
     nexusSessionId: chatSession.id,
     boardId: boardScope?.id ?? null,
-  }, 'Starting Mother Chat Codex CLI run');
+  }, 'Starting Mother Chat Claude CLI run');
 
   try {
-    const state = await runCodexCliPromptWithResumeRecovery({
+    const state = await runClaudeCliPromptWithResumeRecovery({
       command,
       cwd,
-      existingCodexSessionId,
+      existingClaudeSessionId,
       prompt: composeMotherPrompt(contextText, options.message),
       logContext: {
         motherAgentId: motherAgent.id,
@@ -1031,7 +1031,7 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
         content: responseText,
         metadata: {
           role: 'assistant',
-          runtime: 'codex-cli',
+          runtime: 'claude-cli',
           systemRole: 'mother-chat',
           conversationKind: 'admin_mother',
           edgeSemantic: 'mother_chat_to_admin',
@@ -1133,7 +1133,7 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
       organizationId: options.organizationId,
       boardId: boardScope?.id ?? null,
       nexusSessionId: chatSession.id,
-      codexSessionId: existingCodexSessionId,
+      codexSessionId: existingClaudeSessionId,
       requestId: options.requestId,
       event: { type: 'error', content: errorMessage },
     });

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as motherChatService from '../services/mother-chat.service.js';
-import * as codexCliService from '../services/claude-cli.service.js';
+import * as claudeCliService from '../services/claude-cli.service.js';
 
 const router = Router();
 
@@ -26,7 +26,7 @@ router.get('/history', async (req, res, next) => {
 });
 
 router.get('/diagnostics', async (_req, res) => {
-  const diagnostics = await codexCliService.getCodexCliDiagnostics();
+  const diagnostics = await claudeCliService.getClaudeCliDiagnostics();
   res.json(diagnostics);
 });
 

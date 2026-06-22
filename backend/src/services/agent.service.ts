@@ -2,7 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import type { AgentStatus } from '@prisma/client';
 import { getGatewayClient } from '../openclaw/client.js';
 import { ensureDefaultGateway } from './gateway.service.js';
-import { isCodexCliRuntimeEnabled } from './claude-cli.service.js';
+import { isCodexCliRuntimeEnabled as isClaudeCliRuntimeEnabled } from './claude-cli.service.js';
 import { logger } from '../lib/logger.js';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { ADMIN_AGENT_NAME } from './system-agent.service.js';
@@ -190,7 +190,7 @@ export async function createAgent(organizationId: string, data: {
 
   // Auto-provision gateway if none specified
   let resolvedGatewayId = data.gatewayId;
-  if (!resolvedGatewayId && !isCodexCliRuntimeEnabled()) {
+  if (!resolvedGatewayId && !isClaudeCliRuntimeEnabled()) {
     const defaultId = await ensureDefaultGateway(organizationId);
     if (defaultId) resolvedGatewayId = defaultId;
   }

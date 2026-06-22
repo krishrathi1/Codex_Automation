@@ -7,15 +7,15 @@ import { createAgentTaskAlert } from './alert.service.js';
 import * as llmProviderService from './llm-provider.service.js';
 import { getOrCreateAdminAgent } from './system-agent.service.js';
 import {
-  getAgentCodexSessionId,
-  runCodexCliPromptWithResumeRecovery,
-  resolveCodexCommand,
-  resolveCodexCwd,
+  getAgentClaudeSessionId,
+  runClaudeCliPromptWithResumeRecovery,
+  resolveClaudeCommand,
+  resolveClaudeCwd,
   validateAuthentication,
   validateInstallation,
-  type CodexRunState,
-  type NexusCodexEvent,
-  type NexusCodexEventType,
+  type ClaudeRunState,
+  type NexusClaudeEvent,
+  type NexusClaudeEventType,
 } from './claude-cli.service.js';
 import { advanceProductionErrorPipelineAfterJob } from './production-error-pipeline.service.js';
 import {
@@ -203,7 +203,7 @@ function liveWorkflowPrompt(options: {
   ].join('\n');
 }
 
-function eventActivityType(eventType: NexusCodexEventType) {
+function eventActivityType(eventType: NexusClaudeEventType) {
   if (eventType === 'error') return 'ERROR' as const;
   if (eventType === 'response') return 'MESSAGE' as const;
   return 'SYSTEM' as const;
@@ -216,7 +216,7 @@ function emitRunJobEvent(io: SocketIOServer | undefined, organizationId: string,
   });
 }
 
-async function updateAgentCodexSession(agent: Agent, codexSessionId: string, threadId?: string | null) {
+async function updateAgentClaudeSession(agent: Agent, codexSessionId: string, threadId?: string | null) {
   await prisma.agent.update({
     where: { id: agent.id },
     data: {
@@ -371,7 +371,7 @@ async function buildAgentRunContextPacket(job: AgentRunJobWithRelations) {
     : messages.slice(0, 25);
 
   const latestJobSessionId = previousJobs.find(item => item.codexSessionId)?.codexSessionId ?? null;
-  const resumeCodexSessionId = getAgentCodexSessionId(job.agent) || latestJobSessionId;
+  const resumeCodexSessionId = getAgentClaudeSessionId(job.agent) || latestJobSessionId;
   const liveBlackboardContext = getLiveBlackboardJobContext(job.contextPacket);
   const liveBlackboard = liveBlackboardContext
     ? await buildBlackboardTurnContext({
@@ -552,7 +552,7 @@ async function persistRunJobActivity(options: {
   job: AgentRunJobWithRelations;
   nexusSessionId?: string | null;
   codexSessionId?: string | null;
-  event: NexusCodexEvent;
+  event: NexusClaudeEvent;
 }) {
   return activityService.createActivity(options.job.organizationId, {
     agentId: options.job.agentId,
@@ -572,7 +572,7 @@ async function persistRunJobActivity(options: {
   });
 }
 
-async function createAgentRunMessage(job: AgentRunJobWithRelations, responseText: string, state: CodexRunState): Promise<Message | null> {
+async function createAgentRunMessage(job: AgentRunJobWithRelations, responseText: string, state: ClaudeRunState): Promise<Message | null> {
   if (!job.threadId) return null;
   const liveWorkflow = getLiveWorkflowContext(job.contextPacket);
   const liveBlackboard = getLiveBlackboardJobContext(job.contextPacket);
@@ -779,7 +779,7 @@ export async function enqueueLiveBlackboardRoundJobs(input: EnqueueLiveBlackboar
 async function advanceLiveBlackboardAfterJob(
   job: AgentRunJobWithRelations,
   responseText: string,
-  state: CodexRunState,
+  state: ClaudeRunState,
   options: { io?: SocketIOServer } = {},
 ) {
   const liveBlackboard = getLiveBlackboardJobContext(job.contextPacket);
@@ -1069,7 +1069,7 @@ async function advanceLiveAgentWorkflowAfterJob(
 
 async function completeJob(
   job: AgentRunJobWithRelations,
-  state: CodexRunState,
+  state: ClaudeRunState,
   startedAt: number,
   io?: SocketIOServer,
 ) {
@@ -1078,7 +1078,7 @@ async function completeJob(
   const summary = summarizeOutput(responseText, `Completed ${job.agent.displayName} run job`);
 
   if (state.codexSessionId) {
-    await updateAgentCodexSession(job.agent, state.codexSessionId, job.threadId);
+    await updateAgentClaudeSession(job.agent, state.codexSessionId, job.threadId);
   }
 
   const runMessage = await createAgentRunMessage(job, responseText, state);
@@ -1386,12 +1386,12 @@ async function processJob(job: AgentRunJobWithRelations, io?: SocketIOServer) {
     },
   }).catch(err => logger.warn({ err, jobId: job.id }, 'Failed to persist queued run user message'));
 
-  const command = await resolveCodexCommand();
-  const cwd = resolveCodexCwd(job.agent);
-  const state = await runCodexCliPromptWithResumeRecovery({
+  const command = await resolveClaudeCommand();
+  const cwd = resolveClaudeCwd(job.agent);
+  const state = await runClaudeCliPromptWithResumeRecovery({
     command,
     cwd,
-    existingCodexSessionId: contextPacket.resumeCodexSessionId,
+    existingClaudeSessionId: contextPacket.resumeCodexSessionId,
     prompt: composeAgentRunPrompt(contextPacket, job.prompt),
     logContext: {
       agentRunJobId: job.id,
