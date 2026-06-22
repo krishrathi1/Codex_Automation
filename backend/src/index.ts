@@ -41,7 +41,7 @@ import soulTemplateRoutes from './routes/soul-templates.js';
 import motherChatRoutes from './routes/mother-chat.js';
 import errorEventRoutes from './routes/error-events.js';
 import { connectAllGateways, setSocketIO } from './services/gateway.service.js';
-import { getCodexCliDiagnostics, isCodexCliRuntimeEnabled } from './services/codex-cli.service.js';
+import { getCodexCliDiagnostics, isCodexCliRuntimeEnabled } from './services/claude-cli.service.js';
 import { ensureDevelopmentAdminUser } from './services/dev-admin.service.js';
 import { startAgentRunWorker, stopAgentRunWorker } from './services/agent-run-queue.service.js';
 
@@ -237,12 +237,12 @@ async function start() {
       skipGitRepoCheck: diagnostics.skipGitRepoCheck,
     };
     if (diagnostics.installation.ok && diagnostics.authentication.ok) {
-      logger.info(logPayload, 'Codex CLI runtime enabled; skipping gateway auto-connect');
+      logger.info(logPayload, 'Claude CLI runtime enabled; skipping gateway auto-connect');
     } else {
       logger.warn({
         ...logPayload,
         installationDetails: diagnostics.installation.details,
-      }, 'Codex CLI runtime check failed; chat requests will return diagnostics until fixed');
+      }, 'Claude CLI runtime check failed; chat requests will return diagnostics until fixed');
     }
   } else {
     connectAllGateways().catch(err => {
