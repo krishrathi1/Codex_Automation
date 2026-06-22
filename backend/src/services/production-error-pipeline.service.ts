@@ -499,6 +499,16 @@ export async function ingestProductionErrorEvent(
 
 async function queueReviewJob(errorEvent: ProductionErrorEvent, job: CompletedPipelineJob, debugOutput: string) {
   if (!errorEvent.boardId || !errorEvent.taskId || !job.threadId || !errorEvent.reviewAgentId) return null;
+
+  const proposedFix = parseFileBlocks(debugOutput);
+  if (proposedFix.length > 0) {
+    const mergedPayload = { ...objectRecord(errorEvent.payload), proposedFix };
+    await prisma.productionErrorEvent.update({
+      where: { id: errorEvent.id },
+      data: { payload: mergedPayload as any },
+    }).catch(err => logger.warn({ err, id: errorEvent.id }, 'Failed to persist proposedFix'));
+  }
+
   const reviewRunJob = await enqueuePipelineJob({
     organizationId: job.organizationId,
     boardId: errorEvent.boardId,
