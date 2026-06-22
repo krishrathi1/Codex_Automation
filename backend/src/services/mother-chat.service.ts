@@ -14,7 +14,7 @@ import {
   type CodexCliUsage,
   type NexusCodexEvent,
   type NexusCodexEventType,
-} from './codex-cli.service.js';
+} from './claude-cli.service.js';
 import {
   getActiveBoardConversationsForMotherChat,
   getRecentBlackboardEventsForMotherChat,
