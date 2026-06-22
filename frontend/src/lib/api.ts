@@ -110,6 +110,8 @@ export const api = {
 	    updateIntegrationSettings: (data: {
 	      githubAccessToken?: string | null;
 	      clearGithubAccessToken?: boolean;
+		      githubRepo?: string | null;
+		      githubBranch?: string | null;
 	      vercelAccessToken?: string | null;
 	      clearVercelAccessToken?: boolean;
 	      vercelTeamId?: string | null;

@@ -5,24 +5,23 @@
  * into the Nexus production error pipeline, and triggers redeployment after
  * each successful fix commit.
  *
- * Environment variables:
- *   VERCEL_TOKEN              — Vercel personal access token
- *   VERCEL_PROJECT_ID         — Vercel project ID (preferred)
- *   VERCEL_PROJECT_NAME       — Fallback if project ID unknown (default: mutual-fund)
- *   VERCEL_TEAM_ID            — Vercel team ID (optional, for team accounts)
- *   GITHUB_TOKEN              — GitHub personal access token
- *   GITHUB_REPO               — owner/repo (default: krishrathi1/Mutual-Fund-Co-Pilot-)
- *   GITHUB_BRANCH             — Branch to monitor (default: main)
- *   MUTUAL_FUND_WORKSPACE     — Absolute path to local clone of the repo
- *   MUTUAL_FUND_ORG_ID        — Nexus organization ID to use for this monitor
- *   MUTUAL_FUND_BOARD_ID      — (optional) Pin errors to a specific board
- *   MUTUAL_FUND_MONITOR_INTERVAL_MS — Poll interval in ms (default: 300000 = 5 min)
- *   MUTUAL_FUND_MONITOR_DISABLED    — Set to 'true' to disable
+ * Credentials are read from the Settings UI (encrypted org integration
+ * settings) first, falling back to environment variables. So the user can
+ * configure VERCEL_TOKEN / GITHUB_TOKEN entirely in the UI without editing .env.
+ *
+ * Environment variables (optional fallbacks / extra config):
+ *   VERCEL_PROJECT_ID / VERCEL_PROJECT_NAME — which Vercel project to watch
+ *   GITHUB_REPO / GITHUB_BRANCH             — which repo/branch to watch
+ *   MUTUAL_FUND_WORKSPACE                   — local clone the agents edit & push
+ *   MUTUAL_FUND_ORG_ID / MUTUAL_FUND_BOARD_ID — pin org/board
+ *   MUTUAL_FUND_MONITOR_INTERVAL_MS         — poll interval (default 300000)
+ *   MUTUAL_FUND_MONITOR_DISABLED            — 'true' to disable
  */
 
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { ingestProductionErrorEvent } from './production-error-pipeline.service.js';
+import { getMonitorIntegrationCredentials } from './platform-integrations.service.js';
 import * as vercel from './vercel-api.service.js';
 import * as github from './github-api.service.js';
 import type { Server as SocketIOServer } from 'socket.io';
@@ -39,6 +38,7 @@ interface MonitorState {
   fixesTriggered: number;
   vercelProjectId: string | null;
   orgId: string | null;
+  credentialsConfigured: boolean;
 }
 
 const state: MonitorState = {
@@ -51,6 +51,7 @@ const state: MonitorState = {
   fixesTriggered: 0,
   vercelProjectId: null,
   orgId: null,
+  credentialsConfigured: false,
 };
 
 let ioRef: SocketIOServer | undefined;
@@ -67,11 +68,28 @@ async function resolveOrgId(): Promise<string | null> {
   return org?.id ?? null;
 }
 
-async function resolveVercelProjectId(): Promise<string | null> {
-  if (!vercel.isVercelConfigured()) return null;
+/**
+ * Resolve a valid board for ingesting errors. Prefers MUTUAL_FUND_BOARD_ID when it
+ * still exists, otherwise falls back to the org's first board, else undefined
+ * (the pipeline then auto-creates its default automation board). This keeps a
+ * stale/deleted board ID from silently dropping every detected error.
+ */
+async function resolveBoardId(orgId: string): Promise<string | undefined> {
+  const envBoardId = process.env.MUTUAL_FUND_BOARD_ID?.trim();
+  if (envBoardId) {
+    const exists = await prisma.board.findFirst({ where: { id: envBoardId, organizationId: orgId }, select: { id: true } });
+    if (exists) return envBoardId;
+    logger.warn({ envBoardId }, '[mutual-fund-monitor] Configured MUTUAL_FUND_BOARD_ID not found; falling back to first board');
+  }
+  const first = await prisma.board.findFirst({ where: { organizationId: orgId }, orderBy: { createdAt: 'asc' }, select: { id: true } });
+  return first?.id;
+}
+
+async function resolveVercelProjectId(cfg: vercel.VercelConfig): Promise<string | null> {
+  if (!vercel.isVercelConfigured(cfg)) return null;
   try {
     if (!state.vercelProjectId) {
-      state.vercelProjectId = await vercel.resolveProjectId();
+      state.vercelProjectId = await vercel.resolveProjectId(cfg);
     }
     return state.vercelProjectId;
   } catch (err) {
@@ -80,9 +98,7 @@ async function resolveVercelProjectId(): Promise<string | null> {
   }
 }
 
-function buildCommitAgentExtra(workspace: string): string {
-  const repo = process.env.GITHUB_REPO || 'krishrathi1/Mutual-Fund-Co-Pilot-';
-  const branch = process.env.GITHUB_BRANCH || 'main';
+function buildCommitAgentExtra(workspace: string, githubToken: string, repo: string, branch: string): string {
   return [
     '',
     '--- COMMIT & DEPLOY INSTRUCTIONS ---',
@@ -96,18 +112,24 @@ function buildCommitAgentExtra(workspace: string): string {
     '3. Push to GitHub:     git push origin ' + branch,
     '',
     'The Vercel deployment is connected to GitHub and will auto-redeploy on push.',
-    'If git push fails due to auth, use HTTPS with the GITHUB_TOKEN:',
-    `  git remote set-url origin https://${process.env.GITHUB_TOKEN || '$GITHUB_TOKEN'}@github.com/${repo}.git`,
+    'If git push fails due to auth, use HTTPS with the GitHub token:',
+    `  git remote set-url origin https://${githubToken || '$GITHUB_TOKEN'}@github.com/${repo}.git`,
     '--- END DEPLOY INSTRUCTIONS ---',
   ].join('\n');
 }
 
-async function checkVercelErrors(orgId: string, projectId: string): Promise<number> {
+async function checkVercelErrors(
+  orgId: string,
+  boardId: string | undefined,
+  cfg: vercel.VercelConfig,
+  githubCfg: github.GitHubConfig,
+  projectId: string,
+): Promise<number> {
   let found = 0;
 
   let errorDeploy: vercel.VercelDeployment | null = null;
   try {
-    errorDeploy = await vercel.getLatestErrorDeployment(projectId);
+    errorDeploy = await vercel.getLatestErrorDeployment(cfg, projectId);
   } catch (err) {
     logger.warn({ err }, '[mutual-fund-monitor] Vercel deployment check failed');
     return 0;
@@ -116,21 +138,28 @@ async function checkVercelErrors(orgId: string, projectId: string): Promise<numb
   if (!errorDeploy) return 0;
 
   const deployUrl = `https://${errorDeploy.url}`;
-  const buildLogs = await vercel.getDeploymentBuildLogs(errorDeploy.uid).catch(() => '');
-  const errorLogs = await vercel.getDeploymentErrorLogs(errorDeploy.uid).catch(() => '');
+  const buildLogs = await vercel.getDeploymentBuildLogs(cfg, errorDeploy.uid).catch(() => '');
+  const errorLogs = await vercel.getDeploymentErrorLogs(cfg, errorDeploy.uid).catch(() => '');
 
-  const combinedLogs = [buildLogs, errorLogs].filter(Boolean).join('\n').trim();
-  if (!combinedLogs) {
-    logger.info({ deploymentId: errorDeploy.uid }, '[mutual-fund-monitor] Vercel ERROR deployment has no extractable logs, skipping');
-    return 0;
-  }
+  // Use detailed logs when available; otherwise fall back to deployment metadata so an
+  // ERROR deployment is never silently dropped just because the events API returned nothing.
+  const detailedLogs = [buildLogs, errorLogs].filter(Boolean).join('\n').trim();
+  const combinedLogs = detailedLogs || [
+    `Vercel deployment ${errorDeploy.uid} for project "${errorDeploy.name}" is in ERROR state.`,
+    errorDeploy.errorMessage ? `Vercel error: ${errorDeploy.errorMessage}` : '',
+    `Deployment URL: ${deployUrl}`,
+    'No detailed build logs were available from the Vercel events API. Reproduce the build locally',
+    'in the workspace (run the build script from package.json) to find and fix the failure.',
+  ].filter(Boolean).join('\n');
 
   const workspace = process.env.MUTUAL_FUND_WORKSPACE || '';
-  const commitExtra = workspace ? buildCommitAgentExtra(workspace) : '';
+  const repo = githubCfg.repo || 'krishrathi1/Mutual-Fund-Co-Pilot-';
+  const branch = githubCfg.branch || 'main';
+  const commitExtra = workspace ? buildCommitAgentExtra(workspace, githubCfg.token, repo, branch) : '';
 
   try {
     await ingestProductionErrorEvent(orgId, {
-      boardId: process.env.MUTUAL_FUND_BOARD_ID,
+      boardId,
       source: 'vercel',
       severity: 'critical',
       title: `Vercel deployment failed — ${errorDeploy.name}`,
@@ -144,8 +173,8 @@ async function checkVercelErrors(orgId: string, projectId: string): Promise<numb
         deploymentId: errorDeploy.uid,
         deploymentUrl: deployUrl,
         workspace,
-        repo: process.env.GITHUB_REPO || 'krishrathi1/Mutual-Fund-Co-Pilot-',
-        branch: process.env.GITHUB_BRANCH || 'main',
+        repo,
+        branch,
         commitInstructions: commitExtra,
       },
     }, { io: ioRef });
@@ -164,12 +193,12 @@ async function checkVercelErrors(orgId: string, projectId: string): Promise<numb
   return found;
 }
 
-async function checkGitHubFailures(orgId: string): Promise<number> {
-  if (!github.isGitHubConfigured()) return 0;
+async function checkGitHubFailures(orgId: string, boardId: string | undefined, cfg: github.GitHubConfig): Promise<number> {
+  if (!github.isGitHubConfigured(cfg)) return 0;
 
   let runs: github.GitHubWorkflowRun[] = [];
   try {
-    runs = await github.getFailedWorkflowRuns(5);
+    runs = await github.getFailedWorkflowRuns(cfg, 5);
   } catch (err) {
     logger.warn({ err }, '[mutual-fund-monitor] GitHub workflow check failed');
     return 0;
@@ -177,18 +206,20 @@ async function checkGitHubFailures(orgId: string): Promise<number> {
 
   let found = 0;
   const workspace = process.env.MUTUAL_FUND_WORKSPACE || '';
-  const commitExtra = workspace ? buildCommitAgentExtra(workspace) : '';
+  const repo = cfg.repo || 'krishrathi1/Mutual-Fund-Co-Pilot-';
+  const branch = cfg.branch || 'main';
+  const commitExtra = workspace ? buildCommitAgentExtra(workspace, cfg.token, repo, branch) : '';
 
   for (const run of runs) {
     // Only ingest runs from the last 24 hours
     const runAge = Date.now() - new Date(run.created_at).getTime();
     if (runAge > 24 * 60 * 60 * 1000) continue;
 
-    const description = await github.buildWorkflowErrorDescription(run).catch(() => `Workflow "${run.name}" failed`);
+    const description = await github.buildWorkflowErrorDescription(cfg, run).catch(() => `Workflow "${run.name}" failed`);
 
     try {
       await ingestProductionErrorEvent(orgId, {
-        boardId: process.env.MUTUAL_FUND_BOARD_ID,
+        boardId,
         source: 'github-actions',
         severity: 'high',
         title: `GitHub Actions failed — ${run.name}`,
@@ -203,8 +234,8 @@ async function checkGitHubFailures(orgId: string): Promise<number> {
           runUrl: run.html_url,
           headSha: run.head_sha,
           workspace,
-          repo: process.env.GITHUB_REPO || 'krishrathi1/Mutual-Fund-Co-Pilot-',
-          branch: process.env.GITHUB_BRANCH || 'main',
+          repo,
+          branch,
           commitInstructions: commitExtra,
         },
       }, { io: ioRef });
@@ -239,26 +270,42 @@ async function runCheck(): Promise<void> {
   }
   state.orgId = orgId;
 
+  // Resolve credentials from the Settings UI (encrypted org settings), env fallback.
+  const creds = await getMonitorIntegrationCredentials(orgId);
+  const vercelConfigured = vercel.isVercelConfigured(creds.vercel);
+  const githubConfigured = github.isGitHubConfigured(creds.github);
+  state.credentialsConfigured = vercelConfigured || githubConfigured;
+
+  if (!state.credentialsConfigured) {
+    state.lastError = 'No Vercel/GitHub token configured. Add them in Settings → Integrations.';
+    logger.info('[mutual-fund-monitor] ' + state.lastError);
+    return;
+  }
+
+  const boardId = await resolveBoardId(orgId);
+
   let errorsThisCheck = 0;
 
   // Check Vercel
-  const projectId = await resolveVercelProjectId();
-  if (projectId) {
-    const vercelErrors = await checkVercelErrors(orgId, projectId).catch(err => {
-      logger.error({ err }, '[mutual-fund-monitor] Vercel check threw');
-      return 0;
-    });
-    errorsThisCheck += vercelErrors;
-  } else if (!vercel.isVercelConfigured()) {
-    logger.debug('[mutual-fund-monitor] Vercel not configured, skipping Vercel check');
+  if (vercelConfigured) {
+    const projectId = await resolveVercelProjectId(creds.vercel);
+    if (projectId) {
+      const vercelErrors = await checkVercelErrors(orgId, boardId, creds.vercel, creds.github, projectId).catch(err => {
+        logger.error({ err }, '[mutual-fund-monitor] Vercel check threw');
+        return 0;
+      });
+      errorsThisCheck += vercelErrors;
+    }
   }
 
   // Check GitHub
-  const githubErrors = await checkGitHubFailures(orgId).catch(err => {
-    logger.error({ err }, '[mutual-fund-monitor] GitHub check threw');
-    return 0;
-  });
-  errorsThisCheck += githubErrors;
+  if (githubConfigured) {
+    const githubErrors = await checkGitHubFailures(orgId, boardId, creds.github).catch(err => {
+      logger.error({ err }, '[mutual-fund-monitor] GitHub check threw');
+      return 0;
+    });
+    errorsThisCheck += githubErrors;
+  }
 
   if (errorsThisCheck > 0) {
     state.errorsFound += errorsThisCheck;
@@ -280,19 +327,14 @@ export function startMutualFundMonitor(io?: SocketIOServer): void {
     return;
   }
 
-  if (!vercel.isVercelConfigured() && !github.isGitHubConfigured()) {
-    logger.info('[mutual-fund-monitor] Neither VERCEL_TOKEN nor GITHUB_TOKEN+GITHUB_REPO configured — monitor inactive');
-    return;
-  }
-
   ioRef = io;
   const intervalMs = Number(process.env.MUTUAL_FUND_MONITOR_INTERVAL_MS) || DEFAULT_INTERVAL_MS;
   state.running = true;
 
-  logger.info({ intervalMs, vercel: vercel.isVercelConfigured(), github: github.isGitHubConfigured() },
-    '[mutual-fund-monitor] Starting Mutual Fund Co-Pilot production monitor');
+  // Always start the loop. Credentials are resolved per-check from the Settings
+  // UI, so the monitor activates the moment the user saves tokens — no restart.
+  logger.info({ intervalMs }, '[mutual-fund-monitor] Starting Mutual Fund Co-Pilot production monitor (credentials resolved per-check from Settings)');
 
-  // Run immediately on start, then on schedule
   void runCheck();
   state.timer = setInterval(() => void runCheck(), intervalMs);
 }
@@ -313,13 +355,20 @@ export async function triggerManualCheck(): Promise<{ errorsFound: number }> {
 }
 
 export async function triggerVercelRedeploy(): Promise<{ deploymentId: string }> {
-  const projectId = await resolveVercelProjectId();
-  if (!projectId) throw new Error('Vercel not configured or project ID unavailable');
+  const orgId = state.orgId ?? await resolveOrgId();
+  if (!orgId) throw new Error('No Nexus organization found');
+  const creds = await getMonitorIntegrationCredentials(orgId);
+  if (!vercel.isVercelConfigured(creds.vercel)) {
+    throw new Error('Vercel token not configured. Add it in Settings → Integrations.');
+  }
 
-  const deployments = await vercel.getRecentDeployments(projectId, 3);
+  const projectId = await resolveVercelProjectId(creds.vercel);
+  if (!projectId) throw new Error('Vercel project ID unavailable');
+
+  const deployments = await vercel.getRecentDeployments(creds.vercel, projectId, 3);
   const latest = deployments[0];
   if (!latest) throw new Error('No deployments found for this project');
 
-  const newDeployId = await vercel.triggerRedeploy(projectId, latest.uid);
+  const newDeployId = await vercel.triggerRedeploy(creds.vercel, projectId, latest.uid);
   return { deploymentId: newDeployId };
 }

@@ -256,8 +256,19 @@ async function start() {
   httpServer.listen(Number(PORT), HOST, () => {
     logger.info({ host: HOST, port: PORT }, 'Nexus backend running');
   });
-  startAgentRunWorker(io);
-  startMutualFundMonitor(io);
+
+  // Background services must never take down the API server. Isolate their
+  // startup so a misconfiguration/throw degrades only that feature.
+  try {
+    startAgentRunWorker(io);
+  } catch (err) {
+    logger.error({ err }, 'Agent run worker failed to start; continuing without it');
+  }
+  try {
+    startMutualFundMonitor(io);
+  } catch (err) {
+    logger.error({ err }, 'Mutual fund monitor failed to start; continuing without it');
+  }
 }
 
 start().catch((err) => {

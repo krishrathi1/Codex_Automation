@@ -73,6 +73,29 @@ function formatTime(value?: string | null) {
   return new Date(value).toLocaleString();
 }
 
+// Default, pipeline-actionable triggers used when the chat box is empty or only
+// holds a status question (which the backend rejects for the fix pipeline).
+const DEFAULT_LIVE_WORKFLOW_TRIGGER =
+  'Investigate the latest production issue, hand off through diagnosis, code fix, verification, and release audit.';
+const DEFAULT_LIVE_BLACKBOARD_TRIGGER =
+  'Debate the current production decision, ask each other questions, answer objections, and close with FINAL_DECISION when ready.';
+
+// Mirrors the backend status-query gate so we don't feed a bare status question
+// ("what are my agents doing?") into the live workflow / chat fix pipeline.
+const STATUS_QUERY_PATTERN =
+  /what (are|is|'?s)\b|\bstatus\b|\bdoing\b|\bhappening\b|\bhow (are|is)\b|\bshow me\b|\bsummar|\bupdate me\b/i;
+
+function isStatusQuery(text: string) {
+  return STATUS_QUERY_PATTERN.test(text.trim());
+}
+
+// Use the typed text only when it describes something actionable; otherwise fall
+// back to the actionable default so the button always starts a valid run.
+function resolveLiveTrigger(typed: string, fallback: string) {
+  const value = typed.trim();
+  return value && !isStatusQuery(value) ? value : fallback;
+}
+
 function StatTile({ label, value, icon: Icon }: { label: string; value: string | number; icon: typeof Activity }) {
   return (
     <div className="rounded-lg border border-white/5 bg-surface-850 px-3 py-3">
@@ -774,7 +797,7 @@ export function MotherChat() {
 
             <button
               type="button"
-              onClick={() => handleStartLiveWorkflow(input || 'Investigate the latest production issue, hand off through diagnosis, code fix, verification, and release audit.')}
+              onClick={() => handleStartLiveWorkflow(resolveLiveTrigger(input, DEFAULT_LIVE_WORKFLOW_TRIGGER))}
               disabled={startingLiveWorkflow || startingLiveBlackboard}
               className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-200 transition-colors hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -784,7 +807,7 @@ export function MotherChat() {
 
             <button
               type="button"
-              onClick={() => handleStartLiveBlackboard(input || 'Debate the current production decision, ask each other questions, answer objections, and close with FINAL_DECISION when ready.')}
+              onClick={() => handleStartLiveBlackboard(resolveLiveTrigger(input, DEFAULT_LIVE_BLACKBOARD_TRIGGER))}
               disabled={startingLiveBlackboard || startingLiveWorkflow}
               className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-violet-500/20 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-200 transition-colors hover:bg-violet-500/15 disabled:cursor-not-allowed disabled:opacity-50"
             >

@@ -21,6 +21,8 @@ const INVITE_ROLES: OrgRole[] = ['ADMIN', 'MEMBER', 'VIEWER'];
 const EMPTY_GITHUB_SETTINGS: PlatformIntegrationSettings['github'] = {
   configured: false,
   tokenMasked: null,
+  repo: null,
+  branch: null,
   updatedAt: null,
 };
 
@@ -244,6 +246,8 @@ function OrganizationTab() {
 function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
   const [settings, setSettings] = useState<PlatformIntegrationSettings | null>(null);
   const [githubAccessToken, setGithubAccessToken] = useState('');
+  const [githubRepo, setGithubRepo] = useState('');
+  const [githubBranch, setGithubBranch] = useState('');
   const [vercelAccessToken, setVercelAccessToken] = useState('');
   const [vercelTeamId, setVercelTeamId] = useState('');
   const [loading, setLoading] = useState(true);
@@ -256,6 +260,8 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
       const data = await api.org.integrationSettings();
       const normalized = normalizeIntegrationSettings(data);
       setSettings(normalized);
+      setGithubRepo(normalized.github.repo || '');
+      setGithubBranch(normalized.github.branch || '');
       setVercelTeamId(normalized.vercel.teamId || '');
     } catch (err) {
       setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to load integration settings' });
@@ -282,10 +288,15 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
     try {
       const updated = await api.org.updateIntegrationSettings({
         githubAccessToken: githubAccessToken.trim() || undefined,
+        githubRepo: githubRepo.trim() || null,
+        githubBranch: githubBranch.trim() || null,
         vercelAccessToken: vercelAccessToken.trim() || undefined,
         vercelTeamId: vercelTeamId.trim() || null,
       });
-      setSettings(normalizeIntegrationSettings(updated));
+      const normalizedUpdated = normalizeIntegrationSettings(updated);
+      setSettings(normalizedUpdated);
+      setGithubRepo(normalizedUpdated.github.repo || '');
+      setGithubBranch(normalizedUpdated.github.branch || '');
       setGithubAccessToken('');
       setVercelAccessToken('');
       setMessage({ type: 'success', text: 'Integration settings saved' });
@@ -412,6 +423,25 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
               placeholder={githubSettings.configured ? 'Paste a new token to replace' : 'ghp_...'}
               className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
             />
+            <label className="mb-1 mt-3 block text-xs font-medium text-gray-400">Repository</label>
+            <input
+              value={githubRepo}
+              onChange={event => setGithubRepo(event.target.value)}
+              disabled={!isAdmin}
+              placeholder="owner/repo (e.g. krishrathi1/Mutual-Fund-Co-Pilot-)"
+              className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
+            />
+            <label className="mb-1 mt-3 block text-xs font-medium text-gray-400">Branch</label>
+            <input
+              value={githubBranch}
+              onChange={event => setGithubBranch(event.target.value)}
+              disabled={!isAdmin}
+              placeholder="main"
+              className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
+            />
+            <p className="mt-2 text-xs text-gray-500">
+              The repo the auto-fix pipeline monitors and pushes fixes to. Required for GitHub error detection and API-based commits.
+            </p>
           </div>
 
           <div className="rounded-lg border border-white/5 bg-surface-900 p-4">

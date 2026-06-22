@@ -80,23 +80,28 @@ function tokenFromSettings(providerSettings: JsonRecord, provider: 'GitHub' | 'V
   return normalizeAccessToken(provider, decryptField(encrypted));
 }
 
-function sanitizeProvider(value: unknown, options?: { includeTeamId?: boolean }) {
+function sanitizeProvider(value: unknown, options?: { includeTeamId?: boolean; includeRepo?: boolean }) {
   const provider = objectRecord(value);
   const token = stringValue(provider.accessToken);
-  const sanitized = {
+  const sanitized: JsonRecord = {
     configured: Boolean(token),
     tokenMasked: stringValue(provider.tokenMasked) || (token ? '****' : null),
     updatedAt: stringValue(provider.updatedAt) || null,
   };
-  return options?.includeTeamId
-    ? { ...sanitized, teamId: stringValue(provider.teamId) || null }
-    : sanitized;
+  if (options?.includeTeamId) {
+    sanitized.teamId = stringValue(provider.teamId) || null;
+  }
+  if (options?.includeRepo) {
+    sanitized.repo = stringValue(provider.repo) || null;
+    sanitized.branch = stringValue(provider.branch) || null;
+  }
+  return sanitized;
 }
 
 function sanitizeIntegrationSettings(settings: unknown) {
   const integrations = integrationSettings(settings);
   return {
-    github: sanitizeProvider(integrations.github),
+    github: sanitizeProvider(integrations.github, { includeRepo: true }),
     vercel: sanitizeProvider(integrations.vercel, { includeTeamId: true }),
   };
 }
@@ -116,7 +121,7 @@ export function sanitizeOrganizationSettings(settings: unknown) {
     ...root,
     integrations: {
       ...integrations,
-      github: sanitizeProvider(integrations.github),
+      github: sanitizeProvider(integrations.github, { includeRepo: true }),
       vercel: sanitizeProvider(integrations.vercel, { includeTeamId: true }),
     },
   };
@@ -125,6 +130,8 @@ export function sanitizeOrganizationSettings(settings: unknown) {
 export async function updateIntegrationSettings(organizationId: string, input: {
   githubAccessToken?: string | null;
   clearGithubAccessToken?: boolean;
+  githubRepo?: string | null;
+  githubBranch?: string | null;
   vercelAccessToken?: string | null;
   clearVercelAccessToken?: boolean;
   vercelTeamId?: string | null;
@@ -139,16 +146,30 @@ export async function updateIntegrationSettings(organizationId: string, input: {
   const now = new Date().toISOString();
 
   const github = objectRecord(integrations.github);
+  const nextGithub: JsonRecord = { ...github };
   const githubAccessToken = normalizeAccessToken('GitHub', input.githubAccessToken);
   if (input.clearGithubAccessToken) {
-    nextIntegrations.github = {};
+    delete nextGithub.accessToken;
+    delete nextGithub.tokenMasked;
   } else if (githubAccessToken) {
-    nextIntegrations.github = {
-      ...github,
-      accessToken: encryptField(githubAccessToken),
-      tokenMasked: maskToken(githubAccessToken),
-      updatedAt: now,
-    };
+    nextGithub.accessToken = encryptField(githubAccessToken);
+    nextGithub.tokenMasked = maskToken(githubAccessToken);
+  }
+  if (input.githubRepo !== undefined) {
+    const repo = input.githubRepo?.trim();
+    if (repo) nextGithub.repo = repo;
+    else delete nextGithub.repo;
+  }
+  if (input.githubBranch !== undefined) {
+    const branch = input.githubBranch?.trim();
+    if (branch) nextGithub.branch = branch;
+    else delete nextGithub.branch;
+  }
+  if (Object.keys(nextGithub).length > 0) {
+    nextGithub.updatedAt = now;
+    nextIntegrations.github = nextGithub;
+  } else {
+    nextIntegrations.github = {};
   }
 
   const vercel = objectRecord(integrations.vercel);
@@ -198,6 +219,32 @@ async function getProviderToken(organizationId: string, provider: 'github' | 've
   return {
     token,
     settings: providerSettings,
+  };
+}
+
+/**
+ * Resolve the GitHub + Vercel credentials for a monitor/automation run.
+ * Prefers the tokens saved in the Settings UI (encrypted org settings),
+ * and falls back to environment variables when a UI token is not set.
+ */
+export async function getMonitorIntegrationCredentials(organizationId: string) {
+  const [github, vercel] = await Promise.all([
+    getProviderToken(organizationId, 'github'),
+    getProviderToken(organizationId, 'vercel'),
+  ]);
+
+  return {
+    github: {
+      token: github.token || process.env.GITHUB_TOKEN || '',
+      repo: stringValue(github.settings.repo) || process.env.GITHUB_REPO || null,
+      branch: stringValue(github.settings.branch) || process.env.GITHUB_BRANCH || 'main',
+    },
+    vercel: {
+      token: vercel.token || process.env.VERCEL_TOKEN || '',
+      teamId: stringValue(vercel.settings.teamId) || process.env.VERCEL_TEAM_ID || null,
+      projectId: process.env.VERCEL_PROJECT_ID || null,
+      projectName: process.env.VERCEL_PROJECT_NAME || 'mutual-fund',
+    },
   };
 }
 

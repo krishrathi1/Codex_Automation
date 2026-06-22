@@ -309,6 +309,8 @@ export interface PlatformIntegrationSettings {
   github: {
     configured: boolean;
     tokenMasked: string | null;
+    repo: string | null;
+    branch: string | null;
     updatedAt: string | null;
   };
   vercel: {

@@ -5,7 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import * as activityService from './activity.service.js';
 import { getMonitorIntegrationCredentials } from './platform-integrations.service.js';
-import { getFileContent } from './github-api.service.js';
+import { getFileContent, pushFilesViaApi, type PushResult } from './github-api.service.js';
 import { extractRepoFilePaths, parseFileBlocks } from './autofix-parsing.js';
 
 type JsonRecord = Record<string, unknown>;
@@ -83,7 +83,14 @@ function fingerprintFor(input: ProductionErrorIngestInput) {
 }
 
 function parsePipelineContext(value: unknown): PipelineSourceContext {
-  const record = objectRecord(value);
+  let record = objectRecord(value);
+  // The agent-run worker rebuilds the job's contextPacket as a
+  // `nexus_agent_run_context` and nests the original queue context under
+  // `sourceContext`. Unwrap it so the pipeline markers survive the round-trip.
+  if (record.source !== 'production_error_pipeline'
+    && objectRecord(record.sourceContext).source === 'production_error_pipeline') {
+    record = objectRecord(record.sourceContext);
+  }
   const role = stringValue(record.pipelineRole);
   return {
     ...record,
@@ -298,20 +305,22 @@ function composeReviewPrompt(errorEvent: ProductionErrorEvent, debugOutput: stri
 }
 
 function composeCommitPrompt(errorEvent: ProductionErrorEvent, reviewOutput: string) {
-  const payload = objectRecord(errorEvent.payload);
-  const commitInstructions = stringValue(payload.commitInstructions);
+  const persisted = objectRecord(errorEvent.payload).proposedFix;
+  const proposedPaths = Array.isArray(persisted)
+    ? (persisted as Array<{ path?: unknown }>).map(f => f.path).filter((p): p is string => typeof p === 'string')
+    : [];
 
   return [
     'PIPELINE ROLE: commit',
     `PRODUCTION_ERROR_EVENT_ID: ${errorEvent.id}`,
     '',
-    'The Review Agent approved this production error fix path.',
-    commitInstructions
-      // The monitor supplied explicit commit + push instructions — follow them exactly.
-      ? 'Commit the approved fix and PUSH it to the remote, following the deploy instructions below exactly.'
-      : 'Prepare the commit/PR handoff locally. Do not push to a remote unless the repository and task explicitly permit it.',
-    'Return the exact files changed, validation performed, the commit title used, the branch pushed to, and the push result.',
-    commitInstructions ? `\n${commitInstructions}` : '',
+    'The Review Agent approved this fix. The Nexus backend will push the change to GitHub via API.',
+    'Do NOT run git. Re-emit the FINAL, complete set of changed files using the exact format:',
+    '===FILE: relative/path===',
+    '<complete file contents>',
+    '===END FILE===',
+    'Use ===DELETE: relative/path=== for deletions. Then give a one-line commit title prefixed "COMMIT TITLE:".',
+    proposedPaths.length > 0 ? `\nFiles approved in the debug step: ${proposedPaths.join(', ')}` : '',
     '',
     'Captured error:',
     JSON.stringify({
@@ -596,6 +605,73 @@ async function queueDebugReworkJob(errorEvent: ProductionErrorEvent, job: Comple
   return debugRunJob;
 }
 
+/**
+ * Push the Debug agent's approved fix straight to GitHub via the API.
+ * Returns the push result, or null when API push isn't possible (no token/repo
+ * configured, or no parseable file blocks) so the caller can fall back to the
+ * local-workspace commit agent.
+ */
+async function pushApprovedFixViaApi(errorEvent: ProductionErrorEvent): Promise<PushResult | null> {
+  if (!errorEvent.debugRunJobId) return null;
+
+  const creds = await getMonitorIntegrationCredentials(errorEvent.organizationId).catch(() => null);
+  const github = creds?.github;
+  if (!github?.token || !github?.repo) return null; // not configured for UI-driven API push
+
+  const debugJob = await prisma.agentRunJob.findUnique({
+    where: { id: errorEvent.debugRunJobId },
+    select: { output: true },
+  });
+  const files = parseFileBlocks(debugJob?.output || '');
+  if (files.length === 0) return null; // nothing to push → let the commit agent handle it
+
+  const branch = github.branch || 'main';
+  const message = `fix: ${truncate(errorEvent.title, 72)}\n\nAuto-fixed by Nexus production error pipeline (event ${errorEvent.id}).`;
+  return pushFilesViaApi(github, branch, message, files);
+}
+
+const COMMIT_TITLE_RE = /COMMIT TITLE:\s*(.+)/i;
+
+/**
+ * Push the approved fix to the target branch via the GitHub API. Prefers the
+ * persisted payload.proposedFix; falls back to parsing the commit agent's
+ * output. Returns the push result or null when nothing could be pushed.
+ * Lets pushFilesViaApi errors propagate (caller handles them).
+ */
+async function pushApprovedFix(
+  errorEvent: ProductionErrorEvent,
+  commitOutput: string,
+): Promise<{ commitSha: string; htmlUrl: string } | null> {
+  const creds = await getMonitorIntegrationCredentials(errorEvent.organizationId).catch(() => null);
+  const github = creds?.github;
+  if (!github?.token) {
+    logger.info({ id: errorEvent.id }, '[pipeline] No GitHub token configured; skipping push');
+    return null;
+  }
+
+  const fromCommit = parseFileBlocks(commitOutput);
+  const persisted = objectRecord(errorEvent.payload).proposedFix;
+  const fromPayload = Array.isArray(persisted)
+    ? (persisted as Array<{ path?: unknown; content?: unknown }>)
+        .filter(f => typeof f.path === 'string')
+        .map(f => ({ path: f.path as string, content: (f.content ?? null) as string | null }))
+    : [];
+
+  const files = fromCommit.length > 0 ? fromCommit : fromPayload;
+  if (files.length === 0) {
+    logger.warn({ id: errorEvent.id }, '[pipeline] No file changes to push');
+    return null;
+  }
+
+  const branch = github.branch || 'main';
+  const title = (commitOutput.match(COMMIT_TITLE_RE)?.[1] ?? `fix: auto-fix for ${errorEvent.title}`).trim().slice(0, 100);
+  const message = `${title}\n\nNexus production auto-fix for error ${errorEvent.id}.`;
+
+  const result = await pushFilesViaApi(github, branch, message, files);
+  logger.info({ id: errorEvent.id, commitSha: result.commitSha, files: result.filesPushed }, '[pipeline] Pushed fix to GitHub');
+  return { commitSha: result.commitSha, htmlUrl: result.htmlUrl };
+}
+
 export async function advanceProductionErrorPipelineAfterJob(
   job: CompletedPipelineJob,
   output: string,
@@ -614,6 +690,16 @@ export async function advanceProductionErrorPipelineAfterJob(
   });
   if (!errorEvent) return null;
 
+  // Heal a missing task link from the completed job so the downstream stages
+  // (which require errorEvent.taskId) can queue.
+  if (!errorEvent.taskId && job.taskId) {
+    await prisma.productionErrorEvent.update({
+      where: { id: errorEvent.id },
+      data: { taskId: job.taskId },
+    }).catch(() => {});
+    errorEvent.taskId = job.taskId;
+  }
+
   let nextJob = null;
   if (context.pipelineRole === 'debug') {
     nextJob = await queueReviewJob(errorEvent, job, output);
@@ -623,7 +709,50 @@ export async function advanceProductionErrorPipelineAfterJob(
         where: { id: errorEvent.id },
         data: { status: 'APPROVED' },
       });
-      nextJob = await queueCommitJob(errorEvent, job, output);
+
+      // Preferred path: push the approved fix directly to GitHub via the API
+      // (UI-configured token + repo). Falls back to the local-clone commit
+      // agent when the API push isn't possible or fails.
+      let pushed: PushResult | null = null;
+      try {
+        pushed = await pushApprovedFixViaApi(errorEvent);
+      } catch (err) {
+        logger.error({ err, productionErrorEventId: errorEvent.id }, 'GitHub API push failed; falling back to commit agent');
+      }
+
+      if (pushed) {
+        await prisma.productionErrorEvent.update({
+          where: { id: errorEvent.id },
+          data: { status: 'COMPLETED', resolvedAt: new Date() },
+        });
+        if (errorEvent.taskId) {
+          await prisma.task.update({
+            where: { id: errorEvent.taskId },
+            data: { status: 'DONE' },
+          }).catch(() => {});
+        }
+        await activityService.createActivity(job.organizationId, {
+          agentId: errorEvent.commitAgentId || job.agentId,
+          type: 'TASK_COMPLETE',
+          message: `Pushed fix to GitHub: ${pushed.filesPushed} file(s), commit ${pushed.commitSha.slice(0, 7)}`,
+          metadata: {
+            source: 'production_error_pipeline',
+            productionErrorEventId: errorEvent.id,
+            commitSha: pushed.commitSha,
+            commitUrl: pushed.htmlUrl,
+            filesPushed: pushed.filesPushed,
+          },
+        }).catch(err => logger.warn({ err, productionErrorEventId: errorEvent.id }, 'Failed to persist GitHub push activity'));
+        emitPipelineEvent(options.io, job.organizationId, {
+          id: errorEvent.id,
+          status: 'COMPLETED',
+          commitSha: pushed.commitSha,
+          commitUrl: pushed.htmlUrl,
+        });
+        nextJob = null;
+      } else {
+        nextJob = await queueCommitJob(errorEvent, job, output);
+      }
     } else {
       const currentAttempt = context.pipelineAttempt ?? 0;
       const maxReworks = Number(process.env.PRODUCTION_ERROR_PIPELINE_MAX_REWORKS || 1);

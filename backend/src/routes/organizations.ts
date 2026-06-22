@@ -30,6 +30,8 @@ const createApiKeySchema = z.object({
 const integrationSettingsSchema = z.object({
   githubAccessToken: z.string().optional().nullable(),
   clearGithubAccessToken: z.boolean().optional(),
+  githubRepo: z.string().optional().nullable(),
+  githubBranch: z.string().optional().nullable(),
   vercelAccessToken: z.string().optional().nullable(),
   clearVercelAccessToken: z.boolean().optional(),
   vercelTeamId: z.string().optional().nullable(),
