@@ -384,23 +384,6 @@ export async function ingestProductionErrorEvent(
   const fingerprint = fingerprintFor(input);
   const title = truncate(input.title || input.message.split(/\r?\n/)[0] || 'Production error', 180);
 
-  // Dedup: if the same error (by fingerprint) is already being worked on (not yet
-  // COMPLETED/FAILED), don't queue it again. Keeps the continuous monitor from
-  // re-ingesting the same deployment failure on every poll.
-  const inFlight = await prisma.productionErrorEvent.findFirst({
-    where: {
-      organizationId,
-      fingerprint,
-      status: { notIn: ['COMPLETED', 'FAILED'] },
-    },
-    orderBy: { createdAt: 'desc' },
-  });
-  if (inFlight) {
-    const err = new Error(`Production error already exists and is in progress (${inFlight.status})`) as Error & { statusCode?: number };
-    err.statusCode = 409;
-    throw err;
-  }
-
   const errorEvent = await prisma.productionErrorEvent.create({
     data: {
       organizationId,
