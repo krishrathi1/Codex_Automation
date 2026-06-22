@@ -1,5 +1,6 @@
 import { decryptField, encryptField } from '../lib/crypto.js';
 import { prisma } from '../lib/prisma.js';
+import { logger } from '../lib/logger.js';
 import { queryLogs, checkSigNozConnection, type QueryLogsOptions, type SigNozLog } from './signoz-api.service.js';
 
 type JsonRecord = Record<string, unknown>;
@@ -78,7 +79,15 @@ async function readErrorText(response: Response) {
 function tokenFromSettings(providerSettings: JsonRecord, provider: 'GitHub' | 'Vercel' | 'SigNoz') {
   const encrypted = stringValue(providerSettings.accessToken);
   if (!encrypted) return undefined;
-  return normalizeAccessToken(provider, decryptField(encrypted));
+  // A token saved under a different/old ENCRYPTION_KEY (or legacy format) can't be
+  // decrypted. Treat it as "not configured" instead of throwing — a thrown error here
+  // would crash callers like the background monitor. The user can re-save in Settings.
+  try {
+    return normalizeAccessToken(provider, decryptField(encrypted));
+  } catch (err) {
+    logger.warn({ provider, err: (err as Error).message }, 'Could not read stored access token; treating as not configured. Re-save it in Settings.');
+    return undefined;
+  }
 }
 
 function sanitizeProvider(value: unknown, options?: { includeTeamId?: boolean; includeRepo?: boolean; includeEndpoint?: boolean }) {

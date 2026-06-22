@@ -26,7 +26,13 @@ export async function enforcePolicies(
   // Policy: blockStatusChangesWithPendingApproval
   if (board.blockStatusChangesWithPendingApproval) {
     const pendingApproval = await prisma.approval.findFirst({
-      where: { taskId, status: 'PENDING' },
+      where: {
+        status: 'PENDING',
+        OR: [
+          { taskId },
+          { taskLinks: { some: { taskId } } },
+        ],
+      },
     });
     if (pendingApproval) {
       return { allowed: false, reason: 'Cannot change status while an approval is pending' };
@@ -44,7 +50,13 @@ export async function enforcePolicies(
   // Policy: requireApprovalForDone
   if (board.requireApprovalForDone && newStatus === 'DONE') {
     const approvedApproval = await prisma.approval.findFirst({
-      where: { taskId, status: 'APPROVED' },
+      where: {
+        status: 'APPROVED',
+        OR: [
+          { taskId },
+          { taskLinks: { some: { taskId } } },
+        ],
+      },
     });
     if (!approvedApproval) {
       return { allowed: false, reason: 'Task requires an approved approval before marking as DONE' };

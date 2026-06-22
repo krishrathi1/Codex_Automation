@@ -17,12 +17,11 @@ const ALGORITHM = 'aes-256-gcm';
 
 function getEncryptionKey(): Buffer {
   const key = process.env.ENCRYPTION_KEY;
-  if (!key || key.length !== 64) {
+  if (!key || key.length !== 64 || !/^[0-9a-fA-F]{64}$/.test(key)) {
     if (process.env.NODE_ENV === 'production') {
-      throw new Error('FATAL: ENCRYPTION_KEY must be set in production (64 hex chars = 32 bytes)');
+      throw new Error('FATAL: ENCRYPTION_KEY must be a 64-char hex string in production (32 bytes)');
     }
-    // In development, warn but use a deterministic fallback (NOT for production)
-    logger.warn('ENCRYPTION_KEY not set — sensitive data stored as plaintext. Set ENCRYPTION_KEY in .env');
+    logger.warn('ENCRYPTION_KEY not set or invalid — sensitive data stored as plaintext. Set a 64-char hex ENCRYPTION_KEY in .env');
     return Buffer.alloc(0);
   }
   return Buffer.from(key, 'hex');
@@ -34,22 +33,25 @@ function getEncryptionKey(): Buffer {
  */
 export function encryptField(plaintext: string): string {
   const key = getEncryptionKey();
-  if (key.length === 0) return plaintext; // dev fallback
+  if (key.length === 0) return `plain:${plaintext}`;
 
   const iv = randomBytes(12);
   const cipher = createCipheriv(ALGORITHM, key, iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
   const authTag = cipher.getAuthTag();
 
-  return `enc:${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
+  return `enc:v1:${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
 }
 
 /**
  * Decrypt an encrypted string. Handles both encrypted ("enc:...") and plaintext (legacy) formats.
  */
 export function decryptField(ciphertext: string): string {
+  if (ciphertext.startsWith('plain:')) {
+    return ciphertext.slice(6);
+  }
   if (!ciphertext.startsWith('enc:')) {
-    return ciphertext; // plaintext (legacy or dev mode)
+    return ciphertext;
   }
 
   const key = getEncryptionKey();
@@ -58,11 +60,13 @@ export function decryptField(ciphertext: string): string {
   }
 
   const parts = ciphertext.split(':');
-  if (parts.length !== 4) throw new Error('Invalid encrypted format');
+  const version = parts[1];
+  if (version !== 'v1') throw new Error(`Unknown encryption version: ${version}`);
+  if (parts.length !== 5) throw new Error('Invalid encrypted format');
 
-  const iv = Buffer.from(parts[1], 'hex');
-  const authTag = Buffer.from(parts[2], 'hex');
-  const encrypted = Buffer.from(parts[3], 'hex');
+  const iv = Buffer.from(parts[2], 'hex');
+  const authTag = Buffer.from(parts[3], 'hex');
+  const encrypted = Buffer.from(parts[4], 'hex');
 
   const decipher = createDecipheriv(ALGORITHM, key, iv);
   decipher.setAuthTag(authTag);

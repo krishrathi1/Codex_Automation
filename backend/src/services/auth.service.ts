@@ -5,7 +5,6 @@ import { createHash, randomBytes } from 'crypto';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { logger } from '../lib/logger.js';
 import { sendVerificationEmail } from '../lib/email.js';
-import { ensureDefaultGateway } from './gateway.service.js';
 import { populateOrgDefaults } from './org-defaults.service.js';
 
 const tracer = trace.getTracer('nexus-auth');
@@ -98,13 +97,14 @@ export async function signup(data: {
     };
   });
 
-  // Send verification email (outside transaction — non-blocking to DB)
-  await sendVerificationEmail(data.email, result.verificationToken);
-
-  // Auto-provision default gateway if configured (fire-and-forget)
-  ensureDefaultGateway(result.organization.id).catch(err =>
-    logger.warn({ orgId: result.organization.id, err }, 'Gateway auto-provision failed during signup')
-  );
+  // Send verification email
+  try {
+    await sendVerificationEmail(data.email, result.verificationToken);
+  } catch {
+    // Email failed — clean up the created records to avoid orphan users
+    await prisma.user.delete({ where: { id: result.user.id } }).catch(() => {});
+    throw new Error('Failed to send verification email. Please try again.');
+  }
 
   // Populate default soul templates and marketplace skills (fire-and-forget)
   populateOrgDefaults(result.organization.id).catch(err =>

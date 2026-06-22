@@ -23,7 +23,6 @@ const navSections = [
       { path: '/tasks', label: 'Task Board', icon: '\u25A6' },
       { path: '/topology', label: 'Network Graph', icon: '\u25C7' },
       { path: '/controls', label: 'Agent Controls', icon: '\u229E' },
-      { path: '/gateways', label: 'Gateways', icon: '\u2302' },
       { path: '/skills', label: 'Skills', icon: '\u26A1' },
       { path: '/soul-templates', label: 'Soul Templates', icon: '\u2666' },
       { path: '/custom-fields', label: 'Custom Fields', icon: '\u25A4' },

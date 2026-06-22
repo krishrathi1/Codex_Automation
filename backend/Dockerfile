@@ -31,10 +31,11 @@ COPY backend/package.json ./backend/
 COPY frontend/package.json ./frontend/
 COPY backend/prisma ./backend/prisma/
 
-RUN npm ci -w backend --omit=dev && npx -w backend prisma generate
+RUN npm ci -w backend --omit=dev
 
-# Copy built output
+# Copy built output and pre-generated Prisma client
 COPY --from=builder /app/backend/dist ./backend/dist/
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma/
 
 WORKDIR /app/backend
 

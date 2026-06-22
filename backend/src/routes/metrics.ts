@@ -19,12 +19,14 @@ router.get('/dashboard', async (req, res) => {
 router.get('/', async (req, res) => {
   if (req.baseUrl.endsWith('/tokens')) {
     const agentId = req.query.agentId as string | undefined;
-    const hours = req.query.hours ? Number(req.query.hours) : undefined;
+    const rawHours = Number(req.query.hours);
+    const hours = !Number.isNaN(rawHours) && rawHours > 0 ? rawHours : undefined;
     const usage = await metricsService.getTokenUsage(req.organizationId!, { agentId, hours });
     res.json(usage);
   } else {
     const agentId = req.query.agentId as string | undefined;
-    const limit = req.query.limit ? Number(req.query.limit) : undefined;
+    const rawLimit = Number(req.query.limit);
+    const limit = !Number.isNaN(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 200) : undefined;
     const metrics = await metricsService.getMetrics(req.organizationId!, { agentId, limit });
     res.json(metrics);
   }

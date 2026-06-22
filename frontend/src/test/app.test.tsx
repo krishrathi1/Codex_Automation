@@ -433,41 +433,6 @@ describe('API Client', () => {
   });
 
   // --- Gateways ---
-  describe('gateways', () => {
-    it('list() calls GET /api/gateways', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => [],
-        status: 200,
-      });
-      await api.gateways.list();
-      expect(mockFetch).toHaveBeenCalledWith(
-        '/api/gateways',
-        expect.objectContaining({
-          headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
-        }),
-      );
-    });
-  });
-
-  // --- LLM Providers ---
-  describe('llmProviders', () => {
-    it('list() calls GET /api/llm-providers', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => [],
-        status: 200,
-      });
-      await api.llmProviders.list();
-      expect(mockFetch).toHaveBeenCalledWith(
-        '/api/llm-providers',
-        expect.objectContaining({
-          headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
-        }),
-      );
-    });
-  });
-
   // --- Tasks ---
   describe('tasks', () => {
     it('list() calls GET /api/tasks', async () => {
@@ -788,10 +753,8 @@ describe('Component Rendering', () => {
       expect(screen.getByText('Agent Controls')).toBeInTheDocument();
       expect(screen.getByText('Create Agent')).toBeInTheDocument();
 
-      // Infrastructure section items
-      expect(screen.getByText('Gateways')).toBeInTheDocument();
-
       // Observe section items
+      expect(screen.getByText('Logs')).toBeInTheDocument();
       expect(screen.getByText('Metrics & Cost')).toBeInTheDocument();
       expect(screen.getByText('Alerts')).toBeInTheDocument();
       expect(screen.getByText('Search & Audit')).toBeInTheDocument();
@@ -845,8 +808,8 @@ describe('Component Rendering', () => {
       const boardsLink = screen.getByText('Boards').closest('a');
       expect(boardsLink).toHaveAttribute('href', '/boards');
 
-      const gatewaysLink = screen.getByText('Gateways').closest('a');
-      expect(gatewaysLink).toHaveAttribute('href', '/gateways');
+      const logsLink = screen.getByText('Logs').closest('a');
+      expect(logsLink).toHaveAttribute('href', '/logs');
 
       const settingsLink = screen.getByText('Settings').closest('a');
       expect(settingsLink).toHaveAttribute('href', '/settings');
@@ -873,7 +836,7 @@ describe('Component Rendering', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Integrations' }));
 
       expect(await screen.findByText('Repository and deployment access')).toBeInTheDocument();
-      expect(screen.getAllByText('Not connected')).toHaveLength(2);
+      expect(screen.getAllByText('Not connected')).toHaveLength(3);
       expect(mockFetch).toHaveBeenCalledWith(
         '/api/org/integrations/settings',
         expect.objectContaining({

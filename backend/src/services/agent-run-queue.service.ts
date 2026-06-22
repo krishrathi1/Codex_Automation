@@ -1557,6 +1557,19 @@ export async function recoverInterruptedAgentRunJobs() {
   if (result.count > 0) {
     logger.warn({ count: result.count }, 'Re-queued interrupted agent run jobs');
   }
+
+  const orphanedSessions = await prisma.session.updateMany({
+    where: { status: 'RUNNING', type: 'AGENT_RUN_JOB' },
+    data: {
+      status: 'FAILED',
+      endedAt: new Date(),
+      summary: 'Session orphaned by backend worker restart',
+    },
+  });
+  if (orphanedSessions.count > 0) {
+    logger.warn({ count: orphanedSessions.count }, 'Marked orphaned sessions as FAILED');
+  }
+
   return result.count;
 }
 

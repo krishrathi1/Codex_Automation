@@ -59,7 +59,7 @@ router.get('/:id/live-blackboard/trace', async (req, res) => {
 // Board Group Snapshot — cross-board summary for the board's group
 router.get('/groups/:groupId/snapshot', async (req, res) => {
   const includeDone = req.query.includeDone === 'true';
-  const perBoardTaskLimit = parseInt(req.query.perBoardTaskLimit as string) || 5;
+  const perBoardTaskLimit = Math.min(Math.max(parseInt(req.query.perBoardTaskLimit as string) || 5, 1), 100);
   const snapshot = await boardService.getBoardGroupSnapshot(req.params.groupId, req.organizationId!, { includeDone, perBoardTaskLimit });
   if (!snapshot) return res.status(404).json({ error: 'Board group not found' });
   res.json(snapshot);

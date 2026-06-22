@@ -12,6 +12,13 @@ export async function getAllTasks(organizationId: string) {
   });
 }
 
+export async function getTaskById(id: string, organizationId: string) {
+  return prisma.task.findFirst({
+    where: { id, organizationId },
+    include: { agent: { select: { id: true, name: true, displayName: true, avatar: true } } },
+  });
+}
+
 export async function createTask(organizationId: string, data: {
   title: string;
   description?: string;

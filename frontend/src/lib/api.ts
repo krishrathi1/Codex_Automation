@@ -1,8 +1,11 @@
-import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, Gateway, GatewayHealth, ModelInfo, ChatHistory, ChatResponse, MotherChatContext, MotherChatDiagnostics, WorkspaceFile, LlmProvider, UsageCredit, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate, CommEdge, LiveBlackboardTrace, PlatformIntegrationSettings, GithubRepositorySummary, VercelProjectSummary, SigNozLog, AgentDesignProposal } from '../types';
+import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, ChatHistory, ChatResponse, MotherChatContext, MotherChatDiagnostics, WorkspaceFile, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate, CommEdge, LiveBlackboardTrace, PlatformIntegrationSettings, GithubRepositorySummary, VercelProjectSummary, SigNozLog, AgentDesignProposal } from '../types';
 import { useAuthStore } from '../stores/auth-store';
 import { AUTH_DISABLED } from './auth-mode';
 
 const BASE_URL = '/api';
+
+// Mutex to prevent concurrent token refresh calls
+let refreshPromise: Promise<boolean> | null = null;
 
 async function readApiError(res: Response) {
   const fallback = `API error: ${res.status} ${res.statusText}`;
@@ -36,28 +39,37 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   // On 401, try to refresh token via httpOnly cookie and retry once
   if (res.status === 401) {
-    const authPath = AUTH_DISABLED ? '/auth/dev-login' : '/auth/refresh';
-    const refreshRes = await fetch(`${BASE_URL}${authPath}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-    });
+    if (!refreshPromise) {
+      const authPath = AUTH_DISABLED ? '/auth/dev-login' : '/auth/refresh';
+      refreshPromise = fetch(`${BASE_URL}${authPath}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      }).then(async (refreshRes) => {
+        if (refreshRes.ok) {
+          const data = await refreshRes.json();
+          useAuthStore.getState().setAccessToken(data.accessToken);
+          return true;
+        }
+        if (!AUTH_DISABLED) {
+          useAuthStore.getState().clearAuth();
+        }
+        return false;
+      }).finally(() => {
+        refreshPromise = null;
+      });
+    }
 
-    if (refreshRes.ok) {
-      const data = await refreshRes.json();
-      useAuthStore.getState().setAccessToken(data.accessToken);
-      headers['Authorization'] = `Bearer ${data.accessToken}`;
+    const refreshed = await refreshPromise;
+    if (refreshed) {
+      const { accessToken } = useAuthStore.getState();
+      headers['Authorization'] = `Bearer ${accessToken}`;
       res = await fetch(`${BASE_URL}${path}`, {
         ...options,
         credentials: 'include',
         headers: { ...headers, ...options?.headers },
       });
     } else {
-      if (!AUTH_DISABLED) {
-        // Clear auth state — ProtectedRoute will redirect to /login
-        // without a hard page reload (preserves SPA navigation)
-        useAuthStore.getState().clearAuth();
-      }
       throw new Error(AUTH_DISABLED ? 'Backend unavailable' : 'Session expired');
     }
   }
@@ -273,19 +285,6 @@ export const api = {
       return request<Command[]>(`/commands${qs}`);
     },
   },
-  gateways: {
-    list: () => request<Gateway[]>('/gateways'),
-    get: (id: string) => request<Gateway>(`/gateways/${id}`),
-    create: (data: { name: string; url: string; token: string; workspaceRoot?: string }) =>
-      request<Gateway>('/gateways', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: string, data: Partial<{ name: string; url: string; token: string; workspaceRoot: string }>) =>
-      request<Gateway>(`/gateways/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-    delete: (id: string) => request<void>(`/gateways/${id}`, { method: 'DELETE' }),
-    health: (id: string) => request<GatewayHealth>(`/gateways/${id}/health`),
-    models: (id: string) => request<ModelInfo[]>(`/gateways/${id}/models`),
-    sessions: (id: string) => request<unknown>(`/gateways/${id}/sessions`),
-    defaults: () => request<{ hasDefaultConfig: boolean; gatewayCount: number }>('/gateways/defaults'),
-  },
   chat: {
     history: (agentId: string) => request<ChatHistory>(`/agents/${agentId}/chat/history`),
     send: (agentId: string, message: string, requestId?: string) =>
@@ -409,17 +408,6 @@ export const api = {
     generate: (agentId: string) =>
       request<{ token: string }>(`/agents/${agentId}/token`, { method: 'POST' }),
   },
-  llmProviders: {
-    list: () => request<LlmProvider[]>('/llm-providers'),
-    upsert: (data: { provider: string; mode: string; apiKey?: string }) =>
-      request<LlmProvider>('/llm-providers', { method: 'POST', body: JSON.stringify(data) }),
-    delete: (id: string) => request<void>(`/llm-providers/${id}`, { method: 'DELETE' }),
-    test: (id: string) => request<{ success: boolean; message: string }>(`/llm-providers/${id}/test`, { method: 'POST' }),
-    usage: () => request<{ credit: UsageCredit | null; providers: LlmProvider[] }>('/llm-providers/usage'),
-    addCredit: (amountCents: number) =>
-      request<UsageCredit>('/llm-providers/credits', { method: 'POST', body: JSON.stringify({ amountCents }) }),
-  },
-
   // ─── Mission Control Features ──────────────────────
   tags: {
     list: () => request<Tag[]>('/tags'),

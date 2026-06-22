@@ -34,7 +34,7 @@ services:
       NODE_ENV: production
       JWT_SECRET: ${JWT_SECRET}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://nexus.blostem.com,https://nexus.blostom.com}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://nexus.blostem.com}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       # SMTP (Email Verification)
       SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}

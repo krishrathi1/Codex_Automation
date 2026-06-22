@@ -127,6 +127,7 @@ function AgentControlCard({ agent, onCommandSent }: { agent: Agent; onCommandSen
           </Link>
           <button
             onClick={handleToggleEnabled}
+            aria-label={enabled ? 'Disable agent' : 'Enable agent'}
             className={cn(
               'relative w-11 h-6 rounded-full transition-colors duration-200',
               enabled ? 'bg-emerald-500' : 'bg-gray-600'

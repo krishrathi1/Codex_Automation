@@ -4,12 +4,16 @@ import {
   triggerManualCheck,
   triggerVercelRedeploy,
 } from '../services/mutual-fund-monitor.service.js';
+import type { Request, Response } from 'express';
 
 const router = Router();
 
 // GET /api/mutual-fund-monitor/status
-router.get('/status', (_req, res) => {
+router.get('/status', (req: Request, res: Response) => {
   const status = getMonitorStatus();
+  if (status.orgId && status.orgId !== req.organizationId) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
   res.json({
     running: status.running,
     lastCheckAt: status.lastCheckAt,
@@ -24,7 +28,11 @@ router.get('/status', (_req, res) => {
 });
 
 // POST /api/mutual-fund-monitor/check — trigger an immediate check
-router.post('/check', async (_req, res) => {
+router.post('/check', async (req: Request, res: Response) => {
+  const status = getMonitorStatus();
+  if (status.orgId && status.orgId !== req.organizationId) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
   try {
     const result = await triggerManualCheck();
     res.json({ ok: true, errorsFound: result.errorsFound });
@@ -34,7 +42,11 @@ router.post('/check', async (_req, res) => {
 });
 
 // POST /api/mutual-fund-monitor/redeploy — force a Vercel redeploy
-router.post('/redeploy', async (_req, res) => {
+router.post('/redeploy', async (req: Request, res: Response) => {
+  const status = getMonitorStatus();
+  if (status.orgId && status.orgId !== req.organizationId) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
   try {
     const result = await triggerVercelRedeploy();
     res.json({ ok: true, deploymentId: result.deploymentId });

@@ -221,6 +221,7 @@ describe('requireRole middleware', () => {
         email: `viewer-${Date.now()}@nexus-test.local`,
         password: 'hashed',
         name: 'Viewer User',
+        emailVerified: true,
       },
     });
     await prisma.orgMember.create({

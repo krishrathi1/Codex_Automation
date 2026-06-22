@@ -6,7 +6,8 @@ const router = Router();
 // GET / — list sessions (query params: agentId, limit)
 router.get('/', async (req, res) => {
   const agentId = req.query.agentId as string | undefined;
-  const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+  const rawLimit = parseInt(req.query.limit as string, 10);
+  const limit = !Number.isNaN(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 200) : undefined;
   const sessions = await sessionService.getSessions(req.organizationId!, { agentId, limit });
   res.json(sessions);
 });

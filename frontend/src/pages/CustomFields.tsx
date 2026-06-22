@@ -34,9 +34,16 @@ export function CustomFields() {
     setForm({ fieldKey: '', label: '', fieldType: 'TEXT', uiVisibility: 'ALWAYS', validationRegex: '', defaultValue: '' });
   }
 
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   async function handleDelete(id: string) {
-    await api.customFields.delete(id);
-    setDefinitions(prev => prev.filter(d => d.id !== id));
+    setDeleteError(null);
+    try {
+      await api.customFields.delete(id);
+      setDefinitions(prev => prev.filter(d => d.id !== id));
+    } catch (err) {
+      setDeleteError((err as Error).message);
+    }
   }
 
   async function handleAttach() {
@@ -65,6 +72,9 @@ export function CustomFields() {
         </button>
       </div>
 
+      {deleteError && (
+        <div className="mb-3 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">{deleteError}</div>
+      )}
       <div className="space-y-3">
         {definitions.length === 0 ? (
           <div className="text-center py-12 text-gray-500 bg-surface-850 border border-white/5 rounded-xl">No custom fields defined yet</div>

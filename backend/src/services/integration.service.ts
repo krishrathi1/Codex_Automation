@@ -1,6 +1,5 @@
-import { PrismaClient, ChannelType } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { ChannelType } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 
 // Mask sensitive tokens: show first 4 + last 4 chars
 function maskToken(token: string | null | undefined): string | null {

@@ -99,7 +99,7 @@ async function resolveVercelProjectId(cfg: vercel.VercelConfig): Promise<string 
   }
 }
 
-function buildCommitAgentExtra(workspace: string, githubToken: string, repo: string, branch: string): string {
+function buildCommitAgentExtra(workspace: string, repo: string, branch: string): string {
   return [
     '',
     '--- COMMIT & DEPLOY INSTRUCTIONS ---',
@@ -113,8 +113,8 @@ function buildCommitAgentExtra(workspace: string, githubToken: string, repo: str
     '3. Push to GitHub:     git push origin ' + branch,
     '',
     'The Vercel deployment is connected to GitHub and will auto-redeploy on push.',
-    'If git push fails due to auth, use HTTPS with the GitHub token:',
-    `  git remote set-url origin https://${githubToken || '$GITHUB_TOKEN'}@github.com/${repo}.git`,
+    'If git push fails due to auth, use HTTPS with the configured GitHub token:',
+    '  git remote set-url origin https://$GITHUB_TOKEN@github.com/${repo}.git',
     '--- END DEPLOY INSTRUCTIONS ---',
   ].join('\n');
 }
@@ -156,7 +156,7 @@ async function checkVercelErrors(
   const workspace = process.env.MUTUAL_FUND_WORKSPACE || '';
   const repo = githubCfg.repo || 'krishrathi1/Mutual-Fund-Co-Pilot-';
   const branch = githubCfg.branch || 'main';
-  const commitExtra = workspace ? buildCommitAgentExtra(workspace, githubCfg.token, repo, branch) : '';
+  const commitExtra = workspace ? buildCommitAgentExtra(workspace, repo, branch) : '';
 
   try {
     await ingestProductionErrorEvent(orgId, {
@@ -209,7 +209,7 @@ async function checkGitHubFailures(orgId: string, boardId: string | undefined, c
   const workspace = process.env.MUTUAL_FUND_WORKSPACE || '';
   const repo = cfg.repo || 'krishrathi1/Mutual-Fund-Co-Pilot-';
   const branch = cfg.branch || 'main';
-  const commitExtra = workspace ? buildCommitAgentExtra(workspace, cfg.token, repo, branch) : '';
+  const commitExtra = workspace ? buildCommitAgentExtra(workspace, repo, branch) : '';
 
   for (const run of runs) {
     // Only ingest runs from the last 24 hours
@@ -316,7 +316,15 @@ async function runCheck(): Promise<void> {
   state.orgId = orgId;
 
   // Resolve credentials from the Settings UI (encrypted org settings), env fallback.
-  const creds = await getMonitorIntegrationCredentials(orgId);
+  // Never let a credential-resolution error crash the monitor (and the server).
+  let creds;
+  try {
+    creds = await getMonitorIntegrationCredentials(orgId);
+  } catch (err) {
+    state.lastError = `Failed to resolve integration credentials: ${(err as Error).message}`;
+    logger.error({ err }, '[mutual-fund-monitor] ' + state.lastError);
+    return;
+  }
   const vercelConfigured = vercel.isVercelConfigured(creds.vercel);
   const githubConfigured = github.isGitHubConfigured(creds.github);
   const signozConfigured = signoz.isSigNozConfigured(creds.signoz);
@@ -390,8 +398,12 @@ export function startMutualFundMonitor(io?: SocketIOServer): void {
   // UI, so the monitor activates the moment the user saves tokens — no restart.
   logger.info({ intervalMs }, '[mutual-fund-monitor] Starting Mutual Fund Co-Pilot production monitor (credentials resolved per-check from Settings)');
 
-  void runCheck();
-  state.timer = setInterval(() => void runCheck(), intervalMs);
+  const safeRunCheck = () => runCheck().catch(err => {
+    state.lastError = (err as Error).message;
+    logger.error({ err }, '[mutual-fund-monitor] runCheck failed (monitor stays alive)');
+  });
+  void safeRunCheck();
+  state.timer = setInterval(() => void safeRunCheck(), intervalMs);
 }
 
 export function stopMutualFundMonitor(): void {

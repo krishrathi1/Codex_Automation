@@ -25,8 +25,6 @@ import configRoutes from './routes/config.js';
 import mcpRoutes from './routes/mcp.js';
 import remoteRoutes from './routes/remote.js';
 import { requireApiKey } from './middleware/api-key-auth.js';
-import gatewayRoutes from './routes/gateways.js';
-import llmProviderRoutes from './routes/llm-providers.js';
 import boardRoutes from './routes/boards.js';
 import approvalRoutes from './routes/approvals.js';
 import agentApiRoutes from './routes/agent-api.js';
@@ -43,7 +41,6 @@ import motherChatRoutes from './routes/mother-chat.js';
 import agentDesignerRoutes from './routes/agent-designer.js';
 import errorEventRoutes from './routes/error-events.js';
 import mutualFundMonitorRoutes from './routes/mutual-fund-monitor.js';
-import { connectAllGateways, setSocketIO } from './services/gateway.service.js';
 import { startMutualFundMonitor, stopMutualFundMonitor } from './services/mutual-fund-monitor.service.js';
 import { getClaudeCliDiagnostics, isCodexCliRuntimeEnabled } from './services/claude-cli.service.js';
 import { ensureDevelopmentAdminUser } from './services/dev-admin.service.js';
@@ -125,12 +122,6 @@ app.use('/api/agents/:agentId/mcp-servers', requireAuth, mcpRoutes);
 // Remote agent routes (API key auth, not JWT)
 app.use('/api/remote', requireApiKey, remoteRoutes);
 
-// Gateway routes
-app.use('/api/gateways', requireAuth, gatewayRoutes);
-
-// LLM Provider routes
-app.use('/api/llm-providers', requireAuth, llmProviderRoutes);
-
 // Board routes (boards + board groups)
 app.use('/api/boards', requireAuth, boardRoutes);
 
@@ -164,26 +155,24 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   }
   // Prisma unique constraint violation
   if (err?.code === 'P2002') {
-    return res.status(409).json({ error: `Unique constraint failed on: ${err.meta?.target?.join(', ') || 'unknown field'}` });
+    return res.status(409).json({ error: 'A record with this value already exists' });
   }
   // Prisma foreign key constraint violation
   if (err?.code === 'P2003') {
-    return res.status(400).json({ error: `Foreign key constraint violated: ${err.meta?.field_name || 'unknown'}` });
+    return res.status(400).json({ error: 'Referenced record not found' });
   }
   // Prisma record not found
   if (err?.code === 'P2025') {
     return res.status(404).json({ error: 'Record not found' });
   }
   logger.error({ err }, 'Unhandled route error');
-  res.status(500).json({ error: err.message || 'Internal server error' });
+  const message = process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message || 'Internal server error';
+  res.status(500).json({ error: message });
 });
 
 // WebSocket
 const io = setupWebSocket(httpServer);
 app.set('io', io);
-
-// Share Socket.io with gateway service for event forwarding
-setSocketIO(io);
 
 let shuttingDown = false;
 
@@ -231,7 +220,7 @@ async function start() {
     if (count > 0) logger.info({ count }, 'Reset stuck ONLINE agents to IDLE on startup');
   });
 
-  // Connect to all gateways on startup unless local Claude CLI is the selected runtime.
+  // Report local Claude CLI runtime status on startup.
   if (isCodexCliRuntimeEnabled()) {
     const diagnostics = await getClaudeCliDiagnostics();
     const logPayload = {
@@ -242,17 +231,13 @@ async function start() {
       authDetails: diagnostics.authentication.details,
     };
     if (diagnostics.installation.ok && diagnostics.authentication.ok) {
-      logger.info(logPayload, 'Claude CLI runtime enabled; skipping gateway auto-connect');
+      logger.info(logPayload, 'Claude CLI runtime enabled');
     } else {
       logger.warn({
         ...logPayload,
         installationDetails: diagnostics.installation.details,
       }, 'Claude CLI runtime check failed; chat requests will return diagnostics until fixed');
     }
-  } else {
-    connectAllGateways().catch(err => {
-      logger.warn({ err }, 'Gateway connection errors on startup');
-    });
   }
 
   httpServer.listen(Number(PORT), HOST, () => {

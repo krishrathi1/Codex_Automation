@@ -37,8 +37,7 @@ router.post('/', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   // Enforce board policies if status is changing
   if (req.body.status) {
-    const existing = await taskService.getAllTasks(req.organizationId!);
-    const currentTask = existing.find(t => t.id === req.params.id);
+    const currentTask = await taskService.getTaskById(req.params.id, req.organizationId!);
     if (currentTask?.boardId) {
       const check = await policyService.enforcePolicies(
         req.params.id,

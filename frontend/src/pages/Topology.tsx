@@ -694,20 +694,34 @@ export function Topology() {
 
   const fitViewport = useCallback(() => {
     const viewportSize = sizeRef.current;
-    const layoutSize = layoutSizeRef.current;
+    const sim = nodesRef.current;
+
+    // Fit to the actual node cluster (incl. radius + label) rather than the padded
+    // layout, so the constellation fills the canvas instead of floating in a void.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of sim) {
+      const pad = n.radius + LABEL_HEIGHT + 10;
+      minX = Math.min(minX, n.x - n.radius - 10);
+      maxX = Math.max(maxX, n.x + n.radius + 10);
+      minY = Math.min(minY, n.y - n.radius - 10);
+      maxY = Math.max(maxY, n.y + pad);
+    }
+    if (!Number.isFinite(minX)) {
+      const layoutSize = layoutSizeRef.current;
+      minX = 0; minY = 0; maxX = layoutSize.width; maxY = layoutSize.height;
+    }
+
+    const contentW = Math.max(maxX - minX, 1);
+    const contentH = Math.max(maxY - minY, 1);
     const scale = clamp(
-      Math.min(
-        viewportSize.width / Math.max(layoutSize.width, 1),
-        viewportSize.height / Math.max(layoutSize.height, 1),
-        1,
-      ) * 0.94,
+      Math.min(viewportSize.width / contentW, viewportSize.height / contentH, ZOOM_MAX) * 0.9,
       ZOOM_MIN,
       ZOOM_MAX,
     );
     setViewport({
       scale,
-      x: (viewportSize.width - layoutSize.width * scale) / 2,
-      y: (viewportSize.height - layoutSize.height * scale) / 2,
+      x: viewportSize.width / 2 - ((minX + maxX) / 2) * scale,
+      y: viewportSize.height / 2 - ((minY + maxY) / 2) * scale,
     });
   }, []);
 
@@ -1019,11 +1033,22 @@ export function Topology() {
         >
           {/* Subtle grid background */}
           <defs>
+            {/* Depth: radial backdrop + ambient center glow so the graph reads as a constellation, not a void */}
+            <radialGradient id="canvasBg" cx="50%" cy="44%" r="78%">
+              <stop offset="0%" stopColor="#131c30" />
+              <stop offset="48%" stopColor="#0c1223" />
+              <stop offset="100%" stopColor="#060912" />
+            </radialGradient>
+            <radialGradient id="centerGlow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="rgba(99,102,241,0.20)" />
+              <stop offset="55%" stopColor="rgba(99,102,241,0.06)" />
+              <stop offset="100%" stopColor="rgba(99,102,241,0)" />
+            </radialGradient>
             <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
               <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,255,255,0.02)" strokeWidth="1" />
             </pattern>
             {/* Glow filter for nodes */}
-            <filter id="glow">
+            <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
               <feGaussianBlur stdDeviation="4" result="coloredBlur" />
               <feMerge>
                 <feMergeNode in="coloredBlur" />
@@ -1045,7 +1070,9 @@ export function Topology() {
               </marker>
             ))}
           </defs>
-          <rect width={width} height={height} fill="#0b1120" />
+          <rect width={width} height={height} fill="url(#canvasBg)" />
+          {/* Ambient glow anchored to the viewport center — gives the canvas a focal point */}
+          <ellipse cx={width / 2} cy={height * 0.46} rx={Math.min(width, height) * 0.55} ry={Math.min(width, height) * 0.5} fill="url(#centerGlow)" />
 
           <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
             <rect width={layoutSize.width} height={layoutSize.height} fill="url(#grid)" />

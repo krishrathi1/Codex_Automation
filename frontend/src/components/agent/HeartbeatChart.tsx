@@ -19,11 +19,15 @@ export function HeartbeatChart({ activities }: { activities: Activity[] }) {
   for (const hb of heartbeats) {
     const time = new Date(hb.createdAt);
     const key = format(time, 'HH:mm');
-    // Find closest bucket
+    // Find the single closest bucket
+    let closestKey: string | null = null;
     for (const [bucketKey] of bucketMap) {
-      if (key >= bucketKey) {
-        bucketMap.set(bucketKey, (bucketMap.get(bucketKey) || 0) + 1);
+      if (key >= bucketKey && (!closestKey || bucketKey > closestKey)) {
+        closestKey = bucketKey;
       }
+    }
+    if (closestKey) {
+      bucketMap.set(closestKey, (bucketMap.get(closestKey) || 0) + 1);
     }
   }
 

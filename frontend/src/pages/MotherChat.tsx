@@ -63,9 +63,18 @@ const statusClasses: Record<string, string> = {
 };
 
 function newRequestId() {
-  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `mother-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  if (typeof crypto !== 'undefined') {
+    const c = crypto;
+    if ('randomUUID' in c) {
+      return (c as Crypto & { randomUUID: () => string }).randomUUID();
+    }
+    if ('getRandomValues' in c) {
+      const arr = new Uint8Array(16);
+      (c as Crypto).getRandomValues(arr);
+      return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
+    }
+  }
+  return `mother-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function formatTime(value?: string | null) {

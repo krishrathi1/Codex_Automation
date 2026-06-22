@@ -6,6 +6,7 @@ export function SoulTemplates() {
   const [templates, setTemplates] = useState<SoulTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<SoulTemplate | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ name: '', category: 'general', description: '', content: '' });
@@ -35,9 +36,14 @@ export function SoulTemplates() {
   }
 
   async function handleDelete(id: string) {
-    await api.soulTemplates.delete(id);
-    setTemplates(prev => prev.filter(t => t.id !== id));
-    if (selectedTemplate?.id === id) setSelectedTemplate(null);
+    setDeleteError(null);
+    try {
+      await api.soulTemplates.delete(id);
+      setTemplates(prev => prev.filter(t => t.id !== id));
+      if (selectedTemplate?.id === id) setSelectedTemplate(null);
+    } catch (err) {
+      setDeleteError((err as Error).message);
+    }
   }
 
   const categories = [...new Set(templates.map(t => t.category))].sort();
@@ -92,6 +98,9 @@ export function SoulTemplates() {
         <div className="flex-1">
           {selectedTemplate ? (
             <div className="bg-surface-850 border border-white/5 rounded-xl p-6">
+              {deleteError && (
+                <div className="mb-4 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">{deleteError}</div>
+              )}
               <div className="flex items-start justify-between mb-4">
                 <div>
                   <h2 className="text-lg font-semibold text-white">{selectedTemplate.name}</h2>

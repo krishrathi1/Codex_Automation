@@ -3,7 +3,7 @@ import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom'
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import type { Agent, Board, Gateway, GithubRepositorySummary, McpServer, McpTool, SoulTemplate, MarketplaceSkill, AgentSkill, AgentIntegration, ChannelType, VercelProjectSummary } from '@/types';
+import type { Agent, Board, GithubRepositorySummary, McpServer, McpTool, SoulTemplate, MarketplaceSkill, AgentSkill, AgentIntegration, ChannelType, VercelProjectSummary } from '@/types';
 
 interface McpServerWithTools extends McpServer {
   tools?: McpTool[];
@@ -143,15 +143,12 @@ export function AgentCreate() {
   const [agentToAgent, setAgentToAgent] = useState(true);
   const [soulMd, setSoulMd] = useState('');
   const [nameManuallyEdited, setNameManuallyEdited] = useState(false);
-  const [gatewayId, setGatewayId] = useState('');
-  const [gateways, setGateways] = useState<Gateway[]>([]);
   const [currentBoardId, setCurrentBoardId] = useState(boardId || '');
   const [board, setBoard] = useState<Board | null>(null);
   const [boards, setBoards] = useState<Board[]>([]);
 
   // Advanced settings
   const [showAdvanced, setShowAdvanced] = useState(isEditMode);
-  const [gatewayInfo, setGatewayInfo] = useState<{ hasDefaultConfig: boolean; gatewayCount: number } | null>(null);
 
   // MCP state
   const [mcpServers, setMcpServers] = useState<McpServerWithTools[]>([]);
@@ -203,10 +200,8 @@ export function AgentCreate() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load gateways, gateway defaults, and agent setup data
+  // Load agent setup data
   useEffect(() => {
-    api.gateways.list().then(setGateways).catch(() => {});
-    api.gateways.defaults().then(setGatewayInfo).catch(() => {});
     api.soulTemplates.list().then(setSoulTemplates).catch(() => {});
     api.skills.marketplace().then(setAvailableSkills).catch(() => {});
     api.boards.list().then(setBoards).catch(() => {});
@@ -228,7 +223,6 @@ export function AgentCreate() {
         setEnabled(agent.enabled);
         setAgentToAgent(agent.agentToAgent ?? false);
         setSoulMd(agent.soulMd || '');
-        setGatewayId(agent.gatewayId || '');
         setCurrentBoardId(agent.boardId || boardId || '');
         setSelectedTemplateId(agent.soulTemplateId || '');
         setNameManuallyEdited(true);
@@ -458,8 +452,6 @@ export function AgentCreate() {
     setSaving(true);
     setError(null);
     try {
-      // Only send gatewayId if user explicitly selected one (not auto-provisioned)
-      const shouldSendGateway = gatewayId && !(gatewayInfo?.hasDefaultConfig && gatewayInfo.gatewayCount <= 1 && !showAdvanced);
       const data: Record<string, unknown> = {
         name: name.trim(),
         displayName: displayName.trim(),
@@ -471,8 +463,7 @@ export function AgentCreate() {
         agentToAgent,
 	        soulMd: soulMd.trim() || undefined,
 	        soulTemplateId: selectedTemplateId || null,
-	        gatewayId: shouldSendGateway ? gatewayId : undefined,
-	        identityProfile: {
+		        identityProfile: {
 	          integrationAccess: buildIntegrationAccess(),
 	        },
 	      };
@@ -926,13 +917,6 @@ export function AgentCreate() {
 	                </div>
 	              </div>
 
-              {/* Gateway warning — only when no auto-provisioning and no gateways */}
-              {gatewayInfo && !gatewayInfo.hasDefaultConfig && gatewayInfo.gatewayCount === 0 && (
-                <div className="mt-4 px-3 py-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-amber-400 text-xs">
-                  No agent connection available. Contact your admin or{' '}
-                  <Link to="/gateways" className="underline hover:text-amber-300">configure a gateway</Link>.
-                </div>
-              )}
             </div>
 
             {/* Advanced Settings — Collapsible */}
@@ -967,27 +951,6 @@ export function AgentCreate() {
                       required
                     />
                   </div>
-
-                  {/* Connection Gateway — hidden when auto-provisioned with 0-1 gateways */}
-                  {!(gatewayInfo?.hasDefaultConfig && gatewayInfo.gatewayCount <= 1) && (
-                    <div className="col-span-2 sm:col-span-1">
-                      <label className="block text-xs font-medium text-gray-400 mb-1.5">
-                        Connection Gateway
-                      </label>
-                      <select
-                        value={gatewayId}
-                        onChange={(e) => setGatewayId(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg bg-surface-900 border border-white/10 text-sm text-white focus:outline-none focus:border-nexus-500/50"
-                      >
-                        <option value="">Auto (default)</option>
-                        {gateways.map((gw) => (
-                          <option key={gw.id} value={gw.id}>
-                            {gw.name} {gw.status === 'ONLINE' ? '' : `(${gw.status.toLowerCase()})`}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
 
                   {/* Health Check Frequency */}
                   <div className="col-span-1">

@@ -4,7 +4,8 @@ import * as productionErrorPipeline from '../services/production-error-pipeline.
 const router = Router();
 
 router.get('/', async (req, res) => {
-  const limit = req.query.limit ? Number(req.query.limit) : undefined;
+  const rawLimit = Number(req.query.limit);
+  const limit = !Number.isNaN(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 200) : undefined;
   const boardId = typeof req.query.boardId === 'string' ? req.query.boardId : undefined;
   const events = await productionErrorPipeline.listProductionErrorEvents(req.organizationId!, { boardId, limit });
   res.json(events);

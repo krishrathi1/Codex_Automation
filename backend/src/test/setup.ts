@@ -2,6 +2,29 @@ import { prisma } from '../lib/prisma.js';
 import { afterAll, beforeAll } from 'vitest';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
+import { chmodSync, writeFileSync } from 'fs';
+import path from 'path';
+
+/**
+ * Write a cross-platform fake `claude` CLI for tests. On POSIX it's a chmod +x
+ * shebang script; on Windows it's a `.cmd` wrapper that invokes node on the JS
+ * body (Windows cmd.exe cannot execute an extension-less shebang file).
+ * Pass the JS body WITHOUT the shebang line. Returns the command path to set as
+ * CLAUDE_COMMAND.
+ */
+export function writeFakeClaudeCli(dir: string, scriptBody: string): string {
+  if (process.platform === 'win32') {
+    const implPath = path.join(dir, 'claude-impl.cjs');
+    writeFileSync(implPath, scriptBody);
+    const cmdPath = path.join(dir, 'claude.cmd');
+    writeFileSync(cmdPath, `@echo off\r\nnode "%~dp0claude-impl.cjs" %*\r\n`);
+    return cmdPath;
+  }
+  const shPath = path.join(dir, 'claude');
+  writeFileSync(shPath, `#!/usr/bin/env node\n${scriptBody}`);
+  chmodSync(shPath, 0o755);
+  return shPath;
+}
 
 beforeAll(async () => {
   // Verify DB connection

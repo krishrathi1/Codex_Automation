@@ -23,7 +23,7 @@ function shouldSkipEmailDelivery() {
 }
 
 export async function sendVerificationEmail(email: string, token: string): Promise<void> {
-  const verifyUrl = `${APP_URL}/verify-email?token=${token}`;
+  const verifyUrl = `${APP_URL}/verify-email?token=${encodeURIComponent(token)}`;
 
   if (shouldSkipEmailDelivery()) {
     logger.warn({ email, verifyUrl }, 'SMTP not configured; skipping verification email in development');

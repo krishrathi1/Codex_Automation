@@ -464,7 +464,7 @@ export function Communications() {
   }, [selectedNodeId, graphData.nodes]);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-[calc(100vh-2rem)]">
       <Header title="Communications" subtitle="Inter-agent message threads and communication topology" />
 
       {loading ? (
@@ -554,17 +554,19 @@ export function Communications() {
               </div>
             </div>
 
-            <div className="flex-1 rounded-xl border border-white/5 bg-surface-850 p-4 flex flex-col">
+            <div className="flex-1 min-h-0 rounded-xl border border-white/5 bg-surface-850 p-4 flex flex-col">
               {graphData.nodes.length === 0 ? (
                 <div className="flex-1 flex items-center justify-center text-sm text-gray-600">
                   No communication data yet
                 </div>
               ) : (
-                <CommGraph
-                  data={graphData}
-                  selectedNodeId={selectedNodeId}
-                  onSelectNode={setSelectedNodeId}
-                />
+                <div className="flex-1 min-h-0">
+                  <CommGraph
+                    data={graphData}
+                    selectedNodeId={selectedNodeId}
+                    onSelectNode={setSelectedNodeId}
+                  />
+                </div>
               )}
 
               {/* Legend */}

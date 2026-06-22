@@ -550,7 +550,7 @@ export async function dispatchBoardTaskToAgents(
     return prisma.message.create({
       data: {
         threadId: thread.id,
-        senderId: isCoordinator && agents.length > 1 ? agents.find(item => item.id !== coordinator.id)!.id : coordinator.id,
+        senderId: coordinator.id,
         receiverId: agent.id,
         content: [
           `Assigned query: ${query}`,

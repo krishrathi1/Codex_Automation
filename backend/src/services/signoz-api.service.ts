@@ -37,11 +37,21 @@ function baseUrl(cfg: SigNozConfig) {
   const raw = cfg.endpoint.trim();
   // Be forgiving: users often paste a full URL with a path/query (e.g. a
   // dashboard or password-reset link). The query API lives at the origin.
+  let parsed: URL;
   try {
-    return new URL(raw).origin;
+    parsed = new URL(raw);
   } catch {
-    return raw.replace(/\/+$/, '');
+    // Try with https:// prefix for bare hostnames
+    try {
+      parsed = new URL(`https://${raw}`);
+    } catch {
+      throw new Error(`Invalid SigNoz endpoint: "${raw}". Use a valid URL like https://<tenant>.signoz.cloud`);
+    }
   }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Invalid SigNoz endpoint protocol: "${parsed.protocol}". Use http:// or https://`);
+  }
+  return parsed.origin;
 }
 
 function headers(cfg: SigNozConfig): Record<string, string> {
@@ -170,11 +180,18 @@ export async function queryLogs(cfg: SigNozConfig, opts: QueryLogsOptions = {}):
 
   let res: Response;
   try {
-    res = await fetch(`${baseUrl(cfg)}/api/v5/query_range`, {
-      method: 'POST',
-      headers: headers(cfg),
-      body: JSON.stringify(requestBody),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    try {
+      res = await fetch(`${baseUrl(cfg)}/api/v5/query_range`, {
+        method: 'POST',
+        headers: headers(cfg),
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
   } catch (err) {
     logger.warn({ err }, '[signoz] query_range request failed');
     return [];
@@ -192,17 +209,25 @@ export async function queryLogs(cfg: SigNozConfig, opts: QueryLogsOptions = {}):
 export async function checkSigNozConnection(cfg: SigNozConfig): Promise<{ ok: boolean; detail: string }> {
   if (!isSigNozConfigured(cfg)) return { ok: false, detail: 'Endpoint and API key are required.' };
   try {
-    const res = await fetch(`${baseUrl(cfg)}/api/v5/query_range`, {
-      method: 'POST',
-      headers: headers(cfg),
-      body: JSON.stringify({
-        start: Date.now() - 5 * 60 * 1000,
-        end: Date.now(),
-        requestType: 'raw',
-        variables: {},
-        compositeQuery: { queries: [{ type: 'builder_query', spec: { name: 'A', signal: 'logs', offset: 0, limit: 1 } }] },
-      }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    let res: Response;
+    try {
+      res = await fetch(`${baseUrl(cfg)}/api/v5/query_range`, {
+        method: 'POST',
+        headers: headers(cfg),
+        body: JSON.stringify({
+          start: Date.now() - 5 * 60 * 1000,
+          end: Date.now(),
+          requestType: 'raw',
+          variables: {},
+          compositeQuery: { queries: [{ type: 'builder_query', spec: { name: 'A', signal: 'logs', offset: 0, limit: 1 } }] },
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
     const contentType = res.headers.get('content-type') || '';
     if (res.ok && contentType.includes('application/json')) {
       return { ok: true, detail: 'Connected to SigNoz.' };

@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
 import { api } from '../lib/api';
-import type { MarketplaceSkill, SkillPack, Gateway } from '../types';
+import type { MarketplaceSkill, SkillPack } from '../types';
 
 export function SkillsMarketplace() {
   const [skills, setSkills] = useState<MarketplaceSkill[]>([]);
   const [packs, setPacks] = useState<SkillPack[]>([]);
-  const [gateways, setGateways] = useState<Gateway[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'skills' | 'packs'>('skills');
   const [showCreate, setShowCreate] = useState(false);
@@ -17,12 +16,9 @@ export function SkillsMarketplace() {
     Promise.all([
       api.skills.marketplace(),
       api.skills.packs(),
-      api.gateways.list(),
-    ]).then(([s, p, g]) => {
+    ]).then(([s, p]) => {
       setSkills(s);
       setPacks(p);
-      setGateways(g);
-      if (g.length > 0) setSelectedGateway(g[0].id);
       setLoading(false);
     }).catch(() => setLoading(false));
   }, []);
@@ -68,11 +64,6 @@ export function SkillsMarketplace() {
           <p className="text-sm text-gray-500 mt-1">Manage and install skills for your agents</p>
         </div>
         <div className="flex items-center gap-3">
-          {gateways.length > 1 && (
-            <select value={selectedGateway} onChange={e => setSelectedGateway(e.target.value)} className="px-3 py-2 bg-surface-850 border border-white/10 rounded-lg text-sm text-white">
-              {gateways.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-            </select>
-          )}
           <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-nexus-600 hover:bg-nexus-500 text-white text-sm font-medium rounded-lg">
             Add Skill
           </button>

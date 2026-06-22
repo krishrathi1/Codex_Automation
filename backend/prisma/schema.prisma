@@ -214,6 +214,7 @@ model OrgApiKey {
   keyHash        String       @unique
   keyPrefix      String
   lastUsedAt     DateTime?
+  revokedAt      DateTime?
   expiresAt      DateTime?
   createdAt      DateTime     @default(now())
 
@@ -386,9 +387,9 @@ model Message {
   threadId   String
   thread     Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
   senderId   String
-  sender     Agent    @relation("SentMessages", fields: [senderId], references: [id])
+  sender     Agent    @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
   receiverId String
-  receiver   Agent    @relation("ReceivedMessages", fields: [receiverId], references: [id])
+  receiver   Agent    @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
   content    String   @db.Text
   metadata   Json?
   createdAt  DateTime @default(now())

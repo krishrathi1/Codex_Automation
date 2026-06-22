@@ -313,11 +313,33 @@ function resolveConfiguredExecutablePathResult(envName: string, configuredPath: 
 }
 
 function createCliEnv() {
-  const env = { ...process.env };
-  // Do not strip ANTHROPIC_API_KEY — Claude CLI needs it
-  delete env.OPENAI_API_KEY;
-  delete env.CODEX_API_KEY;
-  delete env.PLATFORM_OPENAI_API_KEY;
+  const allowedPrefixes = [
+    'ANTHROPIC_',
+    'CLAUDE_',
+    'PATH',
+    'HOME',
+    'USERPROFILE',
+    'HOMEDRIVE',
+    'HOMEPATH',
+    'TEMP',
+    'TMP',
+    'NODE_',
+    'SHELL',
+    'TERM',
+    'COLORTERM',
+    'LANG',
+    'LC_',
+    'XDG_',
+    'SSL_',
+    'SSH_AUTH_SOCK',
+  ];
+  const env: Record<string, string> = {};
+  for (const key of Object.keys(process.env)) {
+    if (allowedPrefixes.some(prefix => key.startsWith(prefix) || key === prefix)) {
+      const val = process.env[key];
+      if (val !== undefined) env[key] = val;
+    }
+  }
   return env;
 }
 

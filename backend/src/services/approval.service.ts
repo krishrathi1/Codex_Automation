@@ -211,10 +211,11 @@ export async function resolveApproval(id: string, organizationId: string, status
       if (!approval) throw new Error('Approval not found');
 
       const updated = await prisma.approval.update({
-        where: { id },
+        where: { id, status: 'PENDING' },
         data: { status, resolvedAt: new Date() },
         include: APPROVAL_INCLUDE,
       });
+      if (!updated) throw new Error('Approval already resolved');
 
       // If approved and has linked tasks, handle COMPLETE_TASK action
       if (status === 'APPROVED' && updated.actionType === 'COMPLETE_TASK') {

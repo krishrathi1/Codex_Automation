@@ -1,7 +1,11 @@
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import type { OrgRole } from '@prisma/client';
+
+function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
 
 export async function createInvite(organizationId: string, data: {
   invitedEmail: string;
@@ -18,7 +22,7 @@ export async function createInvite(organizationId: string, data: {
     data: {
       organizationId,
       invitedEmail: data.invitedEmail.toLowerCase().trim(),
-      token,
+      token: hashToken(token),
       role: data.role ?? 'MEMBER',
       allBoardsRead: data.allBoardsRead ?? false,
       allBoardsWrite: data.allBoardsWrite ?? false,
@@ -36,7 +40,7 @@ export async function createInvite(organizationId: string, data: {
   });
 
   logger.info({ inviteId: invite.id, email: data.invitedEmail, orgId: organizationId }, 'Invite created');
-  return invite;
+  return { ...invite, token };
 }
 
 export async function listInvites(organizationId: string) {
@@ -56,7 +60,7 @@ export async function revokeInvite(inviteId: string, organizationId: string) {
 
 export async function acceptInvite(token: string, userId: string) {
   const invite = await prisma.orgInvite.findUnique({
-    where: { token },
+    where: { token: hashToken(token) },
     include: { boardAccess: true },
   });
 

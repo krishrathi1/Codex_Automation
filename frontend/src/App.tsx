@@ -20,7 +20,6 @@ import { CheckEmail } from './pages/CheckEmail';
 import { VerifyEmail } from './pages/VerifyEmail';
 import { AgentCreate } from './pages/AgentCreate';
 import { Settings } from './pages/Settings';
-import { Gateways } from './pages/Gateways';
 import { Chat } from './pages/Chat';
 import { MotherChat } from './pages/MotherChat';
 import { LiveBlackboardTracePage } from './pages/LiveBlackboardTrace';
@@ -105,7 +104,6 @@ export function App() {
           <Route path="/agents/new" element={<AgentCreate />} />
           <Route path="/agents/:id/edit" element={<AgentCreate />} />
           <Route path="/agents/:id" element={<AgentProfile />} />
-          <Route path="/gateways" element={<Gateways />} />
           <Route path="/boards" element={<Boards />} />
           <Route path="/boards/:id" element={<BoardDetail />} />
           <Route path="/approvals" element={<Approvals />} />

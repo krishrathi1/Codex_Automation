@@ -59,6 +59,12 @@ export async function remoteHeartbeat(organizationId: string, data: {
         });
       }
 
+      // Prune stale entries from throttle map to prevent memory leak
+      const staleThreshold = now - REMOTE_HEARTBEAT_ACTIVITY_INTERVAL_MS * 2;
+      for (const [id, ts] of remoteHeartbeatThrottle) {
+        if (ts < staleThreshold) remoteHeartbeatThrottle.delete(id);
+      }
+
       return { agent, activity };
     } catch (err) {
       span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });

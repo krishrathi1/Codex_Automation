@@ -1,4 +1,5 @@
 import { randomBytes, createHmac } from 'crypto';
+import { timingSafeEqual } from 'crypto';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 
@@ -69,10 +70,15 @@ export async function handleInbound(boardId: string, webhookId: string, payload:
   });
   if (!webhook) throw new Error('Webhook not found or disabled');
 
-  // Validate secret if provided in header
+  // Validate secret if provided in header (constant-time comparison)
   const providedSecret = headers['x-webhook-secret'];
-  if (webhook.secret && providedSecret !== webhook.secret) {
-    throw new Error('Invalid webhook secret');
+  if (webhook.secret) {
+    if (!providedSecret) throw new Error('Webhook secret required');
+    const buf1 = Buffer.from(webhook.secret);
+    const buf2 = Buffer.from(providedSecret);
+    if (buf1.length !== buf2.length || !timingSafeEqual(buf1, buf2)) {
+      throw new Error('Invalid webhook secret');
+    }
   }
 
   const stored = await prisma.boardWebhookPayload.create({

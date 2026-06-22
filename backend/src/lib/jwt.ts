@@ -23,6 +23,7 @@ const REFRESH_EXPIRY = '7d';
 export interface TokenPayload {
   userId: string;
   email: string;
+  organizationId?: string;
 }
 
 export function signAccessToken(payload: TokenPayload): string {

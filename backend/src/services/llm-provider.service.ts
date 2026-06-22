@@ -218,12 +218,15 @@ export async function deductCredit(organizationId: string, costCents: number) {
       span.setAttribute('cost.cents', costCents);
 
       const updated = await prisma.usageCredit.update({
-        where: { organizationId },
+        where: { organizationId, balanceCents: { gte: costCents } },
         data: {
           balanceCents: { decrement: costCents },
           totalSpentCents: { increment: costCents },
         },
       });
+      if (!updated) {
+        throw Object.assign(new Error('Insufficient platform credits'), { statusCode: 402 });
+      }
 
       logger.info({ orgId: organizationId, costCents, newBalance: updated.balanceCents }, 'Credit deducted');
       return updated;

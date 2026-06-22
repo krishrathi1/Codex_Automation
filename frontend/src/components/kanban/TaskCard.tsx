@@ -24,6 +24,7 @@ export function TaskCard({ task, index, onDelete }: { task: Task; index: number;
             <button
               onClick={(e) => { e.stopPropagation(); onDelete(task.id); }}
               className="text-gray-600 hover:text-red-400 transition-colors text-xs"
+              aria-label="Delete task"
             >
               ✕
             </button>

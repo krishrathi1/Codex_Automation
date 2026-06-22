@@ -19,6 +19,7 @@ router.post('/rules', async (req, res) => {
 // PATCH /rules/:id — update rule
 router.patch('/rules/:id', async (req, res) => {
   const rule = await alertService.updateAlertRule(req.params.id, req.organizationId!, req.body);
+  if (!rule) return res.status(404).json({ error: 'Alert rule not found' });
   req.app.get('io')?.to(`org:${req.organizationId}`).emit('alert:rule:updated', rule);
   res.json(rule);
 });
@@ -28,7 +29,8 @@ router.get('/events', async (req, res) => {
   const acknowledged = req.query.acknowledged !== undefined
     ? req.query.acknowledged === 'true'
     : undefined;
-  const limit = req.query.limit ? Number(req.query.limit) : undefined;
+  const rawLimit = Number(req.query.limit);
+  const limit = !Number.isNaN(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 200) : undefined;
   const events = await alertService.getAlertEvents(req.organizationId!, { acknowledged, limit });
   res.json(events);
 });
@@ -36,6 +38,7 @@ router.get('/events', async (req, res) => {
 // POST /events/:id/acknowledge — acknowledge event
 router.post('/events/:id/acknowledge', async (req, res) => {
   const event = await alertService.acknowledgeEvent(req.params.id, req.organizationId!);
+  if (!event) return res.status(404).json({ error: 'Alert event not found' });
   req.app.get('io')?.to(`org:${req.organizationId}`).emit('alert:event:acknowledged', event);
   res.json(event);
 });

@@ -15,6 +15,10 @@ export function Signup() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setLocalError(null);
+    if (!password) {
+      setLocalError('Password is required');
+      return;
+    }
     try {
       await signup(email, password, name, orgName);
       // Redirect to check-email page with the email as state

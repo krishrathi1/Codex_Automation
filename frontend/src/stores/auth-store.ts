@@ -25,8 +25,8 @@ interface AuthState {
 
 function localAuthState(accessToken: string | null = null) {
   return {
-    user: LOCAL_AUTH_USER,
-    organization: LOCAL_AUTH_ORG,
+    user: LOCAL_AUTH_USER!,
+    organization: LOCAL_AUTH_ORG!,
     orgRole: 'OWNER' as OrgRole,
     accessToken,
     isAuthenticated: true,
@@ -49,8 +49,8 @@ async function fetchDevelopmentLogin() {
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
-  user: AUTH_DISABLED ? LOCAL_AUTH_USER : null,
-  organization: AUTH_DISABLED ? LOCAL_AUTH_ORG : null,
+  user: AUTH_DISABLED ? LOCAL_AUTH_USER! : null,
+  organization: AUTH_DISABLED ? LOCAL_AUTH_ORG! : null,
   orgRole: AUTH_DISABLED ? 'OWNER' : null,
   accessToken: null,
   isAuthenticated: AUTH_DISABLED,

@@ -21,12 +21,25 @@ const BLOCKED_HOSTNAMES = [
   'metadata.google.internal',       // GCP metadata
   'metadata.google',
   'instance-data',                  // Generic cloud metadata
+  '169.254.169.254',                // AWS/GCP/Azure metadata IP
 ];
+
+function extractMappedIpv4(hostname: string): string | null {
+  // IPv6-mapped IPv4: ::ffff:x.x.x.x or ::ffff:0:x.x.x.x
+  const match = /^::ffff:(?:0:)?(\d+\.\d+\.\d+\.\d+)$/i.exec(hostname);
+  return match ? match[1] : null;
+}
 
 function isPrivateIpOrHostname(hostname: string): boolean {
   // Check blocked hostnames
   const lowerHost = hostname.toLowerCase();
-  if (BLOCKED_HOSTNAMES.some(b => lowerHost === b || lowerHost.endsWith('.' + b))) {
+  if (BLOCKED_HOSTNAMES.some(b => lowerHost === b || lowerHost.endsWith('.' + b) || lowerHost.endsWith('.internal') || lowerHost.endsWith('.compute.internal'))) {
+    return true;
+  }
+
+  // Check for IPv6-mapped IPv4 (bypasses bare IPv4 checks)
+  const mappedIpv4 = extractMappedIpv4(hostname);
+  if (mappedIpv4 && PRIVATE_RANGES.some(re => re.test(mappedIpv4))) {
     return true;
   }
 

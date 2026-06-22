@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, rmSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { prisma } from '../lib/prisma.js';
-import { cleanupTestData, createTestUser } from './setup.js';
+import { cleanupTestData, createTestUser, writeFakeClaudeCli } from './setup.js';
 import { processNextAgentRunJobForTest } from '../services/agent-run-queue.service.js';
 import { buildMotherChatContext } from '../services/mother-chat.service.js';
 import { ingestProductionErrorEvent } from '../services/production-error-pipeline.service.js';
@@ -21,9 +21,7 @@ describe('production error pipeline service', () => {
     orgId = setup.organization.id;
 
     tempDir = mkdtempSync(path.join(os.tmpdir(), 'nexus-fake-claude-pipeline-'));
-    const fakeClaude = path.join(tempDir, 'claude');
-    writeFileSync(fakeClaude, `#!/usr/bin/env node
-const args = process.argv.slice(2);
+    const fakeClaude = writeFakeClaudeCli(tempDir, `const args = process.argv.slice(2);
 
 if (args.includes('--version')) {
   console.log('claude 1.0.0-test');
@@ -66,7 +64,6 @@ if (args.includes('--output-format') && args.includes('stream-json')) {
   process.exit(2);
 }
 `);
-    chmodSync(fakeClaude, 0o755);
 
     process.env.CLAUDE_COMMAND = fakeClaude;
     delete process.env.CLAUDE_CLI_PATH;

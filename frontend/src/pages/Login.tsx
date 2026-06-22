@@ -18,15 +18,18 @@ export function Login() {
     setLocalError(null);
     setEmailNotVerified(false);
     setResendStatus(null);
+    if (!password) {
+      setLocalError('Password is required');
+      return;
+    }
     try {
       await login(email, password);
       navigate('/dashboard', { replace: true });
     } catch (err: any) {
       if (err.message === 'Email not verified') {
         setEmailNotVerified(true);
-      } else {
-        setLocalError(err.message);
       }
+      setLocalError('Invalid email or password');
     }
   };
 

@@ -227,30 +227,32 @@ export async function postBlackboardEvent(input: {
   metadata?: JsonRecord;
   io?: SocketIOServer;
 }) {
-  if (input.runJobId) {
-    const existing = await prisma.blackboardEvent.findFirst({
-      where: {
+  const event = await prisma.$transaction(async (tx) => {
+    if (input.runJobId) {
+      const existing = await tx.blackboardEvent.findFirst({
+        where: {
+          conversationId: input.conversationId,
+          runJobId: input.runJobId,
+          type: input.type,
+        },
+      });
+      if (existing) return existing as BlackboardEvent;
+    }
+
+    return tx.blackboardEvent.create({
+      data: {
+        organizationId: input.organizationId,
+        boardId: input.boardId,
         conversationId: input.conversationId,
-        runJobId: input.runJobId,
+        senderAgentId: input.senderAgentId ?? null,
+        receiverAgentId: input.receiverAgentId ?? null,
+        runJobId: input.runJobId ?? null,
+        taskId: input.taskId ?? null,
         type: input.type,
+        content: input.content,
+        metadata: input.metadata as any,
       },
     });
-    if (existing) return existing as BlackboardEvent;
-  }
-
-  const event = await prisma.blackboardEvent.create({
-    data: {
-      organizationId: input.organizationId,
-      boardId: input.boardId,
-      conversationId: input.conversationId,
-      senderAgentId: input.senderAgentId ?? null,
-      receiverAgentId: input.receiverAgentId ?? null,
-      runJobId: input.runJobId ?? null,
-      taskId: input.taskId ?? null,
-      type: input.type,
-      content: input.content,
-      metadata: input.metadata as any,
-    },
   });
 
   input.io?.to(`org:${input.organizationId}`).emit('blackboard:event', {

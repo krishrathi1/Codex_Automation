@@ -58,13 +58,15 @@ export async function assignTags(taskId: string, organizationId: string, tagIds:
   const tags = await prisma.tag.findMany({ where: { id: { in: tagIds }, organizationId } });
   if (tags.length !== tagIds.length) throw new Error('Some tags not found');
 
-  // Replace all assignments
-  await prisma.$transaction([
-    prisma.tagAssignment.deleteMany({ where: { taskId } }),
-    ...tagIds.map(tagId =>
-      prisma.tagAssignment.create({ data: { taskId, tagId } })
-    ),
-  ]);
+  // Replace all assignments atomically
+  await prisma.$transaction(async (tx) => {
+    await tx.tagAssignment.deleteMany({ where: { taskId } });
+    if (tagIds.length > 0) {
+      await tx.tagAssignment.createMany({
+        data: tagIds.map(tagId => ({ taskId, tagId })),
+      });
+    }
+  });
 
   return prisma.tagAssignment.findMany({
     where: { taskId },

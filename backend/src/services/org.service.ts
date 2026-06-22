@@ -59,6 +59,7 @@ export async function inviteMember(orgId: string, email: string, role: OrgRole) 
             email,
             password: hashedPassword,
             name: email.split('@')[0],
+            emailVerified: true,
           },
         });
       }

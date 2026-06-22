@@ -8,6 +8,7 @@ export function Invitations() {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('MEMBER');
   const [sending, setSending] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
 
   useEffect(() => {
     api.invites.list().then(data => {
@@ -19,12 +20,13 @@ export function Invitations() {
   async function handleInvite() {
     if (!email.trim()) return;
     setSending(true);
+    setInviteError(null);
     try {
       const invite = await api.invites.create({ invitedEmail: email, role });
       setInvites(prev => [invite, ...prev]);
       setEmail('');
     } catch (err) {
-      alert((err as Error).message);
+      setInviteError((err as Error).message);
     } finally {
       setSending(false);
     }
@@ -53,6 +55,11 @@ export function Invitations() {
 
       <div className="bg-surface-850 border border-white/5 rounded-xl p-5">
         <h3 className="text-white font-medium mb-3">Send Invitation</h3>
+        {inviteError && (
+          <div className="mb-3 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+            {inviteError}
+          </div>
+        )}
         <div className="flex gap-3">
           <input
             value={email}
