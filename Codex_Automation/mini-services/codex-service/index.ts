@@ -19,7 +19,7 @@ const defaultWorkspaceDir = path.resolve(serviceDir, '..', '..');
 const config = {
   port: 3003,
   apiKey: process.env.API_KEY || '',
-  codexCommand: process.env.CODEX_COMMAND || 'codex',
+  codexCommand: process.env.CLAUDE_COMMAND || process.env.CODEX_COMMAND || 'claude',
   codexModel: process.env.CODEX_MODEL || undefined,
   maxPromptLength: 50_000,
   operationTimeoutMs: parseInt(process.env.OPERATION_TIMEOUT_MS || '900000', 10),
@@ -93,10 +93,12 @@ interface CodexItem {
 interface CodexJsonEvent {
   type?: string;
   thread_id?: string;
+  session_id?: string;
   item?: CodexItem;
   usage?: CodexUsage;
   error?: unknown;
-  message?: string;
+  message?: unknown;
+  is_error?: boolean;
   [key: string]: unknown;
 }
 
@@ -137,38 +139,14 @@ function resolveCodexModel(model: string | undefined): string | undefined {
 
 function buildCodexArgs(model: string | undefined, sessionId: string | undefined): string[] {
   const normalizedSessionId = normalizeSessionId(sessionId);
-  const args: string[] = ['-C', getWorkspaceCwd()];
-  const dangerouslyBypass = ['1', 'true', 'yes', 'on'].includes((process.env.CODEX_DANGEROUSLY_BYPASS || '').trim().toLowerCase());
-  const sandbox = (process.env.CODEX_SANDBOX || 'workspace-write') as CodexSandbox;
-
-  if (dangerouslyBypass) {
-    args.push('--dangerously-bypass-approvals-and-sandbox');
-  } else {
-    args.push('--sandbox', sandbox);
-  }
-
   const effectiveModel = model || config.codexModel;
+  const args: string[] = ['--output-format', 'stream-json'];
   if (effectiveModel) {
-    args.push('-m', effectiveModel);
-  }
-  args.push('exec');
-  if (normalizedSessionId) {
-    args.push('resume');
-    args.push('--all');
-  }
-  args.push('--json');
-  const ephemeral = ['1', 'true', 'yes', 'on'].includes((process.env.CODEX_EPHEMERAL || '').trim().toLowerCase());
-  if (ephemeral) {
-    args.push('--ephemeral');
-  }
-  const skipGitRepoCheck = ['1', 'true', 'yes', 'on'].includes((process.env.CODEX_SKIP_GIT_REPO_CHECK || '').trim().toLowerCase());
-  if (skipGitRepoCheck) {
-    args.push('--skip-git-repo-check');
+    args.push('--model', effectiveModel);
   }
   if (normalizedSessionId) {
-    args.push(normalizedSessionId);
+    args.push('--resume', normalizedSessionId);
   }
-  args.push('-');
   return args;
 }
 
@@ -266,71 +244,57 @@ function handleCodexEvent(
   onEvent?: (event: CodexStreamEvent) => void,
 ): void {
   switch (event.type) {
-    case 'thread.started': {
-      if (typeof event.thread_id === 'string') {
-        state.sessionId = event.thread_id;
+    case 'system': {
+      if (typeof event.session_id === 'string') {
+        state.sessionId = event.session_id;
       }
       emitActivity(onEvent, {
         type: 'system',
-        subtype: 'codex.thread.started',
-        data: { threadId: state.sessionId },
+        subtype: 'claude.system',
+        data: { sessionId: state.sessionId },
       });
       break;
     }
-    case 'item.started': {
-      const item = event.item;
-      if (item?.type === 'command_execution') {
-        emitActivity(onEvent, {
-          type: 'tool_use',
-          tool: 'shell',
-          toolUseId: item.id,
-          input: { command: stringifyCommand(item.command) },
-        });
-      } else {
+    case 'assistant': {
+      const msg = event.message as { content?: Array<{ type?: string; text?: string }> } | undefined;
+      if (msg?.content && Array.isArray(msg.content)) {
+        const text = msg.content
+          .filter(block => block.type === 'text' && block.text)
+          .map(block => block.text!)
+          .join('');
+        if (text) {
+          state.result = text;
+          onEvent?.({ type: 'text', content: text });
+        }
+      }
+      break;
+    }
+    case 'result': {
+      if (event.is_error) {
+        state.errorMessage = eventErrorMessage(event);
         emitActivity(onEvent, {
           type: 'system',
-          subtype: 'codex.item.started',
-          data: item,
+          subtype: 'claude.result.error',
+          data: event,
+        });
+      } else {
+        if (typeof event.session_id === 'string') {
+          state.sessionId = event.session_id;
+        }
+        state.usage = usageFromEvent(event.usage);
+        emitActivity(onEvent, {
+          type: 'system',
+          subtype: 'claude.result',
+          data: { sessionId: state.sessionId, usage: state.usage },
         });
       }
       break;
     }
-    case 'item.completed': {
-      const item = event.item;
-      if (item?.type === 'agent_message' && typeof item.text === 'string') {
-        state.result = item.text;
-        onEvent?.({ type: 'text', content: item.text });
-      } else if (item?.type === 'command_execution') {
-        emitActivity(onEvent, {
-          type: 'tool_result',
-          toolUseId: item.id,
-          content: item,
-          isError: item.status === 'failed',
-        });
-      } else {
-        emitActivity(onEvent, {
-          type: 'system',
-          subtype: 'codex.item.completed',
-          data: item,
-        });
-      }
-      break;
-    }
-    case 'turn.completed': {
-      state.usage = usageFromEvent(event.usage);
-      emitActivity(onEvent, {
-        type: 'system',
-        subtype: 'codex.turn.completed',
-        data: { usage: state.usage },
-      });
-      break;
-    }
-    case 'turn.failed':
     case 'error': {
       state.errorMessage = eventErrorMessage(event);
       emitActivity(onEvent, {
         type: 'system',
-        subtype: `codex.${event.type}`,
+        subtype: 'claude.error',
         data: event,
       });
       break;
@@ -406,7 +370,7 @@ async function runCodex(
     options.signal?.addEventListener('abort', handleAbort, { once: true });
 
     timeout = setTimeout(() => {
-      const message = `Operation timed out: codex exec after ${config.operationTimeoutMs}ms`;
+      const message = `Operation timed out: claude after ${config.operationTimeoutMs}ms`;
       console.error(`[codex] TIMEOUT: ${message}`);
       terminateProcessTree(child, 'timeout');
       finish(new Error(message));
@@ -444,14 +408,14 @@ async function runCodex(
     });
 
     child.on('error', (err) => {
-      finish(new Error(`Failed to start Codex command "${config.codexCommand}": ${err.message}`));
+      finish(new Error(`Failed to start Claude command "${config.codexCommand}": ${err.message}`));
     });
 
     child.on('close', (code) => {
       processLine(stdoutBuffer);
       if (code !== 0) {
         const stderr = state.stderr.trim();
-        finish(new Error(`Codex exited with code ${code}${stderr ? `: ${stderr}` : ''}`));
+        finish(new Error(`Claude exited with code ${code}${stderr ? `: ${stderr}` : ''}`));
         return;
       }
       finish();
@@ -499,7 +463,7 @@ app.post('/api/instruction', async (req, res) => {
   }
 
   if (!codexAvailable) {
-    res.status(503).json({ error: 'Codex CLI is not available. Please install and configure the Codex CLI.' });
+    res.status(503).json({ error: 'Claude CLI is not available. Please install and configure the Claude CLI.' });
     return;
   }
 
@@ -542,7 +506,7 @@ io.on('connection', (socket: Socket) => {
     if (activeRequests >= MAX_CONCURRENT_PER_SOCKET) {
       socket.emit('session_create_error', {
         clientThreadId: data.clientThreadId,
-        message: 'A Codex request is already in progress. Try again after it finishes.',
+        message: 'A Claude request is already in progress. Try again after it finishes.',
       });
       return;
     }
@@ -559,7 +523,7 @@ io.on('connection', (socket: Socket) => {
     activeRequests++;
 
     try {
-      const result = await runCodex('Initialize a new Codex session for this chat. Do not inspect files, run commands, or edit anything. Reply only: READY.', {
+      const result = await runCodex('Initialize a new Claude session for this chat. Do not inspect files, run commands, or edit anything. Reply only: READY.', {
         model: data.model,
         signal: abortController.signal,
       });
@@ -570,7 +534,7 @@ io.on('connection', (socket: Socket) => {
       } else {
         socket.emit('session_create_error', {
           clientThreadId: data.clientThreadId,
-          message: 'Codex did not return a session id.',
+          message: 'Claude did not return a session id.',
         });
       }
     } catch (err) {
@@ -583,7 +547,7 @@ io.on('connection', (socket: Socket) => {
         const errorMessage = err instanceof Error ? err.message : String(err);
         socket.emit('session_create_error', {
           clientThreadId: data.clientThreadId,
-          message: `Failed to create Codex session: ${errorMessage}`,
+          message: `Failed to create Claude session: ${errorMessage}`,
         });
       }
     } finally {
@@ -735,18 +699,18 @@ function generateMockResponse(prompt: string): string {
   const lower = prompt.toLowerCase();
 
   if (lower.includes('log') || lower.includes('search') || lower.includes('txid') || lower.includes('transaction')) {
-    return `I'll help you search for that transaction. Here's what I found:\n\n- **Transaction Status**: The search has been initiated\n- **Log Files**: Scanning PM2 logs across all instances\n- **Service**: blostem-external-Prod\n\n**Note**: This is a demo response. To enable real Codex CLI integration, please ensure the \`codex\` command is available in your environment and configure the following environment variables:\n\n\`\`\`bash\nCODEX_COMMAND=codex\nCODEX_MODEL=<your-model>\nCODEX_CWD=/path/to/workspace\n\`\`\`\n\nWould you like me to search a specific date range or instance?`;
+    return `I'll help you search for that transaction. Here's what I found:\n\n- **Transaction Status**: The search has been initiated\n- **Log Files**: Scanning PM2 logs across all instances\n- **Service**: blostem-external-Prod\n\n**Note**: This is a demo response. To enable real Claude CLI integration, please ensure the \`claude\` command is available in your environment and configure the following environment variables:\n\n\`\`\`bash\nCLAUDE_COMMAND=claude\nCLAUDE_MODEL=<your-model>\nCODEX_CWD=/path/to/workspace\n\`\`\`\n\nWould you like me to search a specific date range or instance?`;
   }
 
   if (lower.includes('error') || lower.includes('failed') || lower.includes('issue')) {
-    return `Let me analyze the error patterns for you.\n\n**Analysis Summary:**\n- Checking error logs across all PM2 instances\n- Looking for correlation with recent deployments\n- Scanning for bank API timeout patterns\n\n**Note**: This is a demo response. Connect the Codex CLI for real-time analysis.\n\n\`\`\`bash\n# Example command for real analysis:\nzgrep -l "error" /home/ubuntu/.pm2/logs/blostem-external-Prod-error-*.log\n\`\`\``;
+    return `Let me analyze the error patterns for you.\n\n**Analysis Summary:**\n- Checking error logs across all PM2 instances\n- Looking for correlation with recent deployments\n- Scanning for bank API timeout patterns\n\n**Note**: This is a demo response. Connect the Claude CLI for real-time analysis.\n\n\`\`\`bash\n# Example command for real analysis:\nzgrep -l "error" /home/ubuntu/.pm2/logs/blostem-external-Prod-error-*.log\n\`\`\``;
   }
 
   if (lower.includes('command') || lower.includes('run') || lower.includes('execute')) {
-    return `I can help execute system commands. Here's a summary of available operations:\n\n1. **Log Search** - Search PM2 logs for transaction IDs\n2. **Error Analysis** - Analyze error patterns across services\n3. **Service Status** - Check PM2 process status\n\n\`\`\`bash\n# Example: Check PM2 status\npm2 list\n\`\`\`\n\n**Note**: Enable Codex CLI for full command execution capabilities.`;
+    return `I can help execute system commands. Here's a summary of available operations:\n\n1. **Log Search** - Search PM2 logs for transaction IDs\n2. **Error Analysis** - Analyze error patterns across services\n3. **Service Status** - Check PM2 process status\n\n\`\`\`bash\n# Example: Check PM2 status\npm2 list\n\`\`\`\n\n**Note**: Enable Claude CLI for full command execution capabilities.`;
   }
 
-  return `I understand your request: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"\n\nI'm currently running in **demo mode** because the Codex CLI is not available in this environment. To enable full functionality:\n\n1. Install the Codex CLI\n2. Set the \`CODEX_COMMAND\` environment variable\n3. Configure your model and workspace directory\n\n\`\`\`bash\n# Environment configuration\nCODEX_COMMAND=codex\nCODEX_MODEL=o4-mini\nCODEX_CWD=/your/workspace\n\`\`\`\n\nOnce configured, I'll be able to:\n- Execute real shell commands\n- Search and analyze logs\n- Perform multi-step operations\n- Track session state across interactions`;
+  return `I understand your request: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"\n\nI'm currently running in **demo mode** because the Claude CLI is not available in this environment. To enable full functionality:\n\n1. Install the Claude CLI\n2. Set the \`CLAUDE_COMMAND\` environment variable\n3. Configure your model and workspace directory\n\n\`\`\`bash\n# Environment configuration\nCLAUDE_COMMAND=claude\nCLAUDE_MODEL=claude-opus-4-5\nCODEX_CWD=/your/workspace\n\`\`\`\n\nOnce configured, I'll be able to:\n- Execute real shell commands\n- Search and analyze logs\n- Perform multi-step operations\n- Track session state across interactions`;
 }
 
 // ─── Start Server ────────────────────────────────────────────────
@@ -756,11 +720,11 @@ async function start() {
   codexAvailable = await checkCodexAvailable();
 
   httpServer.listen(PORT, () => {
-    console.log(`Codex Service running on port ${PORT}`);
+    console.log(`Claude Service running on port ${PORT}`);
     console.log(`REST API:    POST /api/instruction`);
     console.log(`Socket.IO:   ws://localhost:${PORT}`);
     console.log(`Auth:        ${config.apiKey ? 'enabled (x-api-key)' : 'DISABLED'}`);
-    console.log(`Codex CLI:   ${codexAvailable ? 'AVAILABLE' : 'NOT FOUND (running in demo mode)'}`);
+    console.log(`Claude CLI:  ${codexAvailable ? 'AVAILABLE' : 'NOT FOUND (running in demo mode)'}`);
   });
 }
 
