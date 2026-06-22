@@ -16,7 +16,7 @@ import {
   type CodexRunState,
   type NexusCodexEvent,
   type NexusCodexEventType,
-} from './codex-cli.service.js';
+} from './claude-cli.service.js';
 import { advanceProductionErrorPipelineAfterJob } from './production-error-pipeline.service.js';
 import {
   LIVE_BLACKBOARD_SOURCE,
@@ -224,10 +224,11 @@ async function updateAgentCodexSession(agent: Agent, codexSessionId: string, thr
         ...objectRecord(agent.identityProfile),
         ...(threadId && { nexusChatThreadId: threadId }),
         codexCliSessionId: codexSessionId,
+        claudeCliSessionId: codexSessionId,
         activeWorkflowSessionId: codexSessionId,
-        agentRuntime: 'codex-cli',
+        agentRuntime: 'claude-cli',
       } as any,
-      gatewayAgentId: `codex:${agent.id}:${codexSessionId}`,
+      gatewayAgentId: `claude:${agent.id}:${codexSessionId}`,
     },
   });
 }
@@ -558,7 +559,7 @@ async function persistRunJobActivity(options: {
     type: eventActivityType(options.event.type),
     message: truncate(options.event.content || options.event.type, 500),
     metadata: {
-      runtime: 'codex-cli',
+      runtime: 'claude-cli',
       agentRunJobId: options.job.id,
       boardId: options.job.boardId,
       taskId: options.job.taskId,
@@ -597,7 +598,7 @@ async function createAgentRunMessage(job: AgentRunJobWithRelations, responseText
       content: responseText,
       metadata: {
         role: 'assistant',
-        runtime: 'codex-cli',
+        runtime: 'claude-cli',
         conversationKind: 'agent_agent',
         edgeSemantic: liveBlackboard || liveWorkflow || (leadAgent && leadAgent.id !== job.agentId) ? 'agent_to_agent' : 'agent_self_report',
         boardId: job.boardId,
@@ -761,7 +762,7 @@ export async function enqueueLiveBlackboardRoundJobs(input: EnqueueLiveBlackboar
     type: 'TASK_START',
     message: `Queued live blackboard round ${input.round}/${input.maxRounds} for ${input.board.name}`,
     metadata: {
-      runtime: 'codex-cli',
+      runtime: 'claude-cli',
       source: LIVE_BLACKBOARD_SOURCE,
       conversationId: input.conversationId,
       agentRunJobId: job.id,
@@ -1023,7 +1024,7 @@ async function advanceLiveAgentWorkflowAfterJob(
     type: 'TASK_START',
     message: `Queued live workflow turn ${nextStepIndex + 1}/${liveWorkflow.stages.length} for ${liveWorkflow.boardName}`,
     metadata: {
-      runtime: 'codex-cli',
+      runtime: 'claude-cli',
       source: 'live_agent_workflow',
       workflowId: liveWorkflow.workflowId,
       previousAgentId: job.agentId,
@@ -1130,7 +1131,7 @@ async function completeJob(
       agentId: job.agentId,
       inputTokens: state.usage.inputTokens,
       outputTokens: state.usage.outputTokens,
-      model: process.env.CODEX_MODEL?.trim() || 'codex-cli',
+      model: process.env.CLAUDE_MODEL?.trim() || process.env.CODEX_MODEL?.trim() || 'claude-cli',
       mode: 'BYOK',
     }).catch(err => logger.warn({ err, jobId: job.id }, 'Failed to record agent run token usage'));
   }
@@ -1140,7 +1141,7 @@ async function completeJob(
       data: {
         boardId: job.boardId,
         content: `${job.agent.displayName} completed run job ${job.id}. Summary: ${summary}`,
-        tags: ['agent-run', 'codex-cli', 'mother-chat'] as any,
+        tags: ['agent-run', 'claude-cli', 'mother-chat'] as any,
         isChat: true,
         source: 'agent_run_worker',
       },
@@ -1150,9 +1151,9 @@ async function completeJob(
   await activityService.createActivity(job.organizationId, {
     agentId: job.agentId,
     type: 'TASK_COMPLETE',
-    message: `${job.agent.displayName} completed queued Codex run`,
+    message: `${job.agent.displayName} completed queued Claude run`,
     metadata: {
-      runtime: 'codex-cli',
+      runtime: 'claude-cli',
       agentRunJobId: job.id,
       boardId: job.boardId,
       taskId: job.taskId,
@@ -1241,7 +1242,7 @@ async function failJob(
     type: 'ERROR',
     message: truncate(errorMessage, 500),
     metadata: {
-      runtime: 'codex-cli',
+      runtime: 'claude-cli',
       agentRunJobId: job.id,
       boardId: job.boardId,
       taskId: job.taskId,
@@ -1289,7 +1290,7 @@ async function processJob(job: AgentRunJobWithRelations, io?: SocketIOServer) {
 
   const authentication = await validateAuthentication();
   if (!authentication.ok) {
-    throw new Error(`Codex CLI authentication check failed. Run "codex login" locally. Details: ${authentication.details}`);
+    throw new Error(`Claude CLI authentication check failed. Run "claude login" locally. Details: ${authentication.details}`);
   }
 
   const adminAgent = await getOrCreateAdminAgent(job.organizationId);
@@ -1317,7 +1318,7 @@ async function processJob(job: AgentRunJobWithRelations, io?: SocketIOServer) {
       lastHeartbeat: new Date(),
       identityProfile: {
         ...objectRecord(job.agent.identityProfile),
-        agentRuntime: 'codex-cli',
+        agentRuntime: 'claude-cli',
         activeAgentRunJobId: job.id,
       } as any,
     },
@@ -1370,7 +1371,7 @@ async function processJob(job: AgentRunJobWithRelations, io?: SocketIOServer) {
       content: job.prompt,
       metadata: {
         role: 'user',
-        runtime: 'codex-cli',
+        runtime: 'claude-cli',
         conversationKind: 'admin_agent',
         edgeSemantic: 'admin_to_agent',
         boardId: job.boardId,
@@ -1482,9 +1483,9 @@ export async function enqueueBoardAgentRunJobs(input: EnqueueBoardAgentRunJobsIn
   await Promise.all(jobs.map(job => activityService.createActivity(input.organizationId, {
     agentId: job.agentId,
     type: 'TASK_START',
-    message: `Queued local Codex run for ${input.board.name}`,
+    message: `Queued local Claude run for ${input.board.name}`,
     metadata: {
-      runtime: 'codex-cli',
+      runtime: 'claude-cli',
       agentRunJobId: job.id,
       boardId: job.boardId,
       taskId: job.taskId,
@@ -1528,7 +1529,7 @@ export async function enqueueLiveAgentWorkflowInitialJob(input: EnqueueLiveAgent
     type: 'TASK_START',
     message: `Queued live workflow turn 1/${stages.length} for ${input.board.name}`,
     metadata: {
-      runtime: 'codex-cli',
+      runtime: 'claude-cli',
       source: 'live_agent_workflow',
       workflowId: input.workflowId,
       agentRunJobId: job.id,
