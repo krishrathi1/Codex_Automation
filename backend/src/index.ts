@@ -40,7 +40,9 @@ import boardMemoryRoutes from './routes/board-memory.js';
 import soulTemplateRoutes from './routes/soul-templates.js';
 import motherChatRoutes from './routes/mother-chat.js';
 import errorEventRoutes from './routes/error-events.js';
+import mutualFundMonitorRoutes from './routes/mutual-fund-monitor.js';
 import { connectAllGateways, setSocketIO } from './services/gateway.service.js';
+import { startMutualFundMonitor, stopMutualFundMonitor } from './services/mutual-fund-monitor.service.js';
 import { getCodexCliDiagnostics, isCodexCliRuntimeEnabled } from './services/claude-cli.service.js';
 import { ensureDevelopmentAdminUser } from './services/dev-admin.service.js';
 import { startAgentRunWorker, stopAgentRunWorker } from './services/agent-run-queue.service.js';
@@ -149,6 +151,7 @@ app.use('/api/soul-templates', requireAuth, soulTemplateRoutes);
 app.use('/api/mother-chat', requireAuth, motherChatRoutes);
 app.use('/api/error-events', requireAuth, errorEventRoutes);
 app.use('/api/v1/error-events', requireApiKey, errorEventRoutes);
+app.use('/api/mutual-fund-monitor', requireAuth, mutualFundMonitorRoutes);
 
 // Global error handler for unhandled async errors in routes
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -186,6 +189,7 @@ async function shutdown(signal: NodeJS.Signals) {
   logger.info({ signal }, 'Shutting down Nexus backend');
 
   stopAgentRunWorker();
+  stopMutualFundMonitor();
   io.close();
 
   await new Promise<void>((resolve) => {
@@ -254,6 +258,7 @@ async function start() {
     logger.info({ host: HOST, port: PORT }, 'Nexus backend running');
   });
   startAgentRunWorker(io);
+  startMutualFundMonitor(io);
 }
 
 start().catch((err) => {
