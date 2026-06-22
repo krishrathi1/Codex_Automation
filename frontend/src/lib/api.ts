@@ -288,6 +288,10 @@ export const api = {
     },
     send: (message: string, requestId?: string, boardId?: string) =>
       request<ChatResponse>('/mother-chat/message', { method: 'POST', body: JSON.stringify({ message, requestId, boardId }) }),
+    clearHistory: (boardId?: string) => {
+      const qs = boardId ? `?boardId=${encodeURIComponent(boardId)}` : '';
+      return request<{ cleared: number }>(`/mother-chat/history${qs}`, { method: 'DELETE' });
+    },
   },
   agentDesigner: {
     message: (messages: { role: 'user' | 'assistant'; content: string }[]) =>

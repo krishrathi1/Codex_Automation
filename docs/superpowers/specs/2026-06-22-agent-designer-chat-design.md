@@ -14,8 +14,11 @@ after that does the group + its agents get created.
 
 1. **Chat outcome:** the assistant *designs the agents* — it interviews the user, then
    proposes a roster of sub-agents (each with a display name, role, and persona/soul).
-2. **Finalize flow:** *review then create* — proposed agents appear as editable cards; the
-   user can tweak/remove/add, and nothing is created until they click **Create**.
+2. **Finalize flow:** *chatbot creates directly* — once the Agent Designer has gathered enough
+   detail it emits a complete proposal, and the frontend immediately creates the group + agents
+   from it (no manual Create button). The right-hand form is a **read-only preview** of what the
+   chat decided; the created board page is the confirmation. (Superseded the earlier
+   "review then create" choice at the user's request.)
 3. **Backend brain:** a new `agent-designer` endpoint backed by the existing Claude CLI
    runtime (the same one Mother Chat uses). No board is required to run it.
 
@@ -62,17 +65,16 @@ after that does the group + its agents get created.
   - **Left — Agent Designer chat:** greeting, scrollable message list, textarea + send.
     State: `chatMessages`, `chatInput`, `chatBusy`. Send → `api.agentDesigner.message(messages)`.
   - **Right — group form** (existing fields) **+ "Proposed agents" section.**
-- When a response includes a `proposal`:
-  - Auto-fill the group fields (`name`, `objective`, `description`, `boardType`, `maxAgents`)
-    *only where the user hasn't already typed something* (don't clobber manual edits).
-  - Render `proposal.agents` as **editable cards** (`displayName`, `role`, `persona`) held in
-    `proposedAgents` state. Each card: edit fields inline + remove button; plus an "Add agent" button.
-- **Create flow** (`handleSubmit` → parent `handleCreate`):
+- The right column is a **read-only preview**: group fields are mirrored from the proposal and
+  the agents render as static cards. There is no Create button.
+- When a response includes a complete `proposal` (group name + ≥1 agent), the modal calls
+  `finalizeFromProposal`, which posts a "Creating…" message in chat and invokes the parent
+  `handleCreate`. A `finalizing` guard prevents double-creation.
+- **Create flow** (parent `handleCreate`):
   1. Create the board (existing `api.boards.create`).
   2. For each proposed agent: `api.agents.create({ name, displayName, description: role, soulMd: persona, enabled: true })`
      then `api.boards.addAgent(board.id, { agentId })`. `name` = slugified unique displayName.
-  3. Navigate to the new board as today. Partial-failure: surface an error listing which
-     agents failed but keep the created board.
+  3. Navigate to the new board. Partial-failure: alert which agents failed but keep the created board.
 
 ### API client (`frontend/src/lib/api.ts`)
 

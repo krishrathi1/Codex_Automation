@@ -905,6 +905,50 @@ export async function getMotherChatHistory(
   };
 }
 
+export async function clearMotherChatHistory(
+  organizationId: string,
+  options: MotherChatContextOptions = {},
+) {
+  const boardScope = await resolveBoardScope(organizationId, options.boardId);
+  const motherAgent = await prisma.agent.findUnique({
+    where: { organizationId_name: { organizationId, name: MOTHER_CHAT_AGENT_NAME } },
+  });
+  if (!motherAgent) {
+    return { cleared: 0 };
+  }
+
+  const threadId = getMotherThreadId(motherAgent, boardScope?.id);
+  if (!threadId) {
+    return { cleared: 0 };
+  }
+
+  const { count } = await prisma.message.deleteMany({
+    where: { threadId, thread: { organizationId } },
+  });
+
+  // Reset the stored Claude session so the next message starts a fresh
+  // conversation instead of resuming the now-deleted history.
+  const profile = objectRecord(motherAgent.identityProfile);
+  let nextProfile: Record<string, unknown>;
+  if (boardScope) {
+    const sessionIdsByBoard = { ...objectRecord(profile.codexCliSessionIdsByBoard) };
+    delete sessionIdsByBoard[boardScope.id];
+    nextProfile = { ...profile, codexCliSessionIdsByBoard: sessionIdsByBoard };
+  } else {
+    nextProfile = { ...profile };
+    delete nextProfile.codexCliSessionId;
+    delete nextProfile.codexSessionId;
+    delete nextProfile.activeWorkflowSessionId;
+  }
+
+  await prisma.agent.update({
+    where: { id: motherAgent.id },
+    data: { identityProfile: nextProfile as any },
+  });
+
+  return { cleared: count };
+}
+
 export async function sendMotherChatMessage(options: MotherChatSendOptions): Promise<MotherChatRunResult> {
   if (!options.message.trim()) {
     const err = new Error('message is required') as Error & { statusCode?: number };

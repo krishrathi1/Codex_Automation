@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Bot, CheckCircle2, Clock3, FolderKanban, MessageSquare, Plus, RefreshCw, Send, Sparkles, Trash2 } from 'lucide-react';
+import { Bot, CheckCircle2, Clock3, FolderKanban, MessageSquare, Plus, RefreshCw, Send, Sparkles } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn, timeAgo } from '@/lib/utils';
-import type { AgentDesignProposalAgent, Board, BoardGroup, GithubRepositorySummary, Task, VercelProjectSummary } from '@/types';
+import type { AgentDesignProposal, AgentDesignProposalAgent, Board, BoardGroup, GithubRepositorySummary, Task, VercelProjectSummary } from '@/types';
 
 interface ProductionBoard extends Board {
   boardGroup?: { id: string; name: string } | null;
@@ -333,10 +333,15 @@ function CreateProductionGroupModal({
   onSubmit: (data: CreateProductionGroupData) => Promise<void>;
 }) {
   const [name, setName] = useState('');
+  const [nameManuallyEdited, setNameManuallyEdited] = useState(false);
   const [objective, setObjective] = useState('');
+  const [objectiveManuallyEdited, setObjectiveManuallyEdited] = useState(false);
   const [description, setDescription] = useState('');
+  const [descriptionManuallyEdited, setDescriptionManuallyEdited] = useState(false);
   const [boardType, setBoardType] = useState('continuous');
+  const [boardTypeManuallyEdited, setBoardTypeManuallyEdited] = useState(false);
   const [maxAgents, setMaxAgents] = useState(5);
+  const [maxAgentsManuallyEdited, setMaxAgentsManuallyEdited] = useState(false);
   const [boardGroupId, setBoardGroupId] = useState('');
   const [repos, setRepos] = useState<GithubRepositorySummary[]>([]);
   const [projects, setProjects] = useState<VercelProjectSummary[]>([]);
@@ -345,8 +350,6 @@ function CreateProductionGroupModal({
   const [vercelResourcesError, setVercelResourcesError] = useState<string | null>(null);
   const [githubRepoFullName, setGithubRepoFullName] = useState('');
   const [vercelProjectId, setVercelProjectId] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   // Agent Designer chat state (ephemeral — lives only while the modal is open).
   const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([
@@ -360,10 +363,11 @@ function CreateProductionGroupModal({
   const [chatBusy, setChatBusy] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [proposedAgents, setProposedAgents] = useState<AgentDesignProposalAgent[]>([]);
+  const [finalizing, setFinalizing] = useState(false);
 
   async function sendChat() {
     const text = chatInput.trim();
-    if (!text || chatBusy) return;
+    if (!text || chatBusy || finalizing) return;
     const nextMessages = [...chatMessages, { role: 'user' as const, content: text }];
     setChatMessages(nextMessages);
     setChatInput('');
@@ -372,17 +376,24 @@ function CreateProductionGroupModal({
     try {
       const res = await api.agentDesigner.message(nextMessages);
       setChatMessages(prev => [...prev, { role: 'assistant', content: res.reply }]);
-      if (res.proposal) {
-        const g = res.proposal.group ?? {};
-        // Fill form fields only where the user hasn't already entered something.
-        if (g.name && !name.trim()) setName(g.name);
-        if (g.objective && !objective.trim()) setObjective(g.objective);
-        if (g.description && !description.trim()) setDescription(g.description);
-        if (g.mode) setBoardType(g.mode);
-        if (typeof g.maxAgents === 'number' && Number.isFinite(g.maxAgents)) {
+
+      const proposal = res.proposal;
+      if (proposal) {
+        const g = proposal.group ?? {};
+        // Mirror the proposal into the form — but never overwrite a field the user edited.
+        if (g.name && !nameManuallyEdited) setName(g.name);
+        if (g.objective && !objectiveManuallyEdited) setObjective(g.objective);
+        if (g.description && !descriptionManuallyEdited) setDescription(g.description);
+        if (g.mode && !boardTypeManuallyEdited) setBoardType(g.mode);
+        if (typeof g.maxAgents === 'number' && Number.isFinite(g.maxAgents) && !maxAgentsManuallyEdited) {
           setMaxAgents(Math.min(50, Math.max(1, Math.round(g.maxAgents))));
         }
-        if (res.proposal.agents.length > 0) setProposedAgents(res.proposal.agents);
+        if (proposal.agents.length > 0) setProposedAgents(proposal.agents);
+
+        // The chatbot creates the group directly once it has a complete proposal.
+        if (g.name && proposal.agents.length > 0) {
+          await finalizeFromProposal(proposal);
+        }
       }
     } catch (err) {
       setChatError((err as Error).message);
@@ -391,16 +402,51 @@ function CreateProductionGroupModal({
     }
   }
 
-  function updateProposedAgent(index: number, patch: Partial<AgentDesignProposalAgent>) {
-    setProposedAgents(prev => prev.map((a, i) => (i === index ? { ...a, ...patch } : a)));
-  }
-
-  function removeProposedAgent(index: number) {
-    setProposedAgents(prev => prev.filter((_, i) => i !== index));
-  }
-
-  function addProposedAgent() {
-    setProposedAgents(prev => [...prev, { displayName: '', role: '', persona: '' }]);
+  async function finalizeFromProposal(proposal: AgentDesignProposal) {
+    if (finalizing) return;
+    setFinalizing(true);
+    const g = proposal.group ?? {};
+    // User-edited fields win over the Agent Designer's suggestions.
+    const resolvedName = ((nameManuallyEdited && name.trim()) ? name : (g.name ?? name)).trim();
+    const resolvedObjective = (objectiveManuallyEdited ? objective : (g.objective ?? objective)).trim();
+    const resolvedDescription = (descriptionManuallyEdited ? description : (g.description ?? description)).trim();
+    const resolvedMode = boardTypeManuallyEdited ? boardType : (g.mode ?? boardType);
+    const resolvedMaxAgents = maxAgentsManuallyEdited
+      ? maxAgents
+      : (typeof g.maxAgents === 'number' ? Math.min(50, Math.max(1, Math.round(g.maxAgents))) : maxAgents);
+    const agents = proposal.agents
+      .map(a => ({ displayName: a.displayName.trim(), role: a.role.trim(), persona: a.persona.trim() }))
+      .filter(a => a.displayName);
+    setChatMessages(prev => [
+      ...prev,
+      {
+        role: 'assistant',
+        content: `Creating "${resolvedName}" with ${agents.length} agent${agents.length === 1 ? '' : 's'} now — opening the group…`,
+      },
+    ]);
+    try {
+      await onSubmit({
+        name: resolvedName,
+        objective: resolvedObjective || undefined,
+        description: resolvedDescription || undefined,
+        boardType: resolvedMode,
+        maxAgents: resolvedMaxAgents,
+        boardGroupId: boardGroupId || undefined,
+        integrationScope: {
+          ...(githubRepoFullName && { githubRepo: repos.find(repo => repo.fullName === githubRepoFullName) }),
+          ...(vercelProjectId && { vercelProject: projects.find(project => project.id === vercelProjectId) }),
+        },
+        agents,
+      });
+      // onSubmit closes the modal and navigates to the new board on success.
+    } catch (err) {
+      setFinalizing(false);
+      setChatError((err as Error).message);
+      setChatMessages(prev => [
+        ...prev,
+        { role: 'assistant', content: `I couldn't create the group: ${(err as Error).message}. Want to try again?` },
+      ]);
+    }
   }
 
   useEffect(() => {
@@ -441,33 +487,6 @@ function CreateProductionGroupModal({
       cancelled = true;
     };
   }, []);
-
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!name.trim() || saving) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await onSubmit({
-        name: name.trim(),
-        objective: objective.trim() || undefined,
-        description: description.trim() || undefined,
-        boardType,
-        maxAgents,
-        boardGroupId: boardGroupId || undefined,
-        integrationScope: {
-          ...(githubRepoFullName && { githubRepo: repos.find(repo => repo.fullName === githubRepoFullName) }),
-          ...(vercelProjectId && { vercelProject: projects.find(project => project.id === vercelProjectId) }),
-        },
-        agents: proposedAgents
-          .map(a => ({ displayName: a.displayName.trim(), role: a.role.trim(), persona: a.persona.trim() }))
-          .filter(a => a.displayName),
-      });
-    } catch (err) {
-      setError((err as Error).message);
-      setSaving(false);
-    }
-  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm" onClick={onClose}>
@@ -545,30 +564,25 @@ function CreateProductionGroupModal({
           </div>
 
           {/* Right: group form + proposed agents */}
-          <form onSubmit={handleSubmit} className="min-h-0 space-y-4 overflow-y-auto p-6">
-            {error && (
-              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-                {error}
-              </div>
-            )}
+          <form onSubmit={event => event.preventDefault()} className="min-h-0 space-y-4 overflow-y-auto p-6">
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500">Name</label>
             <input
               value={name}
-              onChange={event => setName(event.target.value)}
-              autoFocus
+              onChange={event => { setName(event.target.value); setNameManuallyEdited(true); }}
               className="w-full rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-nexus-500"
-              placeholder="Release control room"
+              placeholder="Type a name, or let the Agent Designer choose"
             />
+            <p className="mt-1 text-[11px] text-gray-600">You can set your own name — it overrides the Agent Designer's suggestion.</p>
           </div>
 
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500">Objective</label>
             <input
               value={objective}
-              onChange={event => setObjective(event.target.value)}
+              onChange={event => { setObjective(event.target.value); setObjectiveManuallyEdited(true); }}
               className="w-full rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-nexus-500"
-              placeholder="Keep production release healthy"
+              placeholder="Set from your chat, or type your own"
             />
           </div>
 
@@ -576,9 +590,10 @@ function CreateProductionGroupModal({
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500">Description</label>
             <textarea
               value={description}
-              onChange={event => setDescription(event.target.value)}
+              onChange={event => { setDescription(event.target.value); setDescriptionManuallyEdited(true); }}
               rows={3}
               className="w-full resize-none rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-nexus-500"
+              placeholder="Set from your chat, or type your own"
             />
           </div>
 
@@ -587,7 +602,7 @@ function CreateProductionGroupModal({
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500">Mode</label>
               <select
                 value={boardType}
-                onChange={event => setBoardType(event.target.value)}
+                onChange={event => { setBoardType(event.target.value); setBoardTypeManuallyEdited(true); }}
                 className="w-full rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-nexus-500"
               >
                 <option value="continuous">Continuous</option>
@@ -600,7 +615,7 @@ function CreateProductionGroupModal({
               <input
                 type="number"
                 value={maxAgents}
-                onChange={event => setMaxAgents(Number(event.target.value) || 1)}
+                onChange={event => { setMaxAgents(Math.min(50, Math.max(1, parseInt(event.target.value) || 1))); setMaxAgentsManuallyEdited(true); }}
                 min={1}
                 max={50}
                 className="w-full rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-nexus-500"
@@ -673,73 +688,38 @@ function CreateProductionGroupModal({
           </div>
 
           <div className="rounded-lg border border-white/5 bg-surface-900 p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500">
-                Proposed agents{proposedAgents.length > 0 ? ` (${proposedAgents.length})` : ''}
-              </label>
-              <button
-                type="button"
-                onClick={addProposedAgent}
-                className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] text-gray-300 transition-colors hover:bg-white/5"
-              >
-                <Plus className="h-3 w-3" />
-                Add
-              </button>
-            </div>
+            <label className="mb-3 block text-xs font-semibold uppercase tracking-wider text-gray-500">
+              Proposed agents{proposedAgents.length > 0 ? ` (${proposedAgents.length})` : ''}
+            </label>
             {proposedAgents.length === 0 ? (
               <p className="text-xs text-gray-600">
-                Chat with the Agent Designer on the left to propose agents — they'll appear here as editable cards.
+                Chat with the Agent Designer on the left — once it has enough detail it will design these agents and
+                create the group automatically.
               </p>
             ) : (
               <div className="space-y-3">
                 {proposedAgents.map((agent, index) => (
                   <div key={index} className="rounded-lg border border-white/10 bg-surface-850 p-3">
-                    <div className="mb-2 flex items-center gap-2">
-                      <input
-                        value={agent.displayName}
-                        onChange={event => updateProposedAgent(index, { displayName: event.target.value })}
-                        placeholder="Agent name"
-                        className="flex-1 rounded-lg border border-white/10 bg-surface-900 px-2 py-1.5 text-sm font-medium text-white outline-none transition-colors focus:border-nexus-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeProposedAgent(index)}
-                        className="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-white/5 hover:text-red-300"
-                        aria-label="Remove agent"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                    <div className="flex items-center gap-2">
+                      <Bot className="h-4 w-4 shrink-0 text-nexus-400" />
+                      <span className="text-sm font-medium text-white">{agent.displayName || 'Unnamed agent'}</span>
                     </div>
-                    <input
-                      value={agent.role}
-                      onChange={event => updateProposedAgent(index, { role: event.target.value })}
-                      placeholder="Role (short label)"
-                      className="mb-2 w-full rounded-lg border border-white/10 bg-surface-900 px-2 py-1.5 text-xs text-gray-200 outline-none transition-colors focus:border-nexus-500"
-                    />
-                    <textarea
-                      value={agent.persona}
-                      onChange={event => updateProposedAgent(index, { persona: event.target.value })}
-                      placeholder="Persona / soul — who this agent is and what it does"
-                      rows={3}
-                      className="w-full resize-none rounded-lg border border-white/10 bg-surface-900 px-2 py-1.5 text-xs text-gray-300 outline-none transition-colors focus:border-nexus-500"
-                    />
+                    {agent.role && <p className="mt-1 text-xs text-nexus-300">{agent.role}</p>}
+                    {agent.persona && <p className="mt-1.5 text-xs leading-relaxed text-gray-400">{agent.persona}</p>}
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          <div className="flex justify-end gap-3 pt-2">
-            <button type="button" onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-gray-400 transition-colors hover:text-white">
+          <div className="flex items-center justify-between gap-3 pt-2">
+            <p className="text-xs text-gray-600">
+              {finalizing
+                ? 'Creating the group…'
+                : 'The Agent Designer creates this group once it has enough detail.'}
+            </p>
+            <button type="button" onClick={onClose} disabled={finalizing} className="rounded-lg px-4 py-2 text-sm text-gray-400 transition-colors hover:text-white disabled:opacity-50">
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={!name.trim() || saving}
-              className="inline-flex items-center gap-2 rounded-lg bg-nexus-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-nexus-500 disabled:opacity-50"
-            >
-              <Plus className="h-4 w-4" />
-              {saving ? 'Creating...' : proposedAgents.length > 0 ? `Create + ${proposedAgents.length} agent${proposedAgents.length > 1 ? 's' : ''}` : 'Create'}
             </button>
           </div>
         </form>

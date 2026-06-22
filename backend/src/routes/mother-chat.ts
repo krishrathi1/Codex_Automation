@@ -25,6 +25,16 @@ router.get('/history', async (req, res, next) => {
   }
 });
 
+router.delete('/history', async (req, res, next) => {
+  try {
+    const boardId = typeof req.query.boardId === 'string' ? req.query.boardId : undefined;
+    const result = await motherChatService.clearMotherChatHistory(req.organizationId!, { boardId });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/diagnostics', async (_req, res) => {
   const diagnostics = await claudeCliService.getClaudeCliDiagnostics();
   res.json(diagnostics);

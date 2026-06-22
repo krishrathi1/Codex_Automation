@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Send,
   Settings,
+  Trash2,
   Users,
   Zap,
 } from 'lucide-react';
@@ -229,6 +230,8 @@ export function MotherChat() {
   const [startingLiveBlackboard, setStartingLiveBlackboard] = useState(false);
   const [startingA2A, setStartingA2A] = useState(false);
   const [showA2AStarter, setShowA2AStarter] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const [clearingChat, setClearingChat] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamedResponseRequestsRef = useRef<Record<string, boolean>>({});
@@ -637,6 +640,22 @@ export function MotherChat() {
     }
   }
 
+  async function handleClearChat() {
+    if (clearingChat) return;
+    setClearingChat(true);
+    setError(null);
+    try {
+      await api.motherChat.clearHistory(scopedBoardId);
+      setMessages([]);
+      streamedResponseRequestsRef.current = {};
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setClearingChat(false);
+      setConfirmingClear(false);
+    }
+  }
+
   function handleKeyDown(event: React.KeyboardEvent) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -779,14 +798,48 @@ export function MotherChat() {
                 <p className="text-xs text-gray-500">{pageSubtitle}</p>
               </div>
             </div>
-            <button
-              onClick={loadInitialData}
-              disabled={loading || sending}
-              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
+            <div className="flex items-center gap-2">
+              {confirmingClear ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-400">Clear this chat?</span>
+                  <button
+                    type="button"
+                    onClick={handleClearChat}
+                    disabled={clearingChat}
+                    className="rounded-lg bg-red-500/10 px-2.5 py-2 text-xs font-medium text-red-300 transition-colors hover:bg-red-500/20 disabled:opacity-50"
+                  >
+                    {clearingChat ? 'Clearing…' : 'Confirm'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingClear(false)}
+                    disabled={clearingChat}
+                    className="rounded-lg px-2.5 py-2 text-xs font-medium text-gray-400 transition-colors hover:bg-white/5 hover:text-white disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingClear(true)}
+                  disabled={loading || sending || messages.length === 0}
+                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-gray-300 transition-colors hover:border-red-500/40 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Clear chat history"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Clear chat
+                </button>
+              )}
+              <button
+                onClick={loadInitialData}
+                disabled={loading || sending}
+                className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
           </div>
         </div>
 
