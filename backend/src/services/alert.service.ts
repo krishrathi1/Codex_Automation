@@ -2,7 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import type { Severity } from '@prisma/client';
 import type { Server as SocketIOServer } from 'socket.io';
 
-const ACCESS_PATTERN = /(access|credential|credentials|token|unauthori[sz]ed|forbidden|permission|not authorized|eacces|enoent|workspace|failed to start codex cli command|github|vercel|mcp)/i;
+const ACCESS_PATTERN = /(access|credential|credentials|token|unauthori[sz]ed|forbidden|permission|not authorized|eacces|enoent|workspace|failed to start claude cli command|github|vercel|mcp)/i;
 const APPROVAL_PATTERN = /(approval|approve|pending approval|requires an approved|sandbox approval|human[- ]in[- ]the[- ]loop)/i;
 
 function truncate(value: string, max = 240) {

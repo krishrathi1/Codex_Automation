@@ -11,7 +11,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   res.status(410).json({
-    error: 'LLM provider configuration is disabled. Nexus uses the local Codex CLI runtime and existing codex login authentication.',
+    error: 'LLM provider configuration is disabled. Nexus uses the local Claude CLI runtime and existing claude login authentication.',
   });
 });
 

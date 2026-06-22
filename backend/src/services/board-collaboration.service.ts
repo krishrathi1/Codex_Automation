@@ -63,7 +63,7 @@ function defaultAgentInputs(board: Pick<Board, 'slug'>): Required<Pick<AgentInpu
       name: `${board.slug}-backend-ops`,
       displayName: 'Backend Ops Engineer',
       role: 'Backend operations',
-      work: 'Check backend health, database state, Codex CLI runtime, sessions, and API blockers.',
+      work: 'Check backend health, database state, Claude CLI runtime, sessions, and API blockers.',
       avatar: 'B',
     },
     {
@@ -822,7 +822,7 @@ export async function startLiveBlackboardConversation(
         '',
         `Participant ${index + 1}/${agents.length}: ${agent.displayName}`,
         `Role: ${agent.collaborationRole}`,
-        'Mode: short Codex CLI turns through a shared group blackboard.',
+        'Mode: short Claude CLI turns through a shared group blackboard.',
       ].join('\n'),
       status: 'IN_PROGRESS',
       priority,
@@ -927,7 +927,7 @@ export async function startLiveBlackboardConversation(
     type: 'TASK_START',
     message: `${agent.displayName} joined live blackboard conversation in ${board.name}`,
     metadata: {
-      runtime: 'codex-cli',
+      runtime: 'claude-cli',
       source: 'live_blackboard',
       conversationId: conversation.id,
       boardId: board.id,

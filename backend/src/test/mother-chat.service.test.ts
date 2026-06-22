@@ -27,7 +27,7 @@ describe('mother-chat service', () => {
         status: 'ONLINE',
         currentTask: 'Review active tasks',
         identityProfile: {
-          agentRuntime: 'codex-cli',
+          agentRuntime: 'claude-cli',
           activeWorkflowSessionId: '0199a213-81c0-7800-8aa1-bbab2a035a53',
         },
       },
@@ -63,7 +63,7 @@ describe('mother-chat service', () => {
         agentId: agent.id,
         type: 'MESSAGE',
         status: 'RUNNING',
-        summary: 'Active Codex run',
+        summary: 'Active Claude run',
         tokensUsed: 42,
       },
     });
@@ -94,7 +94,7 @@ describe('mother-chat service', () => {
         inputTokens: 10,
         outputTokens: 5,
         totalTokens: 15,
-        model: 'codex-cli',
+        model: 'claude-cli',
         cost: 0,
       },
     });
@@ -229,7 +229,7 @@ describe('mother-chat service', () => {
     expect(contextText).not.toContain('Beta Production');
   });
 
-  it('does not reuse a shared Mother Chat Codex session across production boards', async () => {
+  it('does not reuse a shared Mother Chat Claude session across production boards', async () => {
     const alphaBoard = await prisma.board.create({
       data: {
         organizationId: orgId,
@@ -307,7 +307,7 @@ describe('mother-chat service', () => {
         {
           displayName: 'A2A Backend Ops',
           role: 'Backend operations',
-          work: 'Check backend health, database state, Codex CLI runtime, and API blockers.',
+          work: 'Check backend health, database state, Claude CLI runtime, and API blockers.',
           avatar: 'B',
           isLead: true,
         },
@@ -346,7 +346,7 @@ describe('mother-chat service', () => {
       'A2A Frontend QA',
     ]);
     expect(alphaContext.context.tasks.map(task => task.title).sort()).toEqual([
-      'Check backend health, database state, Codex CLI runtime, and API blockers.',
+      'Check backend health, database state, Claude CLI runtime, and API blockers.',
       'Test login, production group UI, scoped Mother Chat, and layout regressions.',
     ]);
     expect(alphaContext.context.messages.map(message => message.content).join('\n')).toContain('A2A Alpha launch readiness');
@@ -430,7 +430,7 @@ describe('mother-chat service', () => {
     expect(betaContext.context.messages.map(message => message.content).join('\n')).not.toContain(query);
   });
 
-  it('recovers the latest Codex session id from a persisted chat thread', async () => {
+  it('recovers the latest Claude session id from a persisted chat thread', async () => {
     const agent = await prisma.agent.create({
       data: {
         organizationId: orgId,

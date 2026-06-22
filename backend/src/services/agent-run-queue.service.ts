@@ -199,7 +199,7 @@ function liveWorkflowPrompt(options: {
       : 'You are the final agent. Close the workflow with final status, evidence, artifacts changed or verified, and remaining risk.',
     '',
     'Do not answer as all agents. Speak only as your assigned agent and only for this turn.',
-    'Use only local Nexus DB context and local Codex CLI runtime. Do not use external LLM APIs.',
+    'Use only local Nexus DB context and local Claude CLI runtime. Do not use external LLM APIs.',
   ].join('\n');
 }
 
@@ -533,7 +533,7 @@ function composeAgentRunPrompt(contextPacket: Awaited<ReturnType<typeof buildAge
 
   return [
     `You are Nexus production sub-agent "${contextPacket.agent.displayName}".`,
-    'You are being launched by the Nexus backend through the local Codex CLI only. Do not ask for OpenAI, Codex, Claude, or Anthropic API keys.',
+    'You are being launched by the Nexus backend through the local Claude CLI only. Do not ask for OpenAI or Anthropic API keys directly; the Claude CLI handles authentication.',
     'Work only within the assigned production group and task. Keep the response audit-ready.',
     'Respect the integrationAccess and board.integrationScope fields. Treat them as the allowed GitHub repository and Vercel project/site scope for this agent.',
     'If a GitHub repo, Vercel project, or Vercel MCP server is not configured in that scope, do not assume access. Report the missing connection as a blocker.',
@@ -1131,7 +1131,7 @@ async function completeJob(
       agentId: job.agentId,
       inputTokens: state.usage.inputTokens,
       outputTokens: state.usage.outputTokens,
-      model: process.env.CLAUDE_MODEL?.trim() || process.env.CODEX_MODEL?.trim() || 'claude-cli',
+      model: process.env.CLAUDE_MODEL?.trim() || 'claude-cli',
       mode: 'BYOK',
     }).catch(err => logger.warn({ err, jobId: job.id }, 'Failed to record agent run token usage'));
   }
@@ -1281,11 +1281,11 @@ async function failJob(
 
 async function processJob(job: AgentRunJobWithRelations, io?: SocketIOServer) {
   const startedAt = Date.now();
-  logger.info({ jobId: job.id, agentId: job.agentId, boardId: job.boardId }, 'Starting queued Codex agent run');
+  logger.info({ jobId: job.id, agentId: job.agentId, boardId: job.boardId }, 'Starting queued Claude agent run');
 
   const installation = await validateInstallation();
   if (!installation.ok || !installation.command) {
-    throw new Error(`Codex CLI installation check failed: ${installation.details}`);
+    throw new Error(`Claude CLI installation check failed: ${installation.details}`);
   }
 
   const authentication = await validateAuthentication();
@@ -1300,7 +1300,7 @@ async function processJob(job: AgentRunJobWithRelations, io?: SocketIOServer) {
       agentId: job.agentId,
       type: 'AGENT_RUN_JOB',
       status: 'RUNNING',
-      summary: `Queued Codex run: ${truncate(job.prompt, 120)}`,
+      summary: `Queued Claude run: ${truncate(job.prompt, 120)}`,
     },
   });
 
@@ -1415,7 +1415,7 @@ async function processJob(job: AgentRunJobWithRelations, io?: SocketIOServer) {
         nexusSessionId: session.id,
         codexSessionId: state.codexSessionId,
         event,
-      }).catch(err => logger.warn({ err, jobId: job.id }, 'Failed to persist queued Codex event'));
+      }).catch(err => logger.warn({ err, jobId: job.id }, 'Failed to persist queued Claude event'));
     },
   });
 

@@ -86,7 +86,7 @@ async function getRuntimeIdentityProfile(organizationId: string): Promise<Runtim
 
   return {
     activeWorkflowSessionId,
-    agentRuntime: typeof settings.activeAgentRuntime === 'string' ? settings.activeAgentRuntime : 'codex-cli',
+    agentRuntime: typeof settings.activeAgentRuntime === 'string' ? settings.activeAgentRuntime : 'claude-cli',
     workflowSessionPolicy:
       typeof settings.workflowSessionPolicy === 'string'
         ? settings.workflowSessionPolicy

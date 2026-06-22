@@ -223,7 +223,7 @@ async function start() {
     if (count > 0) logger.info({ count }, 'Reset stuck ONLINE agents to IDLE on startup');
   });
 
-  // Connect to all gateways on startup unless local Codex CLI is the selected runtime.
+  // Connect to all gateways on startup unless local Claude CLI is the selected runtime.
   if (isCodexCliRuntimeEnabled()) {
     const diagnostics = await getCodexCliDiagnostics();
     const logPayload = {

@@ -121,7 +121,7 @@ async function resolveAutomationBoard(organizationId: string, boardId?: string) 
       name: 'Production Error Automation',
       slug: DEFAULT_AUTOMATION_BOARD_SLUG,
       description: 'Default production group for website, Telegram, Slack, and MCP error automation.',
-      objective: 'Capture production errors, queue local Codex agents, review fixes, and prepare commit/PR audit trails.',
+      objective: 'Capture production errors, queue local Claude agents, review fixes, and prepare commit/PR audit trails.',
       boardType: 'automation',
       requireReviewBeforeDone: true,
     },
@@ -135,7 +135,7 @@ async function ensurePipelineAgent(organizationId: string, board: Board, role: P
     commit: 'Commit Agent',
   };
   const descriptionByRole = {
-    debug: 'Investigates production errors and prepares code fixes through the local Codex CLI.',
+    debug: 'Investigates production errors and prepares code fixes through the local Claude CLI.',
     review: 'Reviews debug output, validates evidence, and approves or rejects the fix path.',
     commit: 'Prepares the final commit and PR handoff after review approval.',
   };
@@ -175,7 +175,7 @@ async function ensurePipelineAgent(organizationId: string, board: Board, role: P
       name,
       displayName: `${displayNameByRole[role]} - ${board.name}`,
       description: descriptionByRole[role],
-      workspace: process.env.CLAUDE_WORKSPACE_ROOT || process.env.CODEX_WORKSPACE_ROOT || '',
+      workspace: process.env.CLAUDE_WORKSPACE_ROOT || '',
       status: 'IDLE',
       enabled: true,
       agentToAgent: true,
@@ -202,7 +202,7 @@ function composeDebugPrompt(errorEvent: ProductionErrorEvent, attempt = 0, revie
     `REWORK_ATTEMPT: ${attempt}`,
     '',
     'A production website/integration error was captured by Nexus.',
-    'Use the local workspace and local Codex CLI runtime only. Do not ask for API keys.',
+    'Use the local workspace and local Claude CLI runtime only. Do not ask for API keys.',
     'Investigate and fix the issue if the evidence is sufficient. Do not commit or push.',
     'Return an audit-ready report with files touched, commands run, confidence, and remaining risk.',
     reviewOutput ? `Previous review feedback:\n${reviewOutput}` : '',

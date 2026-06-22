@@ -99,7 +99,7 @@ describe('thread graph service', () => {
         content: 'Legacy user prompt stored as a self-loop.',
         metadata: {
           role: 'user',
-          runtime: 'codex-cli',
+          runtime: 'claude-cli',
           codexSessionId: '0199a213-81c0-7800-8aa1-bbab2a035a54',
         },
       },

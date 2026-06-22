@@ -48,7 +48,7 @@ async function resolveAdminOrganization() {
       slug: orgSlug,
       settings: {
         timezone: 'UTC',
-        activeAgentRuntime: 'codex-cli',
+        activeAgentRuntime: 'claude-cli',
         workflowSessionPolicy: 'single-session-for-agents-and-workflows',
       },
     },

@@ -6,7 +6,7 @@ const tracer = trace.getTracer('nexus-llm');
 
 // Map provider IDs to their platform env var names
 const PLATFORM_KEY_ENV: Record<string, string> = {
-  codex: 'CODEX_API_KEY',
+  claude: 'ANTHROPIC_API_KEY',
   openai: 'PLATFORM_OPENAI_API_KEY',
   google: 'PLATFORM_GOOGLE_API_KEY',
   mistral: 'PLATFORM_MISTRAL_API_KEY',

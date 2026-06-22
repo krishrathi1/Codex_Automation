@@ -395,7 +395,7 @@ You help users solve problems. You're patient, clear, and solution-oriented.
 
 async function populateMarketplaceSkills(organizationId: string) {
   const skills = [
-    { name: 'Web Search', description: 'Search the web for real-time information, documentation, and current events', category: 'research', risk: 'low', sourceUrl: 'https://github.com/openai/codex' },
+    { name: 'Web Search', description: 'Search the web for real-time information, documentation, and current events', category: 'research', risk: 'low', sourceUrl: 'https://github.com/anthropics/claude-code' },
     { name: 'GitHub Integration', description: 'Create PRs, review code, manage issues, and interact with GitHub repositories', category: 'development', risk: 'medium', sourceUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/github' },
     { name: 'Slack Messaging', description: 'Send messages, read channels, and interact with Slack workspaces', category: 'communication', risk: 'medium', sourceUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/slack' },
     { name: 'File System Access', description: 'Read, write, and manage files on the local filesystem within the agent workspace', category: 'system', risk: 'medium', sourceUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem' },

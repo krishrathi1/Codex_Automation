@@ -9,9 +9,9 @@ import { buildMotherChatContext } from '../services/mother-chat.service.js';
 import { ingestProductionErrorEvent } from '../services/production-error-pipeline.service.js';
 
 describe('production error pipeline service', () => {
-  const originalCodexCommand = process.env.CODEX_COMMAND;
-  const originalCodexCliPath = process.env.CODEX_CLI_PATH;
-  const originalOperationTimeout = process.env.CODEX_OPERATION_TIMEOUT_MS;
+  const originalClaudeCommand = process.env.CLAUDE_COMMAND;
+  const originalClaudeCliPath = process.env.CLAUDE_CLI_PATH;
+  const originalOperationTimeout = process.env.CLAUDE_OPERATION_TIMEOUT_MS;
   const originalMaxReworks = process.env.PRODUCTION_ERROR_PIPELINE_MAX_REWORKS;
   let orgId: string;
   let tempDir = '';
@@ -20,22 +20,17 @@ describe('production error pipeline service', () => {
     const setup = await createTestUser('production-error-pipeline');
     orgId = setup.organization.id;
 
-    tempDir = mkdtempSync(path.join(os.tmpdir(), 'nexus-fake-codex-pipeline-'));
-    const fakeCodex = path.join(tempDir, 'codex');
-    writeFileSync(fakeCodex, `#!/usr/bin/env node
+    tempDir = mkdtempSync(path.join(os.tmpdir(), 'nexus-fake-claude-pipeline-'));
+    const fakeClaude = path.join(tempDir, 'claude');
+    writeFileSync(fakeClaude, `#!/usr/bin/env node
 const args = process.argv.slice(2);
 
 if (args.includes('--version')) {
-  console.log('codex-cli 0.0.0-test');
+  console.log('claude 1.0.0-test');
   process.exit(0);
 }
 
-if (args[0] === 'login' && args[1] === 'status') {
-  console.log('Logged in as local test user');
-  process.exit(0);
-}
-
-if (args[0] === 'exec') {
+if (args.includes('--output-format') && args.includes('stream-json')) {
   let input = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => { input += chunk; });
@@ -50,43 +45,52 @@ if (args[0] === 'exec') {
       : role === 'commit'
         ? 'Commit handoff prepared with branch and PR summary.'
         : 'Debug fix prepared and validation command selected.';
-    console.log(JSON.stringify({ type: 'thread.started', thread_id: '0199a214-81c0-7800-8aa1-bbab2a035a53' }));
-    console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } }));
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: '0199a214-81c0-7800-8aa1-bbab2a035a53', model: 'claude-test' }));
     console.log(JSON.stringify({
-      type: 'turn.completed',
-      usage: { input_tokens: 10, cached_input_tokens: 1, output_tokens: 5, reasoning_output_tokens: 0 }
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text }],
+        usage: { input_tokens: 10, cache_read_input_tokens: 1, output_tokens: 5 }
+      }
+    }));
+    console.log(JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      session_id: '0199a214-81c0-7800-8aa1-bbab2a035a53',
+      is_error: false,
+      usage: { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 1, output_tokens: 5 }
     }));
   });
 } else {
-  console.error('Unexpected fake Codex args: ' + args.join(' '));
+  console.error('Unexpected fake Claude args: ' + args.join(' '));
   process.exit(2);
 }
 `);
-    chmodSync(fakeCodex, 0o755);
+    chmodSync(fakeClaude, 0o755);
 
-    process.env.CODEX_COMMAND = fakeCodex;
-    delete process.env.CODEX_CLI_PATH;
-    process.env.CODEX_OPERATION_TIMEOUT_MS = '5000';
+    process.env.CLAUDE_COMMAND = fakeClaude;
+    delete process.env.CLAUDE_CLI_PATH;
+    process.env.CLAUDE_OPERATION_TIMEOUT_MS = '5000';
     process.env.PRODUCTION_ERROR_PIPELINE_MAX_REWORKS = '1';
   });
 
   afterAll(async () => {
-    if (originalCodexCommand === undefined) {
-      delete process.env.CODEX_COMMAND;
+    if (originalClaudeCommand === undefined) {
+      delete process.env.CLAUDE_COMMAND;
     } else {
-      process.env.CODEX_COMMAND = originalCodexCommand;
+      process.env.CLAUDE_COMMAND = originalClaudeCommand;
     }
 
-    if (originalCodexCliPath === undefined) {
-      delete process.env.CODEX_CLI_PATH;
+    if (originalClaudeCliPath === undefined) {
+      delete process.env.CLAUDE_CLI_PATH;
     } else {
-      process.env.CODEX_CLI_PATH = originalCodexCliPath;
+      process.env.CLAUDE_CLI_PATH = originalClaudeCliPath;
     }
 
     if (originalOperationTimeout === undefined) {
-      delete process.env.CODEX_OPERATION_TIMEOUT_MS;
+      delete process.env.CLAUDE_OPERATION_TIMEOUT_MS;
     } else {
-      process.env.CODEX_OPERATION_TIMEOUT_MS = originalOperationTimeout;
+      process.env.CLAUDE_OPERATION_TIMEOUT_MS = originalOperationTimeout;
     }
 
     if (originalMaxReworks === undefined) {

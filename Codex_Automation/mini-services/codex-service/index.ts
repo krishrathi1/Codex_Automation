@@ -1,8 +1,8 @@
 /**
- * Codex Automation - Lightweight Socket.IO Service
- * 
+ * Claude Automation - Lightweight Socket.IO Service
+ *
  * This service provides Socket.IO chat functionality.
- * When the `codex` CLI is available, it will use the full Codex integration.
+ * When the `claude` CLI is available, it will use the full Claude integration.
  * Otherwise, it provides a mock mode for UI demonstration.
  */
 
@@ -19,24 +19,24 @@ const defaultWorkspaceDir = path.resolve(serviceDir, '..', '..');
 const config = {
   port: 3003,
   apiKey: process.env.API_KEY || '',
-  codexCommand: process.env.CLAUDE_COMMAND || process.env.CODEX_COMMAND || 'claude',
-  codexModel: process.env.CODEX_MODEL || undefined,
+  claudeCommand: process.env.CLAUDE_COMMAND || 'claude',
+  claudeModel: process.env.CLAUDE_MODEL || undefined,
   maxPromptLength: 50_000,
   operationTimeoutMs: parseInt(process.env.OPERATION_TIMEOUT_MS || '900000', 10),
 };
 
 function getWorkspaceCwd(): string {
-  return process.env.CODEX_CWD || defaultWorkspaceDir;
+  return process.env.CLAUDE_CWD || defaultWorkspaceDir;
 }
 
-// ─── Check if Codex CLI is available ─────────────────────────────
+// ─── Check if Claude CLI is available ────────────────────────────
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
-let codexAvailable = false;
+let claudeAvailable = false;
 
-function checkCodexAvailable(): Promise<boolean> {
+function checkClaudeAvailable(): Promise<boolean> {
   return new Promise((resolve) => {
-    const child = spawn(config.codexCommand, ['--version'], {
+    const child = spawn(config.claudeCommand, ['--version'], {
       shell: process.platform === 'win32',
       windowsHide: true,
       timeout: 5000,
@@ -59,11 +59,11 @@ interface StreamActivity {
   raw?: unknown;
 }
 
-type CodexStreamEvent =
+type ClaudeStreamEvent =
   | { type: 'text'; content: string }
   | { type: 'activity'; activity: StreamActivity };
 
-// ─── Codex Service (full integration) ────────────────────────────
+// ─── Claude Service (full integration) ───────────────────────────
 interface InstructionResult {
   result: string;
   sessionId: string | null;
@@ -74,14 +74,14 @@ interface InstructionResult {
   } | null;
 }
 
-interface CodexUsage {
+interface ClaudeUsage {
   input_tokens?: number;
   cached_input_tokens?: number;
   output_tokens?: number;
   reasoning_output_tokens?: number;
 }
 
-interface CodexItem {
+interface ClaudeItem {
   id?: string;
   type?: string;
   text?: string;
@@ -90,12 +90,12 @@ interface CodexItem {
   [key: string]: unknown;
 }
 
-interface CodexJsonEvent {
+interface ClaudeJsonEvent {
   type?: string;
   thread_id?: string;
   session_id?: string;
-  item?: CodexItem;
-  usage?: CodexUsage;
+  item?: ClaudeItem;
+  usage?: ClaudeUsage;
   error?: unknown;
   message?: unknown;
   is_error?: boolean;
@@ -111,12 +111,9 @@ interface RunState {
   stderr: string;
 }
 
-const CODEX_SANDBOXES = ['read-only', 'workspace-write', 'danger-full-access'] as const;
-type CodexSandbox = (typeof CODEX_SANDBOXES)[number];
-
 const CANCELLED_MESSAGE = 'Request cancelled by user';
 const SESSION_ID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-const UI_MODEL_ALIASES = new Set(['codex-agent', 'codex-agent-deep', 'system-operator']);
+const UI_MODEL_ALIASES = new Set(['system-operator']);
 
 function normalizeSessionId(sessionId: string | undefined): string | undefined {
   const trimmed = sessionId?.trim() || '';
@@ -131,15 +128,15 @@ function composePrompt(prompt: string): string {
   return `${systemPrompt}\n\n---\n\nUser request:\n${prompt}`;
 }
 
-function resolveCodexModel(model: string | undefined): string | undefined {
+function resolveClaudeModel(model: string | undefined): string | undefined {
   const normalizedModel = model?.trim();
   if (!normalizedModel || UI_MODEL_ALIASES.has(normalizedModel)) return undefined;
   return normalizedModel;
 }
 
-function buildCodexArgs(model: string | undefined, sessionId: string | undefined): string[] {
+function buildClaudeArgs(model: string | undefined, sessionId: string | undefined): string[] {
   const normalizedSessionId = normalizeSessionId(sessionId);
-  const effectiveModel = model || config.codexModel;
+  const effectiveModel = model || config.claudeModel;
   const args: string[] = ['--output-format', 'stream-json'];
   if (effectiveModel) {
     args.push('--model', effectiveModel);
@@ -150,7 +147,7 @@ function buildCodexArgs(model: string | undefined, sessionId: string | undefined
   return args;
 }
 
-function usageFromEvent(usage: CodexUsage | undefined): InstructionResult['usage'] {
+function usageFromEvent(usage: ClaudeUsage | undefined): InstructionResult['usage'] {
   if (!usage) return null;
   return {
     inputTokens: usage.input_tokens ?? 0,
@@ -161,16 +158,16 @@ function usageFromEvent(usage: CodexUsage | undefined): InstructionResult['usage
 
 function stringifyCommand(command: string | string[] | undefined): string {
   if (Array.isArray(command)) return command.join(' ');
-  return command || 'codex';
+  return command || 'claude';
 }
 
-function emitActivity(onEvent: ((event: CodexStreamEvent) => void) | undefined, activity: StreamActivity): void {
+function emitActivity(onEvent: ((event: ClaudeStreamEvent) => void) | undefined, activity: StreamActivity): void {
   onEvent?.({ type: 'activity', activity });
 }
 
 function terminateProcessTree(child: ChildProcessWithoutNullStreams, reason: string): void {
   if (child.killed) return;
-  console.log(`[codex] terminating process: ${reason}`);
+  console.log(`[claude] terminating process: ${reason}`);
 
   if (process.platform === 'win32' && child.pid) {
     const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
@@ -178,7 +175,7 @@ function terminateProcessTree(child: ChildProcessWithoutNullStreams, reason: str
       shell: false,
     });
     killer.on('error', (err) => {
-      console.error(`[codex] taskkill failed: ${err.message}`);
+      console.error(`[claude] taskkill failed: ${err.message}`);
       child.kill();
     });
     return;
@@ -228,7 +225,7 @@ async function streamResponseText(socket: Socket, text: string, signal?: AbortSi
   }
 }
 
-function eventErrorMessage(event: CodexJsonEvent): string {
+function eventErrorMessage(event: ClaudeJsonEvent): string {
   if (typeof event.message === 'string') return event.message;
   if (typeof event.error === 'string') return event.error;
   if (event.error && typeof event.error === 'object' && 'message' in event.error) {
@@ -238,10 +235,10 @@ function eventErrorMessage(event: CodexJsonEvent): string {
   return JSON.stringify(event.error ?? event);
 }
 
-function handleCodexEvent(
-  event: CodexJsonEvent,
+function handleClaudeEvent(
+  event: ClaudeJsonEvent,
   state: RunState,
-  onEvent?: (event: CodexStreamEvent) => void,
+  onEvent?: (event: ClaudeStreamEvent) => void,
 ): void {
   switch (event.type) {
     case 'system': {
@@ -308,9 +305,9 @@ function handleCodexEvent(
   }
 }
 
-async function runCodex(
+async function runClaude(
   prompt: string,
-  options: { model?: string; sessionId?: string; signal?: AbortSignal; onEvent?: (event: CodexStreamEvent) => void } = {},
+  options: { model?: string; sessionId?: string; signal?: AbortSignal; onEvent?: (event: ClaudeStreamEvent) => void } = {},
 ): Promise<InstructionResult> {
   if (options.signal?.aborted) {
     throw new Error(CANCELLED_MESSAGE);
@@ -318,9 +315,9 @@ async function runCodex(
 
   const startTime = Date.now();
   const normalizedSessionId = normalizeSessionId(options.sessionId);
-  const requestedModel = resolveCodexModel(options.model);
+  const requestedModel = resolveClaudeModel(options.model);
   const cwd = getWorkspaceCwd();
-  const args = buildCodexArgs(requestedModel, normalizedSessionId);
+  const args = buildClaudeArgs(requestedModel, normalizedSessionId);
   const state: RunState = {
     sessionId: normalizedSessionId || null,
     result: '',
@@ -330,7 +327,7 @@ async function runCodex(
     stderr: '',
   };
 
-  console.log(`[codex] spawning ${config.codexCommand}: model=${requestedModel || config.codexModel || 'config-default'}, sessionId=${normalizedSessionId || 'new'}, cwd=${cwd}`);
+  console.log(`[claude] spawning ${config.claudeCommand}: model=${requestedModel || config.claudeModel || 'config-default'}, sessionId=${normalizedSessionId || 'new'}, cwd=${cwd}`);
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -338,7 +335,7 @@ async function runCodex(
     let timeout: ReturnType<typeof setTimeout>;
     let handleAbort = () => {};
 
-    const child = spawn(config.codexCommand, args, {
+    const child = spawn(config.claudeCommand, args, {
       cwd,
       env: process.env,
       shell: process.platform === 'win32',
@@ -354,7 +351,7 @@ async function runCodex(
       if (state.errorMessage) { reject(new Error(state.errorMessage)); return; }
       const fallbackResult = state.rawStdout.trim();
       const elapsed = Date.now() - startTime;
-      console.log(`[codex] complete: elapsed=${elapsed}ms, sessionId=${state.sessionId || 'none'}`);
+      console.log(`[claude] complete: elapsed=${elapsed}ms, sessionId=${state.sessionId || 'none'}`);
       resolve({
         result: state.result || fallbackResult,
         sessionId: state.sessionId,
@@ -371,7 +368,7 @@ async function runCodex(
 
     timeout = setTimeout(() => {
       const message = `Operation timed out: claude after ${config.operationTimeoutMs}ms`;
-      console.error(`[codex] TIMEOUT: ${message}`);
+      console.error(`[claude] TIMEOUT: ${message}`);
       terminateProcessTree(child, 'timeout');
       finish(new Error(message));
     }, config.operationTimeoutMs);
@@ -380,11 +377,11 @@ async function runCodex(
       const trimmed = line.trim();
       if (!trimmed) return;
       try {
-        const event = JSON.parse(trimmed) as CodexJsonEvent;
-        handleCodexEvent(event, state, options.onEvent);
+        const event = JSON.parse(trimmed) as ClaudeJsonEvent;
+        handleClaudeEvent(event, state, options.onEvent);
       } catch {
         state.rawStdout += `${line}\n`;
-        console.log(`[codex:stdout] ${line}`);
+        console.log(`[claude:stdout] ${line}`);
       }
     };
 
@@ -404,11 +401,11 @@ async function runCodex(
     child.stderr.on('data', (chunk: string) => {
       state.stderr += chunk;
       const trimmed = chunk.trim();
-      if (trimmed) console.error(`[codex:stderr] ${trimmed}`);
+      if (trimmed) console.error(`[claude:stderr] ${trimmed}`);
     });
 
     child.on('error', (err) => {
-      finish(new Error(`Failed to start Claude command "${config.codexCommand}": ${err.message}`));
+      finish(new Error(`Failed to start Claude command "${config.claudeCommand}": ${err.message}`));
     });
 
     child.on('close', (code) => {
@@ -422,7 +419,7 @@ async function runCodex(
     });
 
     child.stdin.on('error', (err) => {
-      console.error(`[codex] stdin error: ${err.message}`);
+      console.error(`[claude] stdin error: ${err.message}`);
     });
     child.stdin.end(composePrompt(prompt));
   });
@@ -446,7 +443,7 @@ app.use(express.json({ limit: '100kb' }));
 
 // Health check
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', codexAvailable });
+  res.json({ status: 'ok', claudeAvailable });
 });
 
 // REST API: POST /api/instruction
@@ -462,13 +459,13 @@ app.post('/api/instruction', async (req, res) => {
     return;
   }
 
-  if (!codexAvailable) {
+  if (!claudeAvailable) {
     res.status(503).json({ error: 'Claude CLI is not available. Please install and configure the Claude CLI.' });
     return;
   }
 
   try {
-    const result = await runCodex(prompt, { model, sessionId: normalizeSessionId(sessionId) });
+    const result = await runClaude(prompt, { model, sessionId: normalizeSessionId(sessionId) });
     res.json(result);
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -511,7 +508,7 @@ io.on('connection', (socket: Socket) => {
       return;
     }
 
-    if (!codexAvailable) {
+    if (!claudeAvailable) {
       const mockSessionId = `mock-${Date.now().toString(36)}`;
       sessionId = mockSessionId;
       socket.emit('session_created', { clientThreadId: data.clientThreadId, sessionId: mockSessionId });
@@ -523,7 +520,7 @@ io.on('connection', (socket: Socket) => {
     activeRequests++;
 
     try {
-      const result = await runCodex('Initialize a new Claude session for this chat. Do not inspect files, run commands, or edit anything. Reply only: READY.', {
+      const result = await runClaude('Initialize a new Claude session for this chat. Do not inspect files, run commands, or edit anything. Reply only: READY.', {
         model: data.model,
         signal: abortController.signal,
       });
@@ -583,12 +580,12 @@ io.on('connection', (socket: Socket) => {
     activeAbortController = abortController;
     activeRequests++;
 
-    if (codexAvailable) {
-      // ─── Full Codex CLI Integration ──────────────────────────
+    if (claudeAvailable) {
+      // ─── Full Claude CLI Integration ──────────────────────────
       try {
         let responseText = '';
 
-        const onEvent = (event: CodexStreamEvent) => {
+        const onEvent = (event: ClaudeStreamEvent) => {
           if (event.type === 'text') {
             responseText += event.content;
             return;
@@ -596,7 +593,7 @@ io.on('connection', (socket: Socket) => {
           socket.emit('activity', event.activity);
         };
 
-        const result = await runCodex(prompt, {
+        const result = await runClaude(prompt, {
           model: data.model,
           sessionId: activeSessionId,
           signal: abortController.signal,
@@ -613,7 +610,7 @@ io.on('connection', (socket: Socket) => {
         if (abortController.signal.aborted) {
           socket.emit('activity', {
             type: 'system',
-            subtype: 'codex.turn.cancelled',
+            subtype: 'claude.turn.cancelled',
             data: { reason: CANCELLED_MESSAGE },
           });
           socket.emit('response_end', { sessionId, done: true, cancelled: true });
@@ -627,18 +624,16 @@ io.on('connection', (socket: Socket) => {
         activeRequests--;
       }
     } else {
-      // ─── Mock Mode (no Codex CLI) ────────────────────────────
-      // Emit a thread.started activity
+      // ─── Mock Mode (no Claude CLI) ────────────────────────────
       const mockSessionId = `mock-${Date.now().toString(36)}`;
       sessionId = mockSessionId;
 
       socket.emit('activity', {
         type: 'system',
-        subtype: 'codex.thread.started',
+        subtype: 'claude.thread.started',
         data: { threadId: mockSessionId },
       });
 
-      // Simulate a shell command execution
       try {
         await delay(500, abortController.signal);
         const toolUseId = `cmd-${Date.now()}`;
@@ -649,10 +644,8 @@ io.on('connection', (socket: Socket) => {
           input: { command: `echo "Processing: ${prompt.slice(0, 50)}..."` },
         });
 
-        // Simulate processing time
         await delay(800, abortController.signal);
 
-        // Emit tool result
         socket.emit('activity', {
           type: 'tool_result',
           toolUseId,
@@ -660,14 +653,12 @@ io.on('connection', (socket: Socket) => {
           isError: false,
         });
 
-        // Emit the response text
         const responseText = generateMockResponse(prompt);
         await streamResponseText(socket, responseText, abortController.signal);
 
-        // Emit turn completed
         socket.emit('activity', {
           type: 'system',
-          subtype: 'codex.turn.completed',
+          subtype: 'claude.turn.completed',
           data: { usage: { inputTokens: prompt.length, outputTokens: responseText.length } },
         });
 
@@ -676,7 +667,7 @@ io.on('connection', (socket: Socket) => {
         if (abortController.signal.aborted) {
           socket.emit('activity', {
             type: 'system',
-            subtype: 'codex.turn.cancelled',
+            subtype: 'claude.turn.cancelled',
             data: { reason: CANCELLED_MESSAGE },
           });
           socket.emit('response_end', { sessionId: mockSessionId, done: true, cancelled: true });
@@ -699,7 +690,7 @@ function generateMockResponse(prompt: string): string {
   const lower = prompt.toLowerCase();
 
   if (lower.includes('log') || lower.includes('search') || lower.includes('txid') || lower.includes('transaction')) {
-    return `I'll help you search for that transaction. Here's what I found:\n\n- **Transaction Status**: The search has been initiated\n- **Log Files**: Scanning PM2 logs across all instances\n- **Service**: blostem-external-Prod\n\n**Note**: This is a demo response. To enable real Claude CLI integration, please ensure the \`claude\` command is available in your environment and configure the following environment variables:\n\n\`\`\`bash\nCLAUDE_COMMAND=claude\nCLAUDE_MODEL=<your-model>\nCODEX_CWD=/path/to/workspace\n\`\`\`\n\nWould you like me to search a specific date range or instance?`;
+    return `I'll help you search for that transaction. Here's what I found:\n\n- **Transaction Status**: The search has been initiated\n- **Log Files**: Scanning PM2 logs across all instances\n- **Service**: blostem-external-Prod\n\n**Note**: This is a demo response. To enable real Claude CLI integration, please ensure the \`claude\` command is available in your environment and configure the following environment variables:\n\n\`\`\`bash\nCLAUDE_COMMAND=claude\nCLAUDE_MODEL=<your-model>\nCLAUDE_CWD=/path/to/workspace\n\`\`\`\n\nWould you like me to search a specific date range or instance?`;
   }
 
   if (lower.includes('error') || lower.includes('failed') || lower.includes('issue')) {
@@ -710,21 +701,21 @@ function generateMockResponse(prompt: string): string {
     return `I can help execute system commands. Here's a summary of available operations:\n\n1. **Log Search** - Search PM2 logs for transaction IDs\n2. **Error Analysis** - Analyze error patterns across services\n3. **Service Status** - Check PM2 process status\n\n\`\`\`bash\n# Example: Check PM2 status\npm2 list\n\`\`\`\n\n**Note**: Enable Claude CLI for full command execution capabilities.`;
   }
 
-  return `I understand your request: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"\n\nI'm currently running in **demo mode** because the Claude CLI is not available in this environment. To enable full functionality:\n\n1. Install the Claude CLI\n2. Set the \`CLAUDE_COMMAND\` environment variable\n3. Configure your model and workspace directory\n\n\`\`\`bash\n# Environment configuration\nCLAUDE_COMMAND=claude\nCLAUDE_MODEL=claude-opus-4-5\nCODEX_CWD=/your/workspace\n\`\`\`\n\nOnce configured, I'll be able to:\n- Execute real shell commands\n- Search and analyze logs\n- Perform multi-step operations\n- Track session state across interactions`;
+  return `I understand your request: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"\n\nI'm currently running in **demo mode** because the Claude CLI is not available in this environment. To enable full functionality:\n\n1. Install the Claude CLI\n2. Set the \`CLAUDE_COMMAND\` environment variable\n3. Configure your model and workspace directory\n\n\`\`\`bash\n# Environment configuration\nCLAUDE_COMMAND=claude\nCLAUDE_MODEL=claude-opus-4-5\nCLAUDE_CWD=/your/workspace\n\`\`\`\n\nOnce configured, I'll be able to:\n- Execute real shell commands\n- Search and analyze logs\n- Perform multi-step operations\n- Track session state across interactions`;
 }
 
 // ─── Start Server ────────────────────────────────────────────────
 const PORT = 3003;
 
 async function start() {
-  codexAvailable = await checkCodexAvailable();
+  claudeAvailable = await checkClaudeAvailable();
 
   httpServer.listen(PORT, () => {
     console.log(`Claude Service running on port ${PORT}`);
     console.log(`REST API:    POST /api/instruction`);
     console.log(`Socket.IO:   ws://localhost:${PORT}`);
     console.log(`Auth:        ${config.apiKey ? 'enabled (x-api-key)' : 'DISABLED'}`);
-    console.log(`Claude CLI:  ${codexAvailable ? 'AVAILABLE' : 'NOT FOUND (running in demo mode)'}`);
+    console.log(`Claude CLI:  ${claudeAvailable ? 'AVAILABLE' : 'NOT FOUND (running in demo mode)'}`);
   });
 }
 

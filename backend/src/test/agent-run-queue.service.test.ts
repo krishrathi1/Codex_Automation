@@ -10,9 +10,9 @@ import { processNextAgentRunJobForTest } from '../services/agent-run-queue.servi
 import { getLiveBlackboardJobContext } from '../services/blackboard.service.js';
 
 describe('agent run queue service', () => {
-  const originalCodexCommand = process.env.CODEX_COMMAND;
-  const originalCodexCliPath = process.env.CODEX_CLI_PATH;
-  const originalOperationTimeout = process.env.CODEX_OPERATION_TIMEOUT_MS;
+  const originalClaudeCommand = process.env.CLAUDE_COMMAND;
+  const originalClaudeCliPath = process.env.CLAUDE_CLI_PATH;
+  const originalOperationTimeout = process.env.CLAUDE_OPERATION_TIMEOUT_MS;
   let orgId: string;
   let tempDir = '';
 
@@ -20,82 +20,80 @@ describe('agent run queue service', () => {
     const setup = await createTestUser('agent-run-queue');
     orgId = setup.organization.id;
 
-    tempDir = mkdtempSync(path.join(os.tmpdir(), 'nexus-fake-codex-'));
-    const fakeCodex = path.join(tempDir, 'codex');
-    writeFileSync(fakeCodex, `#!/usr/bin/env node
+    tempDir = mkdtempSync(path.join(os.tmpdir(), 'nexus-fake-claude-'));
+    const fakeClaude = path.join(tempDir, 'claude');
+    writeFileSync(fakeClaude, `#!/usr/bin/env node
 const args = process.argv.slice(2);
 
 if (args.includes('--version')) {
-  console.log('codex-cli 0.0.0-test');
+  console.log('claude 1.0.0-test');
   process.exit(0);
 }
 
-if (args[0] === 'login' && args[1] === 'status') {
-  console.log('Logged in as local test user');
-  process.exit(0);
-}
-
-if (args[0] === 'exec') {
+if (args.includes('--output-format') && args.includes('stream-json')) {
   let input = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => { input += chunk; });
   process.stdin.on('end', () => {
-    console.log(JSON.stringify({ type: 'thread.started', thread_id: '0199a213-81c0-7800-8aa1-bbab2a035a53' }));
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: '0199a213-81c0-7800-8aa1-bbab2a035a53', model: 'claude-test' }));
     console.log(JSON.stringify({
-      type: 'item.completed',
-      item: {
-        type: 'agent_message',
-        text: 'Mock agent report: context=' + (input.includes('NEXUS CONTEXT PACKET') ? 'present' : 'missing')
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'Mock agent report: context=' + (input.includes('NEXUS CONTEXT PACKET') ? 'present' : 'missing') }],
+        usage: { input_tokens: 12, cache_read_input_tokens: 4, output_tokens: 7 }
       }
     }));
     console.log(JSON.stringify({
-      type: 'turn.completed',
-      usage: { input_tokens: 12, cached_input_tokens: 4, output_tokens: 7, reasoning_output_tokens: 1 }
+      type: 'result',
+      subtype: 'success',
+      session_id: '0199a213-81c0-7800-8aa1-bbab2a035a53',
+      is_error: false,
+      usage: { input_tokens: 12, cache_creation_input_tokens: 0, cache_read_input_tokens: 4, output_tokens: 7 }
     }));
   });
 } else {
-  console.error('Unexpected fake Codex args: ' + args.join(' '));
+  console.error('Unexpected fake Claude args: ' + args.join(' '));
   process.exit(2);
 }
 `);
-    chmodSync(fakeCodex, 0o755);
+    chmodSync(fakeClaude, 0o755);
 
-    process.env.CODEX_COMMAND = fakeCodex;
-    delete process.env.CODEX_CLI_PATH;
-    process.env.CODEX_OPERATION_TIMEOUT_MS = '5000';
+    process.env.CLAUDE_COMMAND = fakeClaude;
+    delete process.env.CLAUDE_CLI_PATH;
+    process.env.CLAUDE_OPERATION_TIMEOUT_MS = '5000';
   });
 
   afterAll(async () => {
-    if (originalCodexCommand === undefined) {
-      delete process.env.CODEX_COMMAND;
+    if (originalClaudeCommand === undefined) {
+      delete process.env.CLAUDE_COMMAND;
     } else {
-      process.env.CODEX_COMMAND = originalCodexCommand;
+      process.env.CLAUDE_COMMAND = originalClaudeCommand;
     }
 
-    if (originalCodexCliPath === undefined) {
-      delete process.env.CODEX_CLI_PATH;
+    if (originalClaudeCliPath === undefined) {
+      delete process.env.CLAUDE_CLI_PATH;
     } else {
-      process.env.CODEX_CLI_PATH = originalCodexCliPath;
+      process.env.CLAUDE_CLI_PATH = originalClaudeCliPath;
     }
 
     if (originalOperationTimeout === undefined) {
-      delete process.env.CODEX_OPERATION_TIMEOUT_MS;
+      delete process.env.CLAUDE_OPERATION_TIMEOUT_MS;
     } else {
-      process.env.CODEX_OPERATION_TIMEOUT_MS = originalOperationTimeout;
+      process.env.CLAUDE_OPERATION_TIMEOUT_MS = originalOperationTimeout;
     }
 
     await cleanupTestData(orgId);
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('processes a queued local Codex job and exposes the result to Mother Chat context', async () => {
+  it('processes a queued local Claude job and exposes the result to Mother Chat context', async () => {
     const board = await prisma.board.create({
       data: {
         organizationId: orgId,
         name: 'Worker Queue Production',
         slug: `worker-queue-production-${Date.now()}`,
         description: 'Worker queue test room',
-        objective: 'Prove queued local Codex jobs flow into Mother Chat',
+        objective: 'Prove queued local Claude jobs flow into Mother Chat',
       },
     });
 
