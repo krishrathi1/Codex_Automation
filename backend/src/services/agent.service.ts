@@ -2,7 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import type { AgentStatus } from '@prisma/client';
 import { getGatewayClient } from '../openclaw/client.js';
 import { ensureDefaultGateway } from './gateway.service.js';
-import { isCodexCliRuntimeEnabled } from './codex-cli.service.js';
+import { isCodexCliRuntimeEnabled } from './claude-cli.service.js';
 import { logger } from '../lib/logger.js';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { ADMIN_AGENT_NAME } from './system-agent.service.js';

@@ -5,7 +5,7 @@ import {
   isCodexResumeUnavailableError,
   resolveCodexCommand,
   type CodexRunState,
-} from '../services/codex-cli.service.js';
+} from '../services/claude-cli.service.js';
 
 function createState(): CodexRunState {
   return {

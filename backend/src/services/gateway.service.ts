@@ -5,7 +5,7 @@ import { encryptField, decryptField } from '../lib/crypto.js';
 import { logger } from '../lib/logger.js';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { syncPendingAgents } from './agent.service.js';
-import { isCodexCliRuntimeEnabled } from './codex-cli.service.js';
+import { isCodexCliRuntimeEnabled } from './claude-cli.service.js';
 import type { GatewayStatus } from '@prisma/client';
 import type { Server as SocketIOServer } from 'socket.io';
 

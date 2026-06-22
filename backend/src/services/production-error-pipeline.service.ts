@@ -146,7 +146,7 @@ async function ensurePipelineAgent(organizationId: string, board: Board, role: P
   });
 
   const identityProfile = {
-    agentRuntime: 'codex-cli',
+    agentRuntime: 'claude-cli',
     productionErrorPipelineRole: role,
     productionBoardId: board.id,
     workflowSessionPolicy: 'single-session-for-agents-and-workflows',
@@ -175,7 +175,7 @@ async function ensurePipelineAgent(organizationId: string, board: Board, role: P
       name,
       displayName: `${displayNameByRole[role]} - ${board.name}`,
       description: descriptionByRole[role],
-      workspace: process.env.CODEX_WORKSPACE_ROOT || '',
+      workspace: process.env.CLAUDE_WORKSPACE_ROOT || process.env.CODEX_WORKSPACE_ROOT || '',
       status: 'IDLE',
       enabled: true,
       agentToAgent: true,
@@ -414,7 +414,7 @@ export async function ingestProductionErrorEvent(
     data: {
       boardId: board.id,
       content: `Production error ${errorEvent.id} queued. Title: ${title}. Debug job: ${debugRunJob.id}.`,
-      tags: ['production-error', 'codex-cli', 'mother-chat'] as any,
+      tags: ['production-error', 'claude-cli', 'mother-chat'] as any,
       isChat: true,
       source: 'production_error_pipeline',
     },

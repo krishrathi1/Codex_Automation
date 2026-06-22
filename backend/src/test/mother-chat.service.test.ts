@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../lib/prisma.js';
 import { cleanupTestData, createTestUser } from './setup.js';
 import { buildMotherChatContext, getMotherChatHistory, MOTHER_CHAT_AGENT_NAME } from '../services/mother-chat.service.js';
-import { getThreadCodexSessionId } from '../services/codex-cli.service.js';
+import { getThreadCodexSessionId } from '../services/claude-cli.service.js';
 import { dispatchBoardTaskToAgents, startBoardAgentCollaboration } from '../services/board-collaboration.service.js';
 
 describe('mother-chat service', () => {

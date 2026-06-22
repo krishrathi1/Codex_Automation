@@ -185,13 +185,13 @@ async function getOrCreateMotherAgent(organizationId: string) {
       name: MOTHER_CHAT_AGENT_NAME,
       displayName: 'Mother Chat',
       description: 'Nexus system agent for organization-wide Codex CLI monitoring.',
-      workspace: process.env.CODEX_WORKSPACE_ROOT || '',
+      workspace: process.env.CLAUDE_WORKSPACE_ROOT || process.env.CODEX_WORKSPACE_ROOT || '',
       status: 'IDLE',
       enabled: false,
       agentToAgent: false,
       identityProfile: {
         systemRole: 'mother-chat',
-        agentRuntime: 'codex-cli',
+        agentRuntime: 'claude-cli',
       } as any,
     },
   });
@@ -225,13 +225,13 @@ async function upsertMotherThread(
           ...threadIdsByBoard,
           [boardScope.id]: thread.id,
         },
-        agentRuntime: 'codex-cli',
+        agentRuntime: 'claude-cli',
         systemRole: 'mother-chat',
       }
     : {
         ...profile,
         motherChatThreadId: thread.id,
-        agentRuntime: 'codex-cli',
+        agentRuntime: 'claude-cli',
         systemRole: 'mother-chat',
       };
 
@@ -265,7 +265,7 @@ async function updateMotherSession(
           ...sessionIdsByBoard,
           [boardScope.id]: codexSessionId,
         },
-        agentRuntime: 'codex-cli',
+        agentRuntime: 'claude-cli',
         systemRole: 'mother-chat',
       }
     : {
@@ -273,7 +273,7 @@ async function updateMotherSession(
         ...(threadId && { motherChatThreadId: threadId }),
         codexCliSessionId: codexSessionId,
         activeWorkflowSessionId: codexSessionId,
-        agentRuntime: 'codex-cli',
+        agentRuntime: 'claude-cli',
         systemRole: 'mother-chat',
       };
 
@@ -1074,7 +1074,7 @@ export async function sendMotherChatMessage(options: MotherChatSendOptions): Pro
         agentId: motherAgent.id,
         inputTokens: state.usage.inputTokens,
         outputTokens: state.usage.outputTokens,
-        model: process.env.CODEX_MODEL?.trim() || 'codex-cli',
+        model: process.env.CLAUDE_MODEL?.trim() || process.env.CODEX_MODEL?.trim() || 'claude-cli',
         mode: 'BYOK',
       }).catch(err => logger.warn({ err }, 'Failed to record Mother Chat token usage'));
     }
