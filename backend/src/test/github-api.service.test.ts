@@ -19,14 +19,14 @@ afterEach(() => {
 
 describe('getFileContent', () => {
   it('decodes base64 content and returns sha', async () => {
-    const fetchMock = vi.fn(() =>
+    const fetchMock = vi.fn((_url: string) =>
       jsonResponse({ content: Buffer.from('hello world', 'utf8').toString('base64'), encoding: 'base64', sha: 'abc123' }),
     );
     vi.stubGlobal('fetch', fetchMock);
 
     const result = await getFileContent(cfg, 'src/app.ts');
     expect(result).toEqual({ content: 'hello world', sha: 'abc123' });
-    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    const calledUrl = fetchMock.mock.calls[0]![0] as string;
     expect(calledUrl).toBe('https://api.github.com/repos/owner/repo/contents/src/app.ts?ref=main');
   });
 
