@@ -5,7 +5,7 @@ import * as agentSkillService from '../services/agent-skill.service.js';
 import * as integrationService from '../services/integration.service.js';
 import * as activityService from '../services/activity.service.js';
 import * as llmProviderService from '../services/llm-provider.service.js';
-import * as codexCliService from '../services/codex-cli.service.js';
+import * as codexCliService from '../services/claude-cli.service.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { getGatewayClient } from '../openclaw/client.js';
@@ -34,7 +34,7 @@ async function handleCodexCliChat(req: Request, res: Response, agent: PrismaAgen
       runId: result.codexSessionId,
       codexSessionId: result.codexSessionId,
       sessionId: result.nexusSessionId,
-      runtime: 'codex-cli',
+      runtime: 'claude-cli',
       usage: result.usage,
     });
   } catch (err) {
@@ -199,7 +199,7 @@ router.post('/:id/chat', async (req, res) => {
     }
 
     if (!agent.gatewayId || !agent.gatewayAgentId) {
-      return res.status(400).json({ error: 'Agent not connected to a gateway. Set AGENT_RUNTIME=codex-cli to use the local Codex CLI runtime.' });
+      return res.status(400).json({ error: 'Agent not connected to a gateway. Set AGENT_RUNTIME=claude-cli to use the local Claude CLI runtime.' });
     }
 
     const client = getGatewayClient(agent.gatewayId);
