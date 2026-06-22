@@ -12,6 +12,32 @@ export function timeAgo(date: string | null): string {
   return formatDistanceToNow(new Date(date), { addSuffix: true });
 }
 
+/**
+ * Strips common Markdown formatting markers so raw text (e.g. agent output)
+ * renders cleanly in compact, plain-text UI like the activity feed.
+ */
+export function stripMarkdown(input: string): string {
+  if (!input) return '';
+  return input
+    // fenced/inline code: drop the backticks, keep the content
+    .replace(/```[a-zA-Z0-9]*\n?/g, '')
+    .replace(/`([^`]+)`/g, '$1')
+    // images and links: keep the visible text
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    // bold / italic / strikethrough
+    .replace(/(\*\*|__)(.*?)\1/g, '$2')
+    .replace(/(\*|_)(.*?)\1/g, '$2')
+    .replace(/~~(.*?)~~/g, '$1')
+    // headings, blockquotes, and list bullets at line starts
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/^\s{0,3}[-*+]\s+/gm, '')
+    // collapse whitespace into single spaces
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export const statusColors: Record<AgentStatus, string> = {
   ONLINE: 'bg-emerald-500',
   IDLE: 'bg-amber-500',

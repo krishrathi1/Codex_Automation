@@ -128,7 +128,7 @@ async function resolveAutomationBoard(organizationId: string, boardId?: string) 
   });
 }
 
-async function ensurePipelineAgent(organizationId: string, board: Board, role: PipelineRole) {
+async function ensurePipelineAgent(organizationId: string, board: Board, role: PipelineRole, workspace: string) {
   const displayNameByRole = {
     debug: 'Debug Agent',
     review: 'Review Agent',
@@ -137,7 +137,7 @@ async function ensurePipelineAgent(organizationId: string, board: Board, role: P
   const descriptionByRole = {
     debug: 'Investigates production errors and prepares code fixes through the local Claude CLI.',
     review: 'Reviews debug output, validates evidence, and approves or rejects the fix path.',
-    commit: 'Prepares the final commit and PR handoff after review approval.',
+    commit: 'Prepares the final commit and pushes the fix after review approval.',
   };
 
   const name = `${SYSTEM_AGENT_NAMES[role]}-${board.slug}`;
@@ -152,6 +152,9 @@ async function ensurePipelineAgent(organizationId: string, board: Board, role: P
     workflowSessionPolicy: 'single-session-for-agents-and-workflows',
   };
 
+  // Agents must run inside the target repo clone, not the Nexus project root.
+  const agentWorkspace = workspace || process.env.CLAUDE_WORKSPACE_ROOT || '';
+
   if (existing) {
     return prisma.agent.update({
       where: { id: existing.id },
@@ -160,6 +163,8 @@ async function ensurePipelineAgent(organizationId: string, board: Board, role: P
         enabled: true,
         agentToAgent: true,
         isBoardLead: role === 'review',
+        // Keep the workspace current — re-point it if a workspace was provided.
+        ...(agentWorkspace && { workspace: agentWorkspace }),
         identityProfile: {
           ...objectRecord(existing.identityProfile),
           ...identityProfile,
@@ -175,7 +180,7 @@ async function ensurePipelineAgent(organizationId: string, board: Board, role: P
       name,
       displayName: `${displayNameByRole[role]} - ${board.name}`,
       description: descriptionByRole[role],
-      workspace: process.env.CLAUDE_WORKSPACE_ROOT || '',
+      workspace: agentWorkspace,
       status: 'IDLE',
       enabled: true,
       agentToAgent: true,
@@ -186,11 +191,11 @@ async function ensurePipelineAgent(organizationId: string, board: Board, role: P
   });
 }
 
-async function ensurePipelineAgents(organizationId: string, board: Board) {
+async function ensurePipelineAgents(organizationId: string, board: Board, workspace: string) {
   const [debugAgent, reviewAgent, commitAgent] = await Promise.all([
-    ensurePipelineAgent(organizationId, board, 'debug'),
-    ensurePipelineAgent(organizationId, board, 'review'),
-    ensurePipelineAgent(organizationId, board, 'commit'),
+    ensurePipelineAgent(organizationId, board, 'debug', workspace),
+    ensurePipelineAgent(organizationId, board, 'review', workspace),
+    ensurePipelineAgent(organizationId, board, 'commit', workspace),
   ]);
   return { debugAgent, reviewAgent, commitAgent };
 }
@@ -202,6 +207,7 @@ function composeDebugPrompt(errorEvent: ProductionErrorEvent, attempt = 0, revie
     `REWORK_ATTEMPT: ${attempt}`,
     '',
     'A production website/integration error was captured by Nexus.',
+    'You are running INSIDE the target repository clone (your current working directory). Edit the real files here.',
     'Use the local workspace and local Claude CLI runtime only. Do not ask for API keys.',
     'Investigate and fix the issue if the evidence is sufficient. Do not commit or push.',
     'Return an audit-ready report with files touched, commands run, confidence, and remaining risk.',
@@ -253,13 +259,20 @@ function composeReviewPrompt(errorEvent: ProductionErrorEvent, debugOutput: stri
 }
 
 function composeCommitPrompt(errorEvent: ProductionErrorEvent, reviewOutput: string) {
+  const payload = objectRecord(errorEvent.payload);
+  const commitInstructions = stringValue(payload.commitInstructions);
+
   return [
     'PIPELINE ROLE: commit',
     `PRODUCTION_ERROR_EVENT_ID: ${errorEvent.id}`,
     '',
     'The Review Agent approved this production error fix path.',
-    'Prepare the commit/PR handoff locally. Do not push to a remote unless the repository and task explicitly permit it.',
-    'Return the exact files changed, validation performed, suggested commit title, suggested branch name, and PR summary.',
+    commitInstructions
+      // The monitor supplied explicit commit + push instructions — follow them exactly.
+      ? 'Commit the approved fix and PUSH it to the remote, following the deploy instructions below exactly.'
+      : 'Prepare the commit/PR handoff locally. Do not push to a remote unless the repository and task explicitly permit it.',
+    'Return the exact files changed, validation performed, the commit title used, the branch pushed to, and the push result.',
+    commitInstructions ? `\n${commitInstructions}` : '',
     '',
     'Captured error:',
     JSON.stringify({
@@ -271,7 +284,7 @@ function composeCommitPrompt(errorEvent: ProductionErrorEvent, reviewOutput: str
     '',
     'Review Agent output:',
     reviewOutput,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 async function enqueuePipelineJob(options: {
@@ -323,7 +336,12 @@ export async function ingestProductionErrorEvent(
   }
 
   const board = await resolveAutomationBoard(organizationId, input.boardId);
-  const { debugAgent, reviewAgent, commitAgent } = await ensurePipelineAgents(organizationId, board);
+  // The repo clone the agents must edit & push from (per-error, else env defaults).
+  const workspace = stringValue(objectRecord(input.payload).workspace)
+    || process.env.MUTUAL_FUND_WORKSPACE
+    || process.env.CLAUDE_WORKSPACE_ROOT
+    || '';
+  const { debugAgent, reviewAgent, commitAgent } = await ensurePipelineAgents(organizationId, board, workspace);
   const fingerprint = fingerprintFor(input);
   const title = truncate(input.title || input.message.split(/\r?\n/)[0] || 'Production error', 180);
 

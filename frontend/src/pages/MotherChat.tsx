@@ -20,6 +20,7 @@ import {
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { getSocket } from '../lib/socket';
+import { cn } from '../lib/utils';
 import type { ChatMessage, MotherChatContext } from '../types';
 
 type MotherChatSocketEvent = {
@@ -34,11 +35,19 @@ type MotherChatSocketEvent = {
 };
 
 type StartA2AAgentDraft = {
+  agentId?: string;
   displayName: string;
   role: string;
   work: string;
   avatar: string;
   isLead?: boolean;
+};
+
+type A2ARosterAgent = {
+  id: string;
+  displayName: string;
+  status: string;
+  currentTask: string | null;
 };
 
 type StartA2APayload = {
@@ -79,59 +88,75 @@ function StatTile({ label, value, icon: Icon }: { label: string; value: string |
 function StartA2AModal({
   boardName,
   defaultGoal,
+  availableAgents,
   starting,
   onCancel,
   onSubmit,
 }: {
   boardName: string;
   defaultGoal: string;
+  availableAgents: A2ARosterAgent[];
   starting: boolean;
   onCancel: () => void;
   onSubmit: (payload: StartA2APayload) => void;
 }) {
   const [goal, setGoal] = useState(defaultGoal);
-  const [agents, setAgents] = useState<StartA2AAgentDraft[]>([
-    {
-      displayName: 'Backend Ops Engineer',
-      role: 'Backend operations',
-      work: 'Check backend health, database state, Claude CLI runtime, sessions, and API blockers.',
-      avatar: 'B',
-      isLead: true,
-    },
-    {
-      displayName: 'Frontend QA Engineer',
-      role: 'Frontend QA',
-      work: 'Test login, production group UI, scoped Mother Chat, sub-agent creation, and visible layout issues.',
-      avatar: 'Q',
-      isLead: false,
-    },
-  ]);
+  // Participation keyed by agent id; preselect the first two agents in the group.
+  const [selected, setSelected] = useState<Record<string, { work: string }>>(() => {
+    const initial: Record<string, { work: string }> = {};
+    availableAgents.slice(0, 2).forEach(agent => {
+      initial[agent.id] = { work: agent.currentTask || '' };
+    });
+    return initial;
+  });
+  const [leadId, setLeadId] = useState<string>(() => availableAgents[0]?.id ?? '');
 
-  function updateAgent(index: number, field: keyof StartA2AAgentDraft, value: string) {
-    setAgents(prev => prev.map((agent, agentIndex) => (
-      agentIndex === index ? { ...agent, [field]: value } : agent
-    )));
+  const selectedIds = Object.keys(selected);
+  const canStart = !starting && goal.trim().length > 0 && selectedIds.length >= 2 && Boolean(selected[leadId]);
+
+  // Keep the lead valid — if the lead gets unselected, fall back to the first selected agent.
+  useEffect(() => {
+    if (!selected[leadId]) {
+      const first = Object.keys(selected)[0] ?? '';
+      if (first !== leadId) setLeadId(first);
+    }
+  }, [selected, leadId]);
+
+  function toggleAgent(agent: A2ARosterAgent) {
+    setSelected(prev => {
+      const next = { ...prev };
+      if (next[agent.id]) delete next[agent.id];
+      else next[agent.id] = { work: agent.currentTask || '' };
+      return next;
+    });
+  }
+
+  function updateWork(id: string, work: string) {
+    setSelected(prev => (prev[id] ? { ...prev, [id]: { work } } : prev));
   }
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (!goal.trim() || starting) return;
-    onSubmit({
-      goal: goal.trim(),
-      agents: agents.map((agent, index) => ({
-        ...agent,
-        displayName: agent.displayName.trim(),
-        role: agent.role.trim(),
-        work: agent.work.trim(),
-        avatar: agent.avatar.trim() || String(index + 1),
-        isLead: index === 0,
-      })),
+    if (!canStart) return;
+    const ordered = [leadId, ...selectedIds.filter(id => id !== leadId)];
+    const agents: StartA2AAgentDraft[] = ordered.map((id, index) => {
+      const agent = availableAgents.find(a => a.id === id);
+      const displayName = agent?.displayName || `Agent ${index + 1}`;
+      return {
+        agentId: id,
+        displayName,
+        role: '',
+        work: selected[id]?.work.trim() || agent?.currentTask || 'Coordinate on the goal and report blockers.',
+        avatar: displayName.charAt(0).toUpperCase() || String(index + 1),
+        isLead: id === leadId,
+      };
     });
+    onSubmit({ goal: goal.trim(), agents });
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-      <form onSubmit={handleSubmit} className="w-full max-w-3xl rounded-xl border border-white/10 bg-surface-900 shadow-2xl">
+      <form onSubmit={handleSubmit} className="w-full max-w-2xl rounded-xl border border-white/10 bg-surface-900 shadow-2xl">
         <div className="border-b border-white/5 px-5 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-300">
@@ -155,62 +180,93 @@ function StartA2AModal({
             />
           </label>
 
-          <div className="grid gap-4 md:grid-cols-2">
-            {agents.map((agent, index) => (
-              <div key={index} className="rounded-lg border border-white/5 bg-surface-850 p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-white">Agent {index + 1}</h3>
-                  {index === 0 && <span className="rounded bg-nexus-500/10 px-2 py-0.5 text-[10px] font-medium text-nexus-300">Lead</span>}
-                </div>
-                <div className="space-y-3">
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-gray-500">Display name</span>
-                    <input
-                      value={agent.displayName}
-                      onChange={event => updateAgent(index, 'displayName', event.target.value)}
-                      className="w-full rounded-lg border border-white/10 bg-surface-950 px-3 py-2 text-sm text-white focus:border-nexus-500 focus:outline-none"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-gray-500">Role</span>
-                    <input
-                      value={agent.role}
-                      onChange={event => updateAgent(index, 'role', event.target.value)}
-                      className="w-full rounded-lg border border-white/10 bg-surface-950 px-3 py-2 text-sm text-white focus:border-nexus-500 focus:outline-none"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-gray-500">Assigned work</span>
-                    <textarea
-                      value={agent.work}
-                      onChange={event => updateAgent(index, 'work', event.target.value)}
-                      rows={4}
-                      className="w-full resize-none rounded-lg border border-white/10 bg-surface-950 px-3 py-2 text-sm text-white focus:border-nexus-500 focus:outline-none"
-                    />
-                  </label>
-                </div>
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Agents in this group — pick who collaborates
+              </span>
+              <span className="text-[11px] text-gray-500">{selectedIds.length} selected · pick at least 2</span>
+            </div>
+
+            {availableAgents.length === 0 ? (
+              <p className="rounded-lg border border-white/10 bg-surface-850 px-3 py-4 text-sm text-gray-400">
+                This production group has no agents yet. Add agents to the group first, then start A2A.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {availableAgents.map(agent => {
+                  const isSelected = Boolean(selected[agent.id]);
+                  const isLead = leadId === agent.id;
+                  return (
+                    <div
+                      key={agent.id}
+                      className={cn(
+                        'rounded-lg border bg-surface-850 p-3 transition-colors',
+                        isSelected ? 'border-nexus-500/40' : 'border-white/5',
+                      )}
+                    >
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleAgent(agent)}
+                          className="h-4 w-4 shrink-0 accent-nexus-500"
+                        />
+                        <span className={cn('h-2 w-2 shrink-0 rounded-full', statusClasses[agent.status] || 'bg-gray-500')} />
+                        <span className="flex-1 truncate text-sm font-medium text-white">{agent.displayName}</span>
+                        {isSelected && (
+                          <label className={cn(
+                            'flex shrink-0 items-center gap-1.5 rounded px-2 py-0.5 text-[10px] font-medium',
+                            isLead ? 'bg-nexus-500/10 text-nexus-300' : 'text-gray-500',
+                          )}>
+                            <input
+                              type="radio"
+                              name="a2a-lead"
+                              checked={isLead}
+                              onChange={() => setLeadId(agent.id)}
+                              className="h-3 w-3 accent-nexus-500"
+                            />
+                            Lead
+                          </label>
+                        )}
+                      </div>
+                      {isSelected && (
+                        <textarea
+                          value={selected[agent.id].work}
+                          onChange={event => updateWork(agent.id, event.target.value)}
+                          rows={2}
+                          placeholder="Assigned work for this agent"
+                          className="mt-2 w-full resize-none rounded-lg border border-white/10 bg-surface-950 px-3 py-2 text-sm text-white placeholder-gray-600 focus:border-nexus-500 focus:outline-none"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            ))}
+            )}
           </div>
         </div>
 
-        <div className="flex justify-end gap-3 border-t border-white/5 px-5 py-4">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={starting}
-            className="rounded-lg border border-white/10 px-4 py-2 text-sm text-gray-300 transition-colors hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={starting || !goal.trim()}
-            className="inline-flex items-center gap-2 rounded-lg bg-nexus-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-nexus-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <GitBranch className="h-4 w-4" />
-            {starting ? 'Starting...' : 'Start A2A'}
-          </button>
+        <div className="flex items-center justify-between gap-3 border-t border-white/5 px-5 py-4">
+          <span className="text-[11px] text-gray-600">The lead opens the conversation; everyone else replies to it.</span>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={starting}
+              className="rounded-lg border border-white/10 px-4 py-2 text-sm text-gray-300 transition-colors hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!canStart}
+              className="inline-flex items-center gap-2 rounded-lg bg-nexus-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-nexus-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <GitBranch className="h-4 w-4" />
+              {starting ? 'Starting...' : `Start A2A${selectedIds.length >= 2 ? ` (${selectedIds.length})` : ''}`}
+            </button>
+          </div>
         </div>
       </form>
     </div>
@@ -1076,6 +1132,12 @@ export function MotherChat() {
         <StartA2AModal
           boardName={scopedBoard?.name || 'Production Group'}
           defaultGoal={scopedBoard?.objective || `Validate ${scopedBoard?.name || 'this production group'} and report readiness.`}
+          availableAgents={(context?.agents ?? []).map(agent => ({
+            id: agent.id,
+            displayName: agent.displayName,
+            status: agent.status,
+            currentTask: agent.currentTask,
+          }))}
           starting={startingA2A}
           onCancel={() => setShowA2AStarter(false)}
           onSubmit={handleStartA2A}

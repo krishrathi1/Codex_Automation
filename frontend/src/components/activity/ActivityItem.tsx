@@ -1,5 +1,5 @@
 import type { Activity } from '../../types';
-import { activityTypeIcons, activityTypeColors, activityTypeBgColors, timeAgo } from '../../lib/utils';
+import { activityTypeIcons, activityTypeColors, activityTypeBgColors, timeAgo, stripMarkdown } from '../../lib/utils';
 
 export function ActivityItem({ activity }: { activity: Activity }) {
   return (
@@ -16,7 +16,7 @@ export function ActivityItem({ activity }: { activity: Activity }) {
             {activity.type.replace('_', ' ')}
           </span>
         </div>
-        <p className="text-sm text-gray-300">{activity.message}</p>
+        <p className="text-sm text-gray-300">{stripMarkdown(activity.message)}</p>
       </div>
 
       {/* Timestamp */}

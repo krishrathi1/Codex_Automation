@@ -1423,7 +1423,9 @@ async function processJob(job: AgentRunJobWithRelations, io?: SocketIOServer) {
 }
 
 async function pumpQueue(io?: SocketIOServer) {
-  const concurrency = readNumberEnv('AGENT_RUN_WORKER_CONCURRENCY', 2);
+  // Default 4 so a 4-stage pipeline (analysis → fix → review → commit) can run
+  // stages from multiple in-flight errors concurrently (pipeline-across-errors).
+  const concurrency = readNumberEnv('AGENT_RUN_WORKER_CONCURRENCY', 4);
   while (activeJobs < concurrency) {
     const job = await claimNextJob();
     if (!job) return;
@@ -1579,7 +1581,7 @@ export function startAgentRunWorker(io?: SocketIOServer) {
 
   logger.info({
     intervalMs,
-    concurrency: readNumberEnv('AGENT_RUN_WORKER_CONCURRENCY', 2),
+    concurrency: readNumberEnv('AGENT_RUN_WORKER_CONCURRENCY', 4),
   }, 'Agent run worker started');
 }
 

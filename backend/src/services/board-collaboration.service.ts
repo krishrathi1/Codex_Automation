@@ -116,12 +116,13 @@ function defaultLiveWorkflowAgentInputs(board: Pick<Board, 'slug'>): Required<Pi
   ];
 }
 
+const A2A_MAX_AGENTS = 8;
+
 function normalizeAgentInputs(board: Pick<Board, 'slug'>, data: StartBoardCollaborationInput): AgentInput[] {
   const defaults = defaultAgentInputs(board);
-  const provided = Array.isArray(data.agents) ? data.agents.slice(0, 2) : [];
-  return [0, 1].map(index => {
-    const item = provided[index] ?? {};
-    const fallback = defaults[index];
+  const provided = Array.isArray(data.agents) ? data.agents.slice(0, A2A_MAX_AGENTS) : [];
+  const inputs: AgentInput[] = provided.map((item, index) => {
+    const fallback = defaults[index] ?? defaults[defaults.length - 1];
     return {
       agentId: item.agentId,
       name: item.name || fallback.name,
@@ -129,9 +130,30 @@ function normalizeAgentInputs(board: Pick<Board, 'slug'>, data: StartBoardCollab
       role: item.role || fallback.role,
       work: item.work || fallback.work,
       avatar: item.avatar || fallback.avatar,
-      isLead: item.isLead ?? index === 0,
+      isLead: item.isLead ?? false,
     };
   });
+
+  // A2A needs at least two participants — pad from defaults if fewer were sent.
+  while (inputs.length < 2) {
+    const fallback = defaults[inputs.length] ?? defaults[defaults.length - 1];
+    inputs.push({ ...fallback, isLead: false });
+  }
+
+  // Exactly one lead; if none flagged, the first is lead. Extra leads are demoted.
+  let leadSeen = false;
+  for (const input of inputs) {
+    if (input.isLead && !leadSeen) {
+      leadSeen = true;
+    } else {
+      input.isLead = false;
+    }
+  }
+  if (!leadSeen) inputs[0].isLead = true;
+
+  // Lead initiates the conversation, so put it first.
+  inputs.sort((a, b) => (a.isLead === b.isLead ? 0 : a.isLead ? -1 : 1));
+  return inputs;
 }
 
 function normalizeLiveAgentInputs(board: Pick<Board, 'slug'>, data: StartLiveAgentWorkflowInput, existingAgents: Agent[]): AgentInput[] {
@@ -332,10 +354,12 @@ export async function startBoardAgentCollaboration(
     || board.objective?.trim()
     || `Complete the production goal for ${board.name} and report readiness.`;
   const agentInputs = normalizeAgentInputs(board, data);
-  const agents = [
-    await resolveCollaborationAgent(organizationId, board.id, agentInputs[0]),
-    await resolveCollaborationAgent(organizationId, board.id, agentInputs[1]),
-  ];
+  const agents: Awaited<ReturnType<typeof resolveCollaborationAgent>>[] = [];
+  for (const input of agentInputs) {
+    agents.push(await resolveCollaborationAgent(organizationId, board.id, input));
+  }
+  const lead = agents[0];
+  const peers = agents.slice(1);
 
   const tasks = await Promise.all(agents.map(agent => prisma.task.create({
     data: {
@@ -352,63 +376,57 @@ export async function startBoardAgentCollaboration(
   const thread = await prisma.thread.create({
     data: {
       organizationId,
-      title: `${board.name}: ${agents[0].displayName} ↔ ${agents[1].displayName}`,
+      title: `${board.name}: ${agents.map(agent => agent.displayName).join(' ↔ ')}`,
     },
   });
   const metadata = collaborationMetadata({ board, thread, goal, tasks });
 
-  const messages = [
-    await prisma.message.create({
+  const messages: Message[] = [];
+
+  // Lead opens the conversation, addressing every participant with their assignment.
+  messages.push(await prisma.message.create({
+    data: {
+      threadId: thread.id,
+      senderId: lead.id,
+      receiverId: peers[0].id,
+      content: [
+        `Goal: ${goal}`,
+        '',
+        `My assigned work: ${lead.assignedWork}`,
+        ...peers.map(peer => `${peer.displayName}, please handle: ${peer.assignedWork}`),
+        'Share blockers, status, and anything Mother Chat should know.',
+      ].join('\n'),
+      metadata: { ...metadata, role: 'agent', direction: 'opening' } as any,
+    },
+  }));
+
+  // Each peer acknowledges back to the lead.
+  for (const peer of peers) {
+    messages.push(await prisma.message.create({
       data: {
         threadId: thread.id,
-        senderId: agents[0].id,
-        receiverId: agents[1].id,
+        senderId: peer.id,
+        receiverId: lead.id,
         content: [
-          `Goal: ${goal}`,
+          `Acknowledged. I (${peer.displayName}) will handle: ${peer.assignedWork}`,
           '',
-          `My assigned work: ${agents[0].assignedWork}`,
-          `${agents[1].displayName}, please handle: ${agents[1].assignedWork}`,
-          'Share blockers, status, and anything Mother Chat should know.',
+          `Looping back to ${lead.displayName} with findings, status, and blockers.`,
         ].join('\n'),
-        metadata: {
-          ...metadata,
-          role: 'agent',
-          direction: 'opening',
-        } as any,
+        metadata: { ...metadata, role: 'agent', direction: 'reply' } as any,
       },
-    }),
-    await prisma.message.create({
-      data: {
-        threadId: thread.id,
-        senderId: agents[1].id,
-        receiverId: agents[0].id,
-        content: [
-          `Acknowledged. I will handle: ${agents[1].assignedWork}`,
-          '',
-          `I need ${agents[0].displayName} to cover: ${agents[0].assignedWork}`,
-          'First checkpoint: compare findings, list blockers, and prepare a readiness summary for Mother Chat.',
-        ].join('\n'),
-        metadata: {
-          ...metadata,
-          role: 'agent',
-          direction: 'reply',
-        } as any,
-      },
-    }),
-    await prisma.message.create({
-      data: {
-        threadId: thread.id,
-        senderId: agents[0].id,
-        receiverId: agents[1].id,
-        content: `Checkpoint agreed. We will keep this conversation inside ${board.name} and report against task IDs: ${tasks.map(task => task.id).join(', ')}.`,
-        metadata: {
-          ...metadata,
-          role: 'agent',
-          direction: 'checkpoint',
-        } as any,
-      },
-    }),
-  ];
+    }));
+  }
+
+  // Lead confirms the checkpoint and ties the conversation to the task IDs.
+  messages.push(await prisma.message.create({
+    data: {
+      threadId: thread.id,
+      senderId: lead.id,
+      receiverId: peers[0].id,
+      content: `Checkpoint agreed. We will keep this conversation inside ${board.name} and report against task IDs: ${tasks.map(task => task.id).join(', ')}.`,
+      metadata: { ...metadata, role: 'agent', direction: 'checkpoint' } as any,
+    },
+  }));
 
   await prisma.thread.update({
     where: { id: thread.id },
@@ -429,7 +447,7 @@ export async function startBoardAgentCollaboration(
   await prisma.boardMemory.create({
     data: {
       boardId: board.id,
-      content: `A2A collaboration started. Goal: ${goal}. ${agents[0].displayName}: ${agents[0].assignedWork}. ${agents[1].displayName}: ${agents[1].assignedWork}.`,
+      content: `A2A collaboration started. Goal: ${goal}. ${agents.map(agent => `${agent.displayName}: ${agent.assignedWork}`).join('. ')}.`,
       tags: ['a2a', 'collaboration', 'mother-chat'] as any,
       isChat: true,
       source: 'production_a2a_start',
@@ -591,6 +609,51 @@ export async function dispatchBoardTaskToAgents(
   return { board, query, agents, tasks, thread, messages, runJobs };
 }
 
+// Signals that a trigger describes a real defect worth running the fix pipeline for.
+const ERROR_EVIDENCE_PATTERNS = [
+  /\berror\b/i, /\bexception\b/i, /\bfailed?\b/i, /\bfailure\b/i, /\bcrash/i,
+  /\bstack\s*trace\b/i, /\btraceback\b/i, /\btrace[_-]?id\b/i, /\bbug\b/i,
+  /\bbroken\b/i, /\bnot working\b/i, /\b[45]\d{2}\b/, // HTTP 4xx/5xx
+  /\b\w+\.(ts|tsx|js|jsx|py|go|rs|java):\d+/i,        // file:line reference
+  /\bundefined\b/i, /\bnull\b/i, /\bcannot read\b/i, /\bunhandled\b/i,
+  /\btimeout\b/i, /\bdeploy(ment)? failed\b/i, /\bbuild failed\b/i,
+];
+
+// Bare status/question phrasing that should NOT launch a fix-and-deploy pipeline.
+const STATUS_QUERY_PATTERNS = [
+  /what (are|is|'?s)\b/i, /\bstatus\b/i, /\bdoing\b/i, /\bhappening\b/i,
+  /\bhow (are|is)\b/i, /\bshow me\b/i, /\bsummar/i, /\bupdate me\b/i,
+];
+
+function hasErrorEvidence(text: string): boolean {
+  if (!text?.trim()) return false;
+  return ERROR_EVIDENCE_PATTERNS.some(re => re.test(text));
+}
+
+function looksLikeStatusQuery(text: string): boolean {
+  if (!text?.trim()) return false;
+  return STATUS_QUERY_PATTERNS.some(re => re.test(text));
+}
+
+/**
+ * Input gate: a pure status question ("what are my agents doing?") must not trigger
+ * the full fix→deploy pipeline. Require real error evidence; otherwise short-circuit
+ * with a 422 so the caller answers it as a status reply instead.
+ */
+function assertActionableTrigger(parts: Array<string | undefined>) {
+  const combined = parts.filter(Boolean).join('\n');
+  if (hasErrorEvidence(combined)) return; // real defect → proceed
+  if (looksLikeStatusQuery(combined) || !combined.trim()) {
+    const err = new Error(
+      'No error evidence in this request — it reads as a status question, not a defect to fix. ' +
+      'Provide an error payload, stack trace, trace_id, or a time window to run the fix pipeline.',
+    ) as Error & { statusCode?: number; code?: string };
+    err.statusCode = 422;
+    err.code = 'NO_ERROR_EVIDENCE';
+    throw err;
+  }
+}
+
 export async function startLiveAgentWorkflow(
   organizationId: string,
   boardId: string,
@@ -632,6 +695,8 @@ export async function startLiveAgentWorkflow(
     || board.objective?.trim()
     || `Run a live agent-to-agent workflow for ${board.name}.`;
   const trigger = data.trigger?.trim() || goal;
+  // Gate: don't run the fix→deploy pipeline for a bare status question.
+  assertActionableTrigger([data.trigger, data.goal]);
   const workflowId = randomUUID();
   const agentInputs = normalizeLiveAgentInputs(board, data, existingAgents);
   const agents = await Promise.all(agentInputs.map(input => (
@@ -786,6 +851,8 @@ export async function startLiveBlackboardConversation(
     || board.objective?.trim()
     || `Run live agent-to-agent work for ${board.name}.`;
   const trigger = data.trigger?.trim() || data.query?.trim() || goal;
+  // Gate: don't run the fix→deploy pipeline for a bare status question.
+  assertActionableTrigger([data.trigger, data.query, data.goal]);
   const maxRounds = Math.max(1, Math.min(data.maxRounds || LIVE_BLACKBOARD_DEFAULT_ROUNDS, 8));
   const agentInputs = normalizeLiveBlackboardAgentInputs(board, data, existingAgents);
   const agents = (await Promise.all(agentInputs.map(input => (
