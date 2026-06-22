@@ -338,7 +338,7 @@ function composeCommitPrompt(errorEvent: ProductionErrorEvent, reviewOutput: str
 async function enqueuePipelineJob(options: {
   organizationId: string;
   boardId: string;
-  taskId: string;
+  taskId?: string | null;
   threadId: string;
   agentId: string;
   prompt: string;
@@ -507,7 +507,7 @@ export async function ingestProductionErrorEvent(
 }
 
 async function queueReviewJob(errorEvent: ProductionErrorEvent, job: CompletedPipelineJob, debugOutput: string) {
-  if (!errorEvent.boardId || !errorEvent.taskId || !job.threadId || !errorEvent.reviewAgentId) return null;
+  if (!errorEvent.boardId || !job.threadId || !errorEvent.reviewAgentId) return null;
 
   const proposedFix = parseFileBlocks(debugOutput);
   if (proposedFix.length > 0) {
@@ -530,10 +530,12 @@ async function queueReviewJob(errorEvent: ProductionErrorEvent, job: CompletedPi
     pipelineAttempt: parsePipelineContext(job.contextPacket).pipelineAttempt ?? 0,
   });
 
-  await prisma.task.update({
-    where: { id: errorEvent.taskId },
-    data: { status: 'REVIEW', agentId: errorEvent.reviewAgentId },
-  }).catch(() => {});
+  if (errorEvent.taskId) {
+    await prisma.task.update({
+      where: { id: errorEvent.taskId },
+      data: { status: 'REVIEW', agentId: errorEvent.reviewAgentId },
+    }).catch(() => {});
+  }
 
   await prisma.productionErrorEvent.update({
     where: { id: errorEvent.id },
@@ -547,7 +549,7 @@ async function queueReviewJob(errorEvent: ProductionErrorEvent, job: CompletedPi
 }
 
 async function queueCommitJob(errorEvent: ProductionErrorEvent, job: CompletedPipelineJob, reviewOutput: string) {
-  if (!errorEvent.boardId || !errorEvent.taskId || !job.threadId || !errorEvent.commitAgentId) return null;
+  if (!errorEvent.boardId || !job.threadId || !errorEvent.commitAgentId) return null;
   const commitRunJob = await enqueuePipelineJob({
     organizationId: job.organizationId,
     boardId: errorEvent.boardId,
@@ -559,10 +561,12 @@ async function queueCommitJob(errorEvent: ProductionErrorEvent, job: CompletedPi
     productionErrorEventId: errorEvent.id,
   });
 
-  await prisma.task.update({
-    where: { id: errorEvent.taskId },
-    data: { status: 'IN_PROGRESS', agentId: errorEvent.commitAgentId },
-  }).catch(() => {});
+  if (errorEvent.taskId) {
+    await prisma.task.update({
+      where: { id: errorEvent.taskId },
+      data: { status: 'IN_PROGRESS', agentId: errorEvent.commitAgentId },
+    }).catch(() => {});
+  }
 
   await prisma.productionErrorEvent.update({
     where: { id: errorEvent.id },
@@ -576,7 +580,7 @@ async function queueCommitJob(errorEvent: ProductionErrorEvent, job: CompletedPi
 }
 
 async function queueDebugReworkJob(errorEvent: ProductionErrorEvent, job: CompletedPipelineJob, reviewOutput: string, nextAttempt: number) {
-  if (!errorEvent.boardId || !errorEvent.taskId || !job.threadId || !errorEvent.debugAgentId) return null;
+  if (!errorEvent.boardId || !job.threadId || !errorEvent.debugAgentId) return null;
   const debugRunJob = await enqueuePipelineJob({
     organizationId: job.organizationId,
     boardId: errorEvent.boardId,
@@ -589,10 +593,12 @@ async function queueDebugReworkJob(errorEvent: ProductionErrorEvent, job: Comple
     pipelineAttempt: nextAttempt,
   });
 
-  await prisma.task.update({
-    where: { id: errorEvent.taskId },
-    data: { status: 'ASSIGNED', agentId: errorEvent.debugAgentId },
-  }).catch(() => {});
+  if (errorEvent.taskId) {
+    await prisma.task.update({
+      where: { id: errorEvent.taskId },
+      data: { status: 'ASSIGNED', agentId: errorEvent.debugAgentId },
+    }).catch(() => {});
+  }
 
   await prisma.productionErrorEvent.update({
     where: { id: errorEvent.id },

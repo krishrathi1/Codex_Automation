@@ -13,6 +13,7 @@ import authRoutes from './routes/auth.js';
 import orgRoutes from './routes/organizations.js';
 import agentRoutes from './routes/agents.js';
 import activityRoutes from './routes/activities.js';
+import signozRoutes from './routes/signoz.js';
 import taskRoutes from './routes/tasks.js';
 import threadRoutes from './routes/threads.js';
 import sessionRoutes from './routes/sessions.js';
@@ -154,6 +155,7 @@ app.use('/api/agent-designer', requireAuth, agentDesignerRoutes);
 app.use('/api/error-events', requireAuth, errorEventRoutes);
 app.use('/api/v1/error-events', requireApiKey, errorEventRoutes);
 app.use('/api/mutual-fund-monitor', requireAuth, mutualFundMonitorRoutes);
+app.use('/api/signoz', requireAuth, signozRoutes);
 
 // Global error handler for unhandled async errors in routes
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

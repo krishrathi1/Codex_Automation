@@ -33,6 +33,13 @@ const EMPTY_VERCEL_SETTINGS: PlatformIntegrationSettings['vercel'] = {
   updatedAt: null,
 };
 
+const EMPTY_SIGNOZ_SETTINGS: PlatformIntegrationSettings['signoz'] = {
+  configured: false,
+  tokenMasked: null,
+  endpoint: null,
+  updatedAt: null,
+};
+
 function normalizeIntegrationSettings(
   settings: Partial<PlatformIntegrationSettings> | null | undefined,
 ): PlatformIntegrationSettings {
@@ -44,6 +51,10 @@ function normalizeIntegrationSettings(
     vercel: {
       ...EMPTY_VERCEL_SETTINGS,
       ...(settings?.vercel ?? {}),
+    },
+    signoz: {
+      ...EMPTY_SIGNOZ_SETTINGS,
+      ...(settings?.signoz ?? {}),
     },
   };
 }
@@ -250,9 +261,11 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
   const [githubBranch, setGithubBranch] = useState('');
   const [vercelAccessToken, setVercelAccessToken] = useState('');
   const [vercelTeamId, setVercelTeamId] = useState('');
+  const [signozEndpoint, setSignozEndpoint] = useState('');
+  const [signozApiKey, setSignozApiKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [checking, setChecking] = useState<'github' | 'vercel' | null>(null);
+  const [checking, setChecking] = useState<'github' | 'vercel' | 'signoz' | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const fetchSettings = useCallback(async () => {
@@ -263,6 +276,7 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
       setGithubRepo(normalized.github.repo || '');
       setGithubBranch(normalized.github.branch || '');
       setVercelTeamId(normalized.vercel.teamId || '');
+      setSignozEndpoint(normalized.signoz.endpoint || '');
     } catch (err) {
       setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to load integration settings' });
     } finally {
@@ -292,13 +306,17 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
         githubBranch: githubBranch.trim() || null,
         vercelAccessToken: vercelAccessToken.trim() || undefined,
         vercelTeamId: vercelTeamId.trim() || null,
+        signozApiKey: signozApiKey.trim() || undefined,
+        signozEndpoint: signozEndpoint.trim() || null,
       });
       const normalizedUpdated = normalizeIntegrationSettings(updated);
       setSettings(normalizedUpdated);
       setGithubRepo(normalizedUpdated.github.repo || '');
       setGithubBranch(normalizedUpdated.github.branch || '');
+      setSignozEndpoint(normalizedUpdated.signoz.endpoint || '');
       setGithubAccessToken('');
       setVercelAccessToken('');
+      setSignozApiKey('');
       setMessage({ type: 'success', text: 'Integration settings saved' });
     } catch (err) {
       setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to save integration settings' });
@@ -328,6 +346,19 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
       setMessage({ type: 'success', text: `Vercel connected: ${projects.length} projects found` });
     } catch (err) {
       setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Vercel check failed' });
+    } finally {
+      setChecking(null);
+    }
+  };
+
+  const handleCheckSignoz = async () => {
+    setChecking('signoz');
+    setMessage(null);
+    try {
+      const result = await api.org.signozCheck();
+      setMessage({ type: result.ok ? 'success' : 'error', text: result.detail });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'SigNoz check failed' });
     } finally {
       setChecking(null);
     }
@@ -376,6 +407,7 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
 
   const githubSettings = settings?.github ?? EMPTY_GITHUB_SETTINGS;
   const vercelSettings = settings?.vercel ?? EMPTY_VERCEL_SETTINGS;
+  const signozSettings = settings?.signoz ?? EMPTY_SIGNOZ_SETTINGS;
 
   return (
     <div className="max-w-3xl">
@@ -490,6 +522,45 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
             />
             <p className="mt-2 text-xs text-gray-500">
               Use this only when you need to force Nexus to a specific Vercel team. If the token already has the right default scope, leave it empty.
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-white/5 bg-surface-900 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-semibold text-white">SigNoz</h4>
+                <p className="text-xs text-gray-500">{signozSettings.configured ? signozSettings.endpoint : 'Not connected'}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCheckSignoz}
+                  disabled={!signozSettings.configured || checking === 'signoz'}
+                  className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:bg-white/5 disabled:opacity-50"
+                >
+                  {checking === 'signoz' ? 'Checking...' : 'Check'}
+                </button>
+              </div>
+            </div>
+            <label className="mb-1 block text-xs font-medium text-gray-400">Query endpoint URL</label>
+            <input
+              value={signozEndpoint}
+              onChange={event => setSignozEndpoint(event.target.value)}
+              disabled={!isAdmin}
+              placeholder="http://localhost:8080 or https://<region>.signoz.cloud"
+              className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
+            />
+            <label className="mb-1 mt-3 block text-xs font-medium text-gray-400">API key</label>
+            <input
+              type="password"
+              value={signozApiKey}
+              onChange={event => setSignozApiKey(event.target.value)}
+              disabled={!isAdmin}
+              placeholder={signozSettings.configured ? 'Paste a new key to replace' : 'SigNoz API key'}
+              className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
+            />
+            <p className="mt-2 text-xs text-gray-500">
+              Nexus reads the production website's logs from SigNoz for the Logs tab and to auto-trigger fixes on production errors. Key from SigNoz → Settings → Service Accounts.
             </p>
           </div>
         </div>

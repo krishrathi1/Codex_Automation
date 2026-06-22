@@ -319,6 +319,21 @@ export interface PlatformIntegrationSettings {
     teamId: string | null;
     updatedAt: string | null;
   };
+  signoz: {
+    configured: boolean;
+    tokenMasked: string | null;
+    endpoint: string | null;
+    updatedAt: string | null;
+  };
+}
+
+export interface SigNozLog {
+  timestamp: string;
+  severity: string;
+  body: string;
+  serviceName: string | null;
+  traceId: string | null;
+  attributes: Record<string, unknown>;
 }
 
 export interface GithubRepositorySummary {

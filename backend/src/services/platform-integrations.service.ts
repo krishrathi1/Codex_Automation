@@ -1,5 +1,6 @@
 import { decryptField, encryptField } from '../lib/crypto.js';
 import { prisma } from '../lib/prisma.js';
+import { queryLogs, checkSigNozConnection, type QueryLogsOptions, type SigNozLog } from './signoz-api.service.js';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -52,7 +53,7 @@ function looksMaskedToken(token: string) {
   return token.includes('...') || token.includes('…') || token.includes('*');
 }
 
-function normalizeAccessToken(provider: 'GitHub' | 'Vercel', value: string | null | undefined) {
+function normalizeAccessToken(provider: 'GitHub' | 'Vercel' | 'SigNoz', value: string | null | undefined) {
   const token = value?.trim();
   if (!token) return undefined;
   if (looksMaskedToken(token)) {
@@ -74,17 +75,19 @@ async function readErrorText(response: Response) {
   return response.text().catch(() => response.statusText);
 }
 
-function tokenFromSettings(providerSettings: JsonRecord, provider: 'GitHub' | 'Vercel') {
+function tokenFromSettings(providerSettings: JsonRecord, provider: 'GitHub' | 'Vercel' | 'SigNoz') {
   const encrypted = stringValue(providerSettings.accessToken);
   if (!encrypted) return undefined;
   return normalizeAccessToken(provider, decryptField(encrypted));
 }
 
-function sanitizeProvider(value: unknown, options?: { includeTeamId?: boolean; includeRepo?: boolean }) {
+function sanitizeProvider(value: unknown, options?: { includeTeamId?: boolean; includeRepo?: boolean; includeEndpoint?: boolean }) {
   const provider = objectRecord(value);
   const token = stringValue(provider.accessToken);
+  const endpoint = stringValue(provider.endpoint) || null;
+  const configured = options?.includeEndpoint ? Boolean(token && endpoint) : Boolean(token);
   const sanitized: JsonRecord = {
-    configured: Boolean(token),
+    configured,
     tokenMasked: stringValue(provider.tokenMasked) || (token ? '****' : null),
     updatedAt: stringValue(provider.updatedAt) || null,
   };
@@ -95,6 +98,9 @@ function sanitizeProvider(value: unknown, options?: { includeTeamId?: boolean; i
     sanitized.repo = stringValue(provider.repo) || null;
     sanitized.branch = stringValue(provider.branch) || null;
   }
+  if (options?.includeEndpoint) {
+    sanitized.endpoint = endpoint;
+  }
   return sanitized;
 }
 
@@ -103,6 +109,7 @@ function sanitizeIntegrationSettings(settings: unknown) {
   return {
     github: sanitizeProvider(integrations.github, { includeRepo: true }),
     vercel: sanitizeProvider(integrations.vercel, { includeTeamId: true }),
+    signoz: sanitizeProvider(integrations.signoz, { includeEndpoint: true }),
   };
 }
 
@@ -121,6 +128,7 @@ export function sanitizeOrganizationSettings(settings: unknown) {
     ...root,
     integrations: {
       ...integrations,
+      signoz: sanitizeProvider(integrations.signoz, { includeEndpoint: true }),
       github: sanitizeProvider(integrations.github, { includeRepo: true }),
       vercel: sanitizeProvider(integrations.vercel, { includeTeamId: true }),
     },
@@ -135,6 +143,9 @@ export async function updateIntegrationSettings(organizationId: string, input: {
   vercelAccessToken?: string | null;
   clearVercelAccessToken?: boolean;
   vercelTeamId?: string | null;
+  signozApiKey?: string | null;
+  clearSignozApiKey?: boolean;
+  signozEndpoint?: string | null;
 }) {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
@@ -196,6 +207,28 @@ export async function updateIntegrationSettings(organizationId: string, input: {
     nextIntegrations.vercel = {};
   }
 
+  const signoz = objectRecord(integrations.signoz);
+  const nextSignoz: JsonRecord = { ...signoz };
+  const signozApiKey = normalizeAccessToken('SigNoz', input.signozApiKey);
+  if (input.clearSignozApiKey) {
+    delete nextSignoz.accessToken;
+    delete nextSignoz.tokenMasked;
+  } else if (signozApiKey) {
+    nextSignoz.accessToken = encryptField(signozApiKey);
+    nextSignoz.tokenMasked = maskToken(signozApiKey);
+  }
+  if (input.signozEndpoint !== undefined) {
+    const endpoint = input.signozEndpoint?.trim();
+    if (endpoint) nextSignoz.endpoint = endpoint;
+    else delete nextSignoz.endpoint;
+  }
+  if (Object.keys(nextSignoz).length > 0) {
+    nextSignoz.updatedAt = now;
+    nextIntegrations.signoz = nextSignoz;
+  } else {
+    nextIntegrations.signoz = {};
+  }
+
   const updated = await prisma.organization.update({
     where: { id: organizationId },
     data: {
@@ -209,13 +242,14 @@ export async function updateIntegrationSettings(organizationId: string, input: {
   return sanitizeIntegrationSettings(updated.settings);
 }
 
-async function getProviderToken(organizationId: string, provider: 'github' | 'vercel') {
+async function getProviderToken(organizationId: string, provider: 'github' | 'vercel' | 'signoz') {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
     select: { settings: true },
   });
   const providerSettings = objectRecord(integrationSettings(org?.settings)[provider]);
-  const token = tokenFromSettings(providerSettings, provider === 'github' ? 'GitHub' : 'Vercel');
+  const providerLabel = provider === 'github' ? 'GitHub' : provider === 'vercel' ? 'Vercel' : 'SigNoz';
+  const token = tokenFromSettings(providerSettings, providerLabel);
   return {
     token,
     settings: providerSettings,
@@ -228,12 +262,17 @@ async function getProviderToken(organizationId: string, provider: 'github' | 've
  * and falls back to environment variables when a UI token is not set.
  */
 export async function getMonitorIntegrationCredentials(organizationId: string) {
-  const [github, vercel] = await Promise.all([
+  const [github, vercel, signoz] = await Promise.all([
     getProviderToken(organizationId, 'github'),
     getProviderToken(organizationId, 'vercel'),
+    getProviderToken(organizationId, 'signoz'),
   ]);
 
   return {
+    signoz: {
+      endpoint: stringValue(signoz.settings.endpoint) || process.env.SIGNOZ_ENDPOINT || '',
+      apiKey: signoz.token || process.env.SIGNOZ_API_KEY || '',
+    },
     github: {
       token: github.token || process.env.GITHUB_TOKEN || '',
       repo: stringValue(github.settings.repo) || process.env.GITHUB_REPO || null,
@@ -246,6 +285,19 @@ export async function getMonitorIntegrationCredentials(organizationId: string) {
       projectName: process.env.VERCEL_PROJECT_NAME || 'mutual-fund',
     },
   };
+}
+
+export async function checkSignozConnection(organizationId: string): Promise<{ ok: boolean; detail: string }> {
+  const creds = await getMonitorIntegrationCredentials(organizationId);
+  return checkSigNozConnection(creds.signoz);
+}
+
+export async function getSignozLogs(organizationId: string, opts: QueryLogsOptions): Promise<SigNozLog[]> {
+  const creds = await getMonitorIntegrationCredentials(organizationId);
+  if (!creds.signoz.endpoint || !creds.signoz.apiKey) {
+    throw integrationError('SigNoz endpoint and API key are not configured in Settings.');
+  }
+  return queryLogs(creds.signoz, opts);
 }
 
 export async function listGithubRepositories(organizationId: string): Promise<GithubRepositorySummary[]> {

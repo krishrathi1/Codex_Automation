@@ -35,6 +35,9 @@ const integrationSettingsSchema = z.object({
   vercelAccessToken: z.string().optional().nullable(),
   clearVercelAccessToken: z.boolean().optional(),
   vercelTeamId: z.string().optional().nullable(),
+  signozApiKey: z.string().optional().nullable(),
+  clearSignozApiKey: z.boolean().optional(),
+  signozEndpoint: z.string().optional().nullable(),
 });
 
 // GET / — get organization details
@@ -71,6 +74,16 @@ router.get('/integrations/github/repos', requireRole('OWNER', 'ADMIN'), async (r
   try {
     const repos = await platformIntegrations.listGithubRepositories(req.organizationId!);
     res.json(repos);
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
+});
+
+router.get('/integrations/signoz/check', requireRole('OWNER', 'ADMIN'), async (req, res) => {
+  try {
+    const result = await platformIntegrations.checkSignozConnection(req.organizationId!);
+    res.status(result.ok ? 200 : 400).json(result);
   } catch (err) {
     const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
     res.status(statusCode).json({ error: (err as Error).message });

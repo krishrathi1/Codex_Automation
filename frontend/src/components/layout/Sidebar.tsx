@@ -32,6 +32,7 @@ const navSections = [
   {
     label: 'Observe',
     items: [
+      { path: '/logs', label: 'Logs', icon: '\u2263' },
       { path: '/metrics', label: 'Metrics & Cost', icon: '\u25A5' },
       { path: '/alerts', label: 'Alerts', icon: '\u25B3' },
       { path: '/search', label: 'Search & Audit', icon: '\u2299' },

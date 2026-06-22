@@ -24,6 +24,7 @@ import { ingestProductionErrorEvent } from './production-error-pipeline.service.
 import { getMonitorIntegrationCredentials } from './platform-integrations.service.js';
 import * as vercel from './vercel-api.service.js';
 import * as github from './github-api.service.js';
+import * as signoz from './signoz-api.service.js';
 import type { Server as SocketIOServer } from 'socket.io';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
@@ -255,6 +256,50 @@ async function checkGitHubFailures(orgId: string, boardId: string | undefined, c
   return found;
 }
 
+async function checkSigNozErrors(
+  orgId: string,
+  boardId: string | undefined,
+  cfg: signoz.SigNozConfig,
+): Promise<number> {
+  let logs: signoz.SigNozLog[] = [];
+  try {
+    logs = await signoz.queryLogs(cfg, { severities: ['ERROR', 'FATAL'], sinceMs: 15 * 60 * 1000, limit: 20 });
+  } catch (err) {
+    logger.warn({ err }, '[mutual-fund-monitor] SigNoz query failed');
+    return 0;
+  }
+
+  let found = 0;
+  for (const log of logs) {
+    const service = log.serviceName ? ` — ${log.serviceName}` : '';
+    const title = `Production log error${service}: ${log.body.slice(0, 120)}`;
+    try {
+      await ingestProductionErrorEvent(orgId, {
+        boardId,
+        source: 'signoz',
+        severity: log.severity === 'FATAL' ? 'critical' : 'error',
+        title,
+        message: log.body,
+        environment: 'production',
+        payload: {
+          signozTimestamp: log.timestamp,
+          serviceName: log.serviceName,
+          traceId: log.traceId,
+          attributes: log.attributes,
+        },
+      }, { io: ioRef });
+      found++;
+    } catch (err) {
+      // 409 = the same error is already in-flight (fingerprint dedup) — expected.
+      const statusCode = (err as Error & { statusCode?: number }).statusCode;
+      if (statusCode !== 409) {
+        logger.error({ err }, '[mutual-fund-monitor] SigNoz error ingest failed');
+      }
+    }
+  }
+  return found;
+}
+
 async function runCheck(): Promise<void> {
   state.checksTotal++;
   state.lastCheckAt = new Date();
@@ -274,10 +319,11 @@ async function runCheck(): Promise<void> {
   const creds = await getMonitorIntegrationCredentials(orgId);
   const vercelConfigured = vercel.isVercelConfigured(creds.vercel);
   const githubConfigured = github.isGitHubConfigured(creds.github);
-  state.credentialsConfigured = vercelConfigured || githubConfigured;
+  const signozConfigured = signoz.isSigNozConfigured(creds.signoz);
+  state.credentialsConfigured = vercelConfigured || githubConfigured || signozConfigured;
 
   if (!state.credentialsConfigured) {
-    state.lastError = 'No Vercel/GitHub token configured. Add them in Settings → Integrations.';
+    state.lastError = 'No Vercel/GitHub/SigNoz credentials configured. Add them in Settings → Integrations.';
     logger.info('[mutual-fund-monitor] ' + state.lastError);
     return;
   }
@@ -305,6 +351,15 @@ async function runCheck(): Promise<void> {
       return 0;
     });
     errorsThisCheck += githubErrors;
+  }
+
+  // Check SigNoz production logs
+  if (signozConfigured) {
+    const signozErrors = await checkSigNozErrors(orgId, boardId, creds.signoz).catch(err => {
+      logger.error({ err }, '[mutual-fund-monitor] SigNoz check threw');
+      return 0;
+    });
+    errorsThisCheck += signozErrors;
   }
 
   if (errorsThisCheck > 0) {
