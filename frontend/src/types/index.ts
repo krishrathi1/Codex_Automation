@@ -357,6 +357,23 @@ export interface ChatResponse {
   usage?: Record<string, unknown> | null;
 }
 
+export interface AgentDesignProposalAgent {
+  displayName: string;
+  role: string;
+  persona: string;
+}
+
+export interface AgentDesignProposal {
+  group: {
+    name?: string;
+    objective?: string;
+    description?: string;
+    mode?: 'continuous' | 'sprint' | 'goal';
+    maxAgents?: number;
+  };
+  agents: AgentDesignProposalAgent[];
+}
+
 export interface MotherChatContext {
   generatedAt: string;
   scope?: {

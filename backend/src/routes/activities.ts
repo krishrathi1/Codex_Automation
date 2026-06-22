@@ -16,4 +16,13 @@ router.get('/', async (req, res) => {
   res.json(result);
 });
 
+router.delete('/', async (req, res) => {
+  const { agentId, type } = req.query;
+  const result = await activityService.clearActivities(req.organizationId!, {
+    agentId: agentId as string | undefined,
+    type: type as ActivityType | undefined,
+  });
+  res.json(result);
+});
+
 export default router;

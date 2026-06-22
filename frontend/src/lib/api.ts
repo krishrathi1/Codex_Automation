@@ -1,4 +1,4 @@
-import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, Gateway, GatewayHealth, ModelInfo, ChatHistory, ChatResponse, MotherChatContext, MotherChatDiagnostics, WorkspaceFile, LlmProvider, UsageCredit, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate, CommEdge, LiveBlackboardTrace, PlatformIntegrationSettings, GithubRepositorySummary, VercelProjectSummary } from '../types';
+import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, Gateway, GatewayHealth, ModelInfo, ChatHistory, ChatResponse, MotherChatContext, MotherChatDiagnostics, WorkspaceFile, LlmProvider, UsageCredit, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate, CommEdge, LiveBlackboardTrace, PlatformIntegrationSettings, GithubRepositorySummary, VercelProjectSummary, AgentDesignProposal } from '../types';
 import { useAuthStore } from '../stores/auth-store';
 import { AUTH_DISABLED } from './auth-mode';
 
@@ -178,6 +178,13 @@ export const api = {
       if (params?.limit) q.set('limit', String(params.limit));
       return request<{ activities: Activity[]; total: number }>(`/activities/search?${q.toString()}`);
     },
+    clear: (params?: { agentId?: string; type?: string }) => {
+      const query = new URLSearchParams();
+      if (params?.agentId) query.set('agentId', params.agentId);
+      if (params?.type) query.set('type', params.type);
+      const qs = query.toString();
+      return request<{ count: number }>(`/activities${qs ? `?${qs}` : ''}`, { method: 'DELETE' });
+    },
   },
   tasks: {
     list: () => request<Task[]>('/tasks'),
@@ -281,6 +288,13 @@ export const api = {
     },
     send: (message: string, requestId?: string, boardId?: string) =>
       request<ChatResponse>('/mother-chat/message', { method: 'POST', body: JSON.stringify({ message, requestId, boardId }) }),
+  },
+  agentDesigner: {
+    message: (messages: { role: 'user' | 'assistant'; content: string }[]) =>
+      request<{ reply: string; proposal?: AgentDesignProposal }>(
+        '/agent-designer/message',
+        { method: 'POST', body: JSON.stringify({ messages }) },
+      ),
   },
   files: {
     list: (agentId: string) => request<WorkspaceFile[]>(`/agents/${agentId}/files`),

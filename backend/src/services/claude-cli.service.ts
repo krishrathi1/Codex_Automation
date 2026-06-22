@@ -488,7 +488,11 @@ export function isClaudeResumeUnavailableError(err: unknown) {
   return (
     /session.*not.?found/i.test(message) ||
     /resume.*failed/i.test(message) ||
-    /thread\/resume/i.test(message)
+    /thread\/resume/i.test(message) ||
+    // Claude CLI: "No conversation found with session ID: <uuid>"
+    /no conversation found/i.test(message) ||
+    /conversation.*not.?found/i.test(message) ||
+    /no.*session.*found/i.test(message)
   );
 }
 

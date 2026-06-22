@@ -47,7 +47,7 @@ export function Chat() {
     const handleChatEvent = (event: AgentChatSocketEvent) => {
       if (event.agentId !== selectedAgentIdRef.current) return;
 
-      const requestKey = event.requestId || event.nexusSessionId || event.sessionId || `codex-${Date.now()}`;
+      const requestKey = event.requestId || event.nexusSessionId || event.sessionId || `claude-${Date.now()}`;
       const timestamp = event.timestamp || new Date().toISOString();
 
       if (event.type === 'response' && event.content) {
@@ -88,7 +88,7 @@ export function Chat() {
           {
             id: `error-${requestKey}`,
             role: 'assistant',
-            content: `Error: ${event.content || 'Codex CLI request failed'}`,
+            content: `Error: ${event.content || 'Claude CLI request failed'}`,
             timestamp,
             requestId: requestKey,
           },
@@ -248,7 +248,7 @@ export function Chat() {
                   </div>
                   <p className="text-xs text-gray-500 truncate">{agent.status.toLowerCase()}</p>
                 </div>
-                <div className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium shrink-0" title="Local Codex CLI runtime">CLI</div>
+                <div className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium shrink-0" title="Local Claude CLI runtime">CLI</div>
               </button>
             ))
           )}
@@ -267,7 +267,7 @@ export function Chat() {
               <div>
                 <h2 className="text-white font-semibold">{selectedAgent.displayName}</h2>
                 <p className="text-xs text-gray-500">
-                  Local Codex CLI runtime
+                  Local Claude CLI runtime
                   {selectedAgent.status === 'ONLINE' && ' \u2022 Online'}
                 </p>
               </div>
@@ -320,7 +320,7 @@ export function Chat() {
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Type a message for Codex CLI..."
+                  placeholder="Type a message for Claude CLI..."
                   disabled={sending}
                   rows={1}
                   className="flex-1 px-4 py-2.5 bg-surface-850 border border-white/10 rounded-xl text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500 resize-none disabled:opacity-50"

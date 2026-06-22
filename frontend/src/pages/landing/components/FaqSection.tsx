@@ -31,7 +31,7 @@ const faqs: FaqItem[] = [
   {
     question: 'What LLM models does Nexus support?',
     answer:
-      'Nexus uses the locally installed Codex CLI runtime for agent work. Agents run under the project workflow session and use the user authentication already available through the local Codex CLI, so Nexus does not ask for provider API keys during agent setup.',
+      'Nexus uses the locally installed Claude CLI runtime for agent work. Agents run under the project workflow session and use the user authentication already available through the local Claude CLI, so Nexus does not ask for provider API keys during agent setup.',
   },
   {
     question: 'How does AI agent orchestration work in Nexus?',

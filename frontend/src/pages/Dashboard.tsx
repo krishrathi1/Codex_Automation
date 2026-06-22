@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Bot, CheckCircle2, Clock3, FolderKanban, MessageSquare, Plus, RefreshCw } from 'lucide-react';
+import { Bot, CheckCircle2, Clock3, FolderKanban, MessageSquare, Plus, RefreshCw, Send, Sparkles, Trash2 } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn, timeAgo } from '@/lib/utils';
-import type { Board, BoardGroup, GithubRepositorySummary, Task, VercelProjectSummary } from '@/types';
+import type { AgentDesignProposalAgent, Board, BoardGroup, GithubRepositorySummary, Task, VercelProjectSummary } from '@/types';
 
 interface ProductionBoard extends Board {
   boardGroup?: { id: string; name: string } | null;
@@ -60,8 +60,33 @@ export function Dashboard() {
       boardGroupId: data.boardGroupId || undefined,
       integrationScope: data.integrationScope,
     }) as ProductionBoard;
+
+    // Provision any agents the user designed in the chat, then attach them to the board.
+    const failed: string[] = [];
+    for (const [index, spec] of (data.agents ?? []).entries()) {
+      const displayName = spec.displayName.trim();
+      if (!displayName) continue;
+      const slug = displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'agent';
+      try {
+        const agent = await api.agents.create({
+          name: `${slug}-${index + 1}-${Math.random().toString(36).slice(2, 7)}`,
+          displayName,
+          description: spec.role?.trim() || displayName,
+          soulMd: spec.persona?.trim() || undefined,
+          enabled: true,
+        }) as { id: string };
+        await api.boards.addAgent(board.id, { agentId: agent.id });
+      } catch {
+        failed.push(displayName);
+      }
+    }
+
     setBoards(prev => [board, ...prev]);
     setShowCreate(false);
+    if (failed.length > 0) {
+      // Board was created; surface which agents couldn't be provisioned.
+      window.alert(`Group created, but these agents failed to provision: ${failed.join(', ')}. You can add them from the board.`);
+    }
     navigate(`/production/${board.id}`);
   }
 
@@ -295,6 +320,7 @@ interface CreateProductionGroupData {
     githubRepo?: GithubRepositorySummary;
     vercelProject?: VercelProjectSummary;
   };
+  agents?: AgentDesignProposalAgent[];
 }
 
 function CreateProductionGroupModal({
@@ -321,6 +347,61 @@ function CreateProductionGroupModal({
   const [vercelProjectId, setVercelProjectId] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Agent Designer chat state (ephemeral — lives only while the modal is open).
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([
+    {
+      role: 'assistant',
+      content:
+        "Hi! Tell me what this production group should do and what kind of agents you imagine. I'll ask a few questions, then propose a set of agents you can review and edit.",
+    },
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [proposedAgents, setProposedAgents] = useState<AgentDesignProposalAgent[]>([]);
+
+  async function sendChat() {
+    const text = chatInput.trim();
+    if (!text || chatBusy) return;
+    const nextMessages = [...chatMessages, { role: 'user' as const, content: text }];
+    setChatMessages(nextMessages);
+    setChatInput('');
+    setChatBusy(true);
+    setChatError(null);
+    try {
+      const res = await api.agentDesigner.message(nextMessages);
+      setChatMessages(prev => [...prev, { role: 'assistant', content: res.reply }]);
+      if (res.proposal) {
+        const g = res.proposal.group ?? {};
+        // Fill form fields only where the user hasn't already entered something.
+        if (g.name && !name.trim()) setName(g.name);
+        if (g.objective && !objective.trim()) setObjective(g.objective);
+        if (g.description && !description.trim()) setDescription(g.description);
+        if (g.mode) setBoardType(g.mode);
+        if (typeof g.maxAgents === 'number' && Number.isFinite(g.maxAgents)) {
+          setMaxAgents(Math.min(50, Math.max(1, Math.round(g.maxAgents))));
+        }
+        if (res.proposal.agents.length > 0) setProposedAgents(res.proposal.agents);
+      }
+    } catch (err) {
+      setChatError((err as Error).message);
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
+  function updateProposedAgent(index: number, patch: Partial<AgentDesignProposalAgent>) {
+    setProposedAgents(prev => prev.map((a, i) => (i === index ? { ...a, ...patch } : a)));
+  }
+
+  function removeProposedAgent(index: number) {
+    setProposedAgents(prev => prev.filter((_, i) => i !== index));
+  }
+
+  function addProposedAgent() {
+    setProposedAgents(prev => [...prev, { displayName: '', role: '', persona: '' }]);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -378,6 +459,9 @@ function CreateProductionGroupModal({
           ...(githubRepoFullName && { githubRepo: repos.find(repo => repo.fullName === githubRepoFullName) }),
           ...(vercelProjectId && { vercelProject: projects.find(project => project.id === vercelProjectId) }),
         },
+        agents: proposedAgents
+          .map(a => ({ displayName: a.displayName.trim(), role: a.role.trim(), persona: a.persona.trim() }))
+          .filter(a => a.displayName),
       });
     } catch (err) {
       setError((err as Error).message);
@@ -387,24 +471,86 @@ function CreateProductionGroupModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="w-full max-w-xl rounded-lg border border-white/10 bg-surface-850 p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
-        <div className="mb-5 flex items-start justify-between gap-4">
+      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-white/10 bg-surface-850 shadow-2xl" onClick={event => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
           <div>
             <h3 className="text-lg font-semibold text-white">New Production Group</h3>
-            <p className="mt-1 text-sm text-gray-500">Create a workroom for sub-agents and Mother Chat.</p>
+            <p className="mt-1 text-sm text-gray-500">Describe what you want on the left — design the agents, then review and create.</p>
           </div>
           <button onClick={onClose} className="rounded-lg p-1 text-gray-500 transition-colors hover:bg-white/5 hover:text-white">
             x
           </button>
         </div>
 
-        {error && (
-          <div className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-            {error}
+        <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2">
+          {/* Left: Agent Designer chat */}
+          <div className="flex min-h-0 flex-col border-b border-white/10 md:border-b-0 md:border-r">
+            <div className="flex items-center gap-2 px-5 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
+              <Sparkles className="h-4 w-4 text-nexus-400" />
+              Agent Designer
+            </div>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 pb-4">
+              {chatMessages.map((msg, i) => (
+                <div key={i} className={cn('flex', msg.role === 'user' ? 'justify-end' : 'justify-start')}>
+                  <div
+                    className={cn(
+                      'max-w-[85%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm',
+                      msg.role === 'user'
+                        ? 'bg-nexus-600 text-white'
+                        : 'border border-white/10 bg-surface-900 text-gray-200',
+                    )}
+                  >
+                    {msg.content}
+                  </div>
+                </div>
+              ))}
+              {chatBusy && (
+                <div className="flex justify-start">
+                  <div className="rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-gray-500">
+                    Thinking…
+                  </div>
+                </div>
+              )}
+              {chatError && (
+                <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                  {chatError}
+                </div>
+              )}
+            </div>
+            <div className="border-t border-white/10 p-3">
+              <div className="flex items-end gap-2">
+                <textarea
+                  value={chatInput}
+                  onChange={event => setChatInput(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault();
+                      void sendChat();
+                    }
+                  }}
+                  rows={2}
+                  placeholder="e.g. Watch my Vercel deploys and auto-fix build failures"
+                  className="min-h-[42px] flex-1 resize-none rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-nexus-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => void sendChat()}
+                  disabled={!chatInput.trim() || chatBusy}
+                  className="inline-flex h-[42px] items-center justify-center rounded-lg bg-nexus-600 px-3 text-white transition-colors hover:bg-nexus-500 disabled:opacity-50"
+                >
+                  <Send className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
           </div>
-        )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Right: group form + proposed agents */}
+          <form onSubmit={handleSubmit} className="min-h-0 space-y-4 overflow-y-auto p-6">
+            {error && (
+              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                {error}
+              </div>
+            )}
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500">Name</label>
             <input
@@ -526,6 +672,63 @@ function CreateProductionGroupModal({
             </div>
           </div>
 
+          <div className="rounded-lg border border-white/5 bg-surface-900 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500">
+                Proposed agents{proposedAgents.length > 0 ? ` (${proposedAgents.length})` : ''}
+              </label>
+              <button
+                type="button"
+                onClick={addProposedAgent}
+                className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] text-gray-300 transition-colors hover:bg-white/5"
+              >
+                <Plus className="h-3 w-3" />
+                Add
+              </button>
+            </div>
+            {proposedAgents.length === 0 ? (
+              <p className="text-xs text-gray-600">
+                Chat with the Agent Designer on the left to propose agents — they'll appear here as editable cards.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {proposedAgents.map((agent, index) => (
+                  <div key={index} className="rounded-lg border border-white/10 bg-surface-850 p-3">
+                    <div className="mb-2 flex items-center gap-2">
+                      <input
+                        value={agent.displayName}
+                        onChange={event => updateProposedAgent(index, { displayName: event.target.value })}
+                        placeholder="Agent name"
+                        className="flex-1 rounded-lg border border-white/10 bg-surface-900 px-2 py-1.5 text-sm font-medium text-white outline-none transition-colors focus:border-nexus-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeProposedAgent(index)}
+                        className="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-white/5 hover:text-red-300"
+                        aria-label="Remove agent"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <input
+                      value={agent.role}
+                      onChange={event => updateProposedAgent(index, { role: event.target.value })}
+                      placeholder="Role (short label)"
+                      className="mb-2 w-full rounded-lg border border-white/10 bg-surface-900 px-2 py-1.5 text-xs text-gray-200 outline-none transition-colors focus:border-nexus-500"
+                    />
+                    <textarea
+                      value={agent.persona}
+                      onChange={event => updateProposedAgent(index, { persona: event.target.value })}
+                      placeholder="Persona / soul — who this agent is and what it does"
+                      rows={3}
+                      className="w-full resize-none rounded-lg border border-white/10 bg-surface-900 px-2 py-1.5 text-xs text-gray-300 outline-none transition-colors focus:border-nexus-500"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-gray-400 transition-colors hover:text-white">
               Cancel
@@ -536,10 +739,11 @@ function CreateProductionGroupModal({
               className="inline-flex items-center gap-2 rounded-lg bg-nexus-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-nexus-500 disabled:opacity-50"
             >
               <Plus className="h-4 w-4" />
-              {saving ? 'Creating...' : 'Create'}
+              {saving ? 'Creating...' : proposedAgents.length > 0 ? `Create + ${proposedAgents.length} agent${proposedAgents.length > 1 ? 's' : ''}` : 'Create'}
             </button>
           </div>
         </form>
+        </div>
       </div>
     </div>
   );

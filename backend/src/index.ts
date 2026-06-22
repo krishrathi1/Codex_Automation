@@ -39,6 +39,7 @@ import boardGroupMemoryRoutes from './routes/board-group-memory.js';
 import boardMemoryRoutes from './routes/board-memory.js';
 import soulTemplateRoutes from './routes/soul-templates.js';
 import motherChatRoutes from './routes/mother-chat.js';
+import agentDesignerRoutes from './routes/agent-designer.js';
 import errorEventRoutes from './routes/error-events.js';
 import mutualFundMonitorRoutes from './routes/mutual-fund-monitor.js';
 import { connectAllGateways, setSocketIO } from './services/gateway.service.js';
@@ -149,6 +150,7 @@ app.use('/api/board-groups', requireAuth, boardGroupMemoryRoutes);
 app.use('/api/boards', requireAuth, boardMemoryRoutes);
 app.use('/api/soul-templates', requireAuth, soulTemplateRoutes);
 app.use('/api/mother-chat', requireAuth, motherChatRoutes);
+app.use('/api/agent-designer', requireAuth, agentDesignerRoutes);
 app.use('/api/error-events', requireAuth, errorEventRoutes);
 app.use('/api/v1/error-events', requireApiKey, errorEventRoutes);
 app.use('/api/mutual-fund-monitor', requireAuth, mutualFundMonitorRoutes);
@@ -233,12 +235,9 @@ async function start() {
     const logPayload = {
       selectedCommand: diagnostics.selectedCommand,
       configuredCommand: diagnostics.configuredCommand,
-      expectedMacosCommand: diagnostics.expectedMacosCommand,
       installationOk: diagnostics.installation.ok,
       authenticationOk: diagnostics.authentication.ok,
       authDetails: diagnostics.authentication.details,
-      sandbox: diagnostics.sandbox,
-      skipGitRepoCheck: diagnostics.skipGitRepoCheck,
     };
     if (diagnostics.installation.ok && diagnostics.authentication.ok) {
       logger.info(logPayload, 'Claude CLI runtime enabled; skipping gateway auto-connect');

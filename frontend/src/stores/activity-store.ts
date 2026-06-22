@@ -9,12 +9,13 @@ interface ActivityStore {
   filterAgent: string | null;
   filterType: ActivityType | null;
   fetchActivities: (params?: { agentId?: string; type?: string; limit?: number }) => Promise<void>;
+  clearActivities: () => Promise<void>;
   addActivity: (activity: Activity) => void;
   setFilterAgent: (agentId: string | null) => void;
   setFilterType: (type: ActivityType | null) => void;
 }
 
-export const useActivityStore = create<ActivityStore>((set) => ({
+export const useActivityStore = create<ActivityStore>((set, get) => ({
   activities: [],
   total: 0,
   loading: false,
@@ -25,6 +26,16 @@ export const useActivityStore = create<ActivityStore>((set) => ({
     set({ loading: true });
     const result = await api.activities.list({ limit: 100, ...params });
     set({ activities: result.activities, total: result.total, loading: false });
+  },
+
+  clearActivities: async () => {
+    const { filterAgent, filterType } = get();
+    set({ loading: true });
+    await api.activities.clear({
+      agentId: filterAgent || undefined,
+      type: filterType || undefined,
+    });
+    set({ activities: [], total: 0, loading: false });
   },
 
   addActivity: (activity) => {

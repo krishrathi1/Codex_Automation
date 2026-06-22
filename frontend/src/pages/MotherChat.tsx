@@ -93,7 +93,7 @@ function StartA2AModal({
     {
       displayName: 'Backend Ops Engineer',
       role: 'Backend operations',
-      work: 'Check backend health, database state, Codex CLI runtime, sessions, and API blockers.',
+      work: 'Check backend health, database state, Claude CLI runtime, sessions, and API blockers.',
       avatar: 'B',
       isLead: true,
     },
@@ -648,7 +648,7 @@ export function MotherChat() {
   const pageTitle = scopedBoard ? `${scopedBoard.name} Mother Chat` : 'Mother Chat';
   const pageSubtitle = scopedBoard
     ? scopedBoard.objective || scopedBoard.description || 'Production group context'
-    : 'Local Codex CLI with Nexus DB context';
+    : 'Local Claude CLI with Nexus DB context';
   const agentConversations = (context?.messages ?? [])
     .filter(message => message.conversationKind === 'agent_agent' || message.from !== message.to)
     .slice(-6);
@@ -806,7 +806,7 @@ export function MotherChat() {
                   <Database className="h-6 w-6" />
                 </div>
                 <h2 className="text-base font-semibold text-white">Ask about agent operations</h2>
-                <p className="mt-1 text-sm text-gray-500">Mother Chat reads recent Nexus records before each Codex run.</p>
+                <p className="mt-1 text-sm text-gray-500">Mother Chat reads recent Nexus records before each Claude run.</p>
               </div>
             </div>
           ) : (
@@ -914,7 +914,7 @@ export function MotherChat() {
           </section>
 
           <section>
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Local Codex Runs</h3>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Local Claude Runs</h3>
             <div className="space-y-2">
               {(context?.agentRunJobs ?? []).slice(0, 6).map(job => (
                 <div key={job.id} className="rounded-lg border border-sky-500/10 bg-sky-500/5 px-3 py-2">
@@ -932,11 +932,11 @@ export function MotherChat() {
                   </div>
                   <p className="mt-1 line-clamp-2 text-xs leading-5 text-gray-400">{job.summary || job.error || job.prompt}</p>
                   <p className="mt-1 truncate text-[10px] text-sky-300/70">
-                    {job.codexSessionId ? `codex ${job.codexSessionId}` : `job ${job.id}`}
+                    {job.codexSessionId ? `claude ${job.codexSessionId}` : `job ${job.id}`}
                   </p>
                 </div>
               ))}
-              {context && (context.agentRunJobs ?? []).length === 0 && <p className="text-sm text-gray-500">No local Codex runs</p>}
+              {context && (context.agentRunJobs ?? []).length === 0 && <p className="text-sm text-gray-500">No local Claude runs</p>}
             </div>
           </section>
 

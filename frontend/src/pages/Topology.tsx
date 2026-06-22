@@ -529,7 +529,7 @@ function EdgeDetailPanel({
   const target = nodeMap.get(edge.target);
   const color = EDGE_COLORS[edge.kind || 'system'] ?? EDGE_COLORS.system;
   const chips = [
-    { label: 'Codex', values: edge.codexSessionIds ?? [] },
+    { label: 'Claude', values: edge.codexSessionIds ?? [] },
     { label: 'Sessions', values: edge.sessionIds ?? [] },
     { label: 'Active runs', values: edge.activeRunIds ?? [] },
     { label: 'Queued runs', values: edge.queuedRunIds ?? [] },

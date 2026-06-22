@@ -32,6 +32,21 @@ export async function getActivities(organizationId: string, options: {
   return { activities, total, limit, offset };
 }
 
+export async function clearActivities(organizationId: string, options: {
+  agentId?: string;
+  type?: ActivityType;
+} = {}) {
+  const { agentId, type } = options;
+
+  const where: Record<string, unknown> = { organizationId };
+  if (agentId) where.agentId = agentId;
+  if (type) where.type = type;
+
+  const { count } = await prisma.activity.deleteMany({ where });
+  logger.info({ organizationId, agentId, type, count }, 'Activities cleared');
+  return { count };
+}
+
 export async function createActivity(organizationId: string, data: {
   agentId: string;
   type: ActivityType;

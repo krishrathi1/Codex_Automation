@@ -44,7 +44,7 @@ function TraceJobPanel({ job }: { job: LiveBlackboardTraceJob }) {
           </p>
         </div>
         <p className="max-w-[260px] truncate text-[11px] text-gray-500">
-          {job.codexSessionId ? `Codex ${job.codexSessionId}` : job.id}
+          {job.codexSessionId ? `Claude ${job.codexSessionId}` : job.id}
         </p>
       </div>
 
