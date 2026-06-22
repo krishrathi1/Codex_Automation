@@ -4,6 +4,9 @@ import type { Server as SocketIOServer } from 'socket.io';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import * as activityService from './activity.service.js';
+import { getMonitorIntegrationCredentials } from './platform-integrations.service.js';
+import { getFileContent } from './github-api.service.js';
+import { extractRepoFilePaths, parseFileBlocks } from './autofix-parsing.js';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -200,18 +203,54 @@ async function ensurePipelineAgents(organizationId: string, board: Board, worksp
   return { debugAgent, reviewAgent, commitAgent };
 }
 
-function composeDebugPrompt(errorEvent: ProductionErrorEvent, attempt = 0, reviewOutput?: string) {
+const MAX_CONTEXT_FILES = 8;
+
+/**
+ * Parse likely file paths out of the captured error and fetch their current
+ * contents from GitHub so the Debug agent can reason over real source instead
+ * of a local clone. Returns a prompt-ready string ('' when nothing is found).
+ */
+async function fetchErrorFileContext(organizationId: string, errorEvent: ProductionErrorEvent): Promise<string> {
+  const creds = await getMonitorIntegrationCredentials(organizationId).catch(() => null);
+  const github = creds?.github;
+  if (!github?.token) return '';
+
+  const haystack = [errorEvent.message, errorEvent.stack, errorEvent.title].filter(Boolean).join('\n');
+  const paths = extractRepoFilePaths(haystack).slice(0, MAX_CONTEXT_FILES);
+  if (paths.length === 0) return '';
+
+  const sections: string[] = [];
+  for (const p of paths) {
+    const file = await getFileContent(github, p, github.branch || 'main').catch(() => null);
+    if (file) sections.push(`===FILE: ${p}===\n${file.content}\n===END FILE===`);
+  }
+  if (sections.length === 0) return '';
+
+  return [
+    '',
+    'CURRENT REPOSITORY FILES (fetched from GitHub — these are the live contents):',
+    ...sections,
+  ].join('\n');
+}
+
+function composeDebugPrompt(errorEvent: ProductionErrorEvent, attempt = 0, reviewOutput?: string, fileContext = '') {
   return [
     'PIPELINE ROLE: debug',
     `PRODUCTION_ERROR_EVENT_ID: ${errorEvent.id}`,
     `REWORK_ATTEMPT: ${attempt}`,
     '',
     'A production website/integration error was captured by Nexus.',
-    'You are running INSIDE the target repository clone (your current working directory). Edit the real files here.',
-    'Use the local workspace and local Claude CLI runtime only. Do not ask for API keys.',
-    'Investigate and fix the issue if the evidence is sufficient. Do not commit or push.',
-    'Return an audit-ready report with files touched, commands run, confidence, and remaining risk.',
+    'You do NOT have a local checkout. Use ONLY the repository file contents provided below.',
+    'Do not run git, do not access the filesystem, do not ask for API keys.',
+    'Determine the fix, then output every changed file IN FULL using this exact format:',
+    '===FILE: relative/path/from/repo/root.ext===',
+    '<the complete new file contents>',
+    '===END FILE===',
+    'To delete a file, emit: ===DELETE: relative/path===',
+    'Only emit files you actually changed. Emit complete files, never partial snippets.',
+    'After the blocks, add a short audit note: root cause, confidence, and remaining risk.',
     reviewOutput ? `Previous review feedback:\n${reviewOutput}` : '',
+    fileContext,
     '',
     'Captured error:',
     JSON.stringify({
@@ -345,6 +384,23 @@ export async function ingestProductionErrorEvent(
   const fingerprint = fingerprintFor(input);
   const title = truncate(input.title || input.message.split(/\r?\n/)[0] || 'Production error', 180);
 
+  // Dedup: if the same error (by fingerprint) is already being worked on (not yet
+  // COMPLETED/FAILED), don't queue it again. Keeps the continuous monitor from
+  // re-ingesting the same deployment failure on every poll.
+  const inFlight = await prisma.productionErrorEvent.findFirst({
+    where: {
+      organizationId,
+      fingerprint,
+      status: { notIn: ['COMPLETED', 'FAILED'] },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (inFlight) {
+    const err = new Error(`Production error already exists and is in progress (${inFlight.status})`) as Error & { statusCode?: number };
+    err.statusCode = 409;
+    throw err;
+  }
+
   const errorEvent = await prisma.productionErrorEvent.create({
     data: {
       organizationId,
@@ -394,13 +450,14 @@ export async function ingestProductionErrorEvent(
     },
   });
 
+  const debugFileContext = await fetchErrorFileContext(organizationId, errorEvent);
   const debugRunJob = await enqueuePipelineJob({
     organizationId,
     boardId: board.id,
     taskId: task.id,
     threadId: thread.id,
     agentId: debugAgent.id,
-    prompt: composeDebugPrompt(errorEvent),
+    prompt: composeDebugPrompt(errorEvent, 0, undefined, debugFileContext),
     role: 'debug',
     productionErrorEventId: errorEvent.id,
   });
