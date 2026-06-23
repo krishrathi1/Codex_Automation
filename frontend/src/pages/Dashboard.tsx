@@ -4,7 +4,7 @@ import { Bot, CheckCircle2, Clock3, FolderKanban, MessageSquare, Plus, RefreshCw
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn, timeAgo } from '@/lib/utils';
-import type { AgentDesignProposal, AgentDesignProposalAgent, Board, BoardGroup, GithubRepositorySummary, Task, VercelProjectSummary } from '@/types';
+import type { AgentDesignProposal, AgentDesignProposalAgent, Board, BoardGroup, BitbucketRepositorySummary, GithubRepositorySummary, Task, VercelProjectSummary } from '@/types';
 
 interface ProductionBoard extends Board {
   boardGroup?: { id: string; name: string } | null;
@@ -56,6 +56,7 @@ export function Dashboard() {
       description: data.description,
       objective: data.objective,
       boardType: data.boardType,
+      mode: data.mode,
       maxAgents: data.maxAgents,
       boardGroupId: data.boardGroupId || undefined,
       integrationScope: data.integrationScope,
@@ -314,11 +315,15 @@ interface CreateProductionGroupData {
   description?: string;
   objective?: string;
   boardType: string;
+  mode: 'AUTOMATIC' | 'MANUAL';
   maxAgents: number;
   boardGroupId?: string;
   integrationScope?: {
     githubRepo?: GithubRepositorySummary;
     vercelProject?: VercelProjectSummary;
+    bitbucketRepo?: BitbucketRepositorySummary;
+    signozService?: string;
+    primaryProvider?: 'github' | 'bitbucket';
   };
   agents?: AgentDesignProposalAgent[];
 }
@@ -340,16 +345,22 @@ function CreateProductionGroupModal({
   const [descriptionManuallyEdited, setDescriptionManuallyEdited] = useState(false);
   const [boardType, setBoardType] = useState('continuous');
   const [boardTypeManuallyEdited, setBoardTypeManuallyEdited] = useState(false);
+  const [mode, setMode] = useState<'AUTOMATIC' | 'MANUAL'>('AUTOMATIC');
   const [maxAgents, setMaxAgents] = useState(5);
   const [maxAgentsManuallyEdited, setMaxAgentsManuallyEdited] = useState(false);
   const [boardGroupId, setBoardGroupId] = useState('');
   const [repos, setRepos] = useState<GithubRepositorySummary[]>([]);
   const [projects, setProjects] = useState<VercelProjectSummary[]>([]);
+  const [bitbucketRepos, setBitbucketRepos] = useState<BitbucketRepositorySummary[]>([]);
   const [resourcesLoading, setResourcesLoading] = useState(true);
   const [githubResourcesError, setGithubResourcesError] = useState<string | null>(null);
   const [vercelResourcesError, setVercelResourcesError] = useState<string | null>(null);
+  const [bitbucketResourcesError, setBitbucketResourcesError] = useState<string | null>(null);
   const [githubRepoFullName, setGithubRepoFullName] = useState('');
   const [vercelProjectId, setVercelProjectId] = useState('');
+  const [bitbucketRepoFullName, setBitbucketRepoFullName] = useState('');
+  const [primaryProvider, setPrimaryProvider] = useState<'github' | 'bitbucket'>('github');
+  const [signozService, setSignozService] = useState('');
 
   // Agent Designer chat state (ephemeral — lives only while the modal is open).
   const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([
@@ -430,11 +441,15 @@ function CreateProductionGroupModal({
         objective: resolvedObjective || undefined,
         description: resolvedDescription || undefined,
         boardType: resolvedMode,
+        mode,
         maxAgents: resolvedMaxAgents,
         boardGroupId: boardGroupId || undefined,
         integrationScope: {
+          primaryProvider,
           ...(githubRepoFullName && { githubRepo: repos.find(repo => repo.fullName === githubRepoFullName) }),
           ...(vercelProjectId && { vercelProject: projects.find(project => project.id === vercelProjectId) }),
+          ...(bitbucketRepoFullName && { bitbucketRepo: bitbucketRepos.find(repo => repo.fullName === bitbucketRepoFullName) }),
+          ...(signozService.trim() && { signozService: signozService.trim() }),
         },
         agents,
       });
@@ -455,15 +470,19 @@ function CreateProductionGroupModal({
       setResourcesLoading(true);
       setGithubResourcesError(null);
       setVercelResourcesError(null);
+      setBitbucketResourcesError(null);
       try {
         const settings = await api.org.integrationSettings();
-        const [repoResult, projectResult] = await Promise.allSettled([
+        const [repoResult, projectResult, bitbucketResult] = await Promise.allSettled([
           settings.github.configured
             ? api.org.githubRepos()
             : Promise.resolve([] as GithubRepositorySummary[]),
           settings.vercel.configured
             ? api.org.vercelProjects()
             : Promise.resolve([] as VercelProjectSummary[]),
+          settings.bitbucket.configured
+            ? api.org.bitbucketRepos()
+            : Promise.resolve([] as BitbucketRepositorySummary[]),
         ]);
         if (cancelled) return;
         if (repoResult.status === 'fulfilled') {
@@ -472,11 +491,17 @@ function CreateProductionGroupModal({
         if (projectResult.status === 'fulfilled') {
           setProjects(projectResult.value as VercelProjectSummary[]);
         }
+        if (bitbucketResult.status === 'fulfilled') {
+          setBitbucketRepos(bitbucketResult.value as BitbucketRepositorySummary[]);
+        }
         if (repoResult.status === 'rejected') {
           setGithubResourcesError(repoResult.reason instanceof Error ? repoResult.reason.message : 'Failed to load GitHub repositories');
         }
         if (projectResult.status === 'rejected') {
           setVercelResourcesError(projectResult.reason instanceof Error ? projectResult.reason.message : 'Failed to load Vercel projects');
+        }
+        if (bitbucketResult.status === 'rejected') {
+          setBitbucketResourcesError(bitbucketResult.reason instanceof Error ? bitbucketResult.reason.message : 'Failed to load Bitbucket repositories');
         }
       } finally {
         if (!cancelled) setResourcesLoading(false);
@@ -597,9 +622,23 @@ function CreateProductionGroupModal({
             />
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500">Mode</label>
+              <select
+                value={mode}
+                onChange={event => setMode(event.target.value === 'MANUAL' ? 'MANUAL' : 'AUTOMATIC')}
+                className="w-full rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-nexus-500"
+              >
+                <option value="AUTOMATIC">Automatic</option>
+                <option value="MANUAL">Manual</option>
+              </select>
+              <p className="mt-1 text-[11px] text-gray-600">
+                {mode === 'MANUAL' ? 'You watch logs and trigger fixes.' : 'Auto-fixes every captured error.'}
+              </p>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500">Type</label>
               <select
                 value={boardType}
                 onChange={event => { setBoardType(event.target.value); setBoardTypeManuallyEdited(true); }}
@@ -640,6 +679,26 @@ function CreateProductionGroupModal({
             <div className="mb-3 flex items-center justify-between gap-3">
               <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500">Connected resources</label>
               {resourcesLoading && <span className="text-[11px] text-gray-600">Loading...</span>}
+            </div>
+            <div className="mb-3">
+              <label className="mb-1 block text-xs font-medium text-gray-400">Primary provider (where fixes are pushed)</label>
+              <div className="grid grid-cols-2 gap-2">
+                {(['github', 'bitbucket'] as const).map(p => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setPrimaryProvider(p)}
+                    className={cn(
+                      'rounded-lg border px-3 py-2 text-center text-sm font-medium transition-colors',
+                      primaryProvider === p
+                        ? 'border-nexus-500/60 bg-nexus-600/15 text-white'
+                        : 'border-white/10 bg-surface-850 text-gray-400 hover:bg-white/5',
+                    )}
+                  >
+                    {p === 'github' ? 'GitHub' : 'Bitbucket'}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <div>
@@ -683,6 +742,37 @@ function CreateProductionGroupModal({
                     <Link to="/settings" className="text-amber-100 underline">Settings</Link>
                   </p>
                 )}
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-400">Bitbucket repository</label>
+                <select
+                  value={bitbucketRepoFullName}
+                  onChange={event => setBitbucketRepoFullName(event.target.value)}
+                  className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-nexus-500"
+                >
+                  <option value="">No repository</option>
+                  {bitbucketRepos.map(repo => (
+                    <option key={repo.fullName} value={repo.fullName}>
+                      {repo.fullName}{repo.isPrivate ? ' (private)' : ''}
+                    </option>
+                  ))}
+                </select>
+                {bitbucketResourcesError && (
+                  <p className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                    {bitbucketResourcesError}{' '}
+                    <Link to="/settings" className="text-amber-100 underline">Settings</Link>
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-400">SigNoz service (for logs)</label>
+                <input
+                  value={signozService}
+                  onChange={event => setSignozService(event.target.value)}
+                  placeholder="e.g. mutual-fund-api"
+                  className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500"
+                />
+                <p className="mt-1 text-[11px] text-gray-600">Scopes this group's live logs (used by the Manual tab).</p>
               </div>
             </div>
           </div>

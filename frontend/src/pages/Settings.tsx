@@ -3,7 +3,7 @@ import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn, timeAgo } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
-import type { GithubRepositorySummary, Organization, OrgMember, OrgApiKey, PlatformIntegrationSettings, VercelProjectSummary } from '@/types';
+import type { GithubRepositorySummary, BitbucketRepositorySummary, Organization, OrgMember, OrgApiKey, PlatformIntegrationSettings, VercelProjectSummary } from '@/types';
 
 type Tab = 'organization' | 'members' | 'api-keys' | 'integrations';
 type OrgRole = 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER';
@@ -21,8 +21,6 @@ const INVITE_ROLES: OrgRole[] = ['ADMIN', 'MEMBER', 'VIEWER'];
 const EMPTY_GITHUB_SETTINGS: PlatformIntegrationSettings['github'] = {
   configured: false,
   tokenMasked: null,
-  repo: null,
-  branch: null,
   updatedAt: null,
 };
 
@@ -37,6 +35,14 @@ const EMPTY_SIGNOZ_SETTINGS: PlatformIntegrationSettings['signoz'] = {
   configured: false,
   tokenMasked: null,
   endpoint: null,
+  updatedAt: null,
+};
+
+const EMPTY_BITBUCKET_SETTINGS: PlatformIntegrationSettings['bitbucket'] = {
+  configured: false,
+  tokenMasked: null,
+  username: null,
+  workspace: null,
   updatedAt: null,
 };
 
@@ -55,6 +61,10 @@ function normalizeIntegrationSettings(
     signoz: {
       ...EMPTY_SIGNOZ_SETTINGS,
       ...(settings?.signoz ?? {}),
+    },
+    bitbucket: {
+      ...EMPTY_BITBUCKET_SETTINGS,
+      ...(settings?.bitbucket ?? {}),
     },
   };
 }
@@ -257,15 +267,16 @@ function OrganizationTab() {
 function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
   const [settings, setSettings] = useState<PlatformIntegrationSettings | null>(null);
   const [githubAccessToken, setGithubAccessToken] = useState('');
-  const [githubRepo, setGithubRepo] = useState('');
-  const [githubBranch, setGithubBranch] = useState('');
   const [vercelAccessToken, setVercelAccessToken] = useState('');
   const [vercelTeamId, setVercelTeamId] = useState('');
   const [signozEndpoint, setSignozEndpoint] = useState('');
   const [signozApiKey, setSignozApiKey] = useState('');
+  const [bitbucketAppPassword, setBitbucketAppPassword] = useState('');
+  const [bitbucketUsername, setBitbucketUsername] = useState('');
+  const [bitbucketWorkspace, setBitbucketWorkspace] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [checking, setChecking] = useState<'github' | 'vercel' | 'signoz' | null>(null);
+  const [checking, setChecking] = useState<'github' | 'vercel' | 'signoz' | 'bitbucket' | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const fetchSettings = useCallback(async () => {
@@ -273,10 +284,10 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
       const data = await api.org.integrationSettings();
       const normalized = normalizeIntegrationSettings(data);
       setSettings(normalized);
-      setGithubRepo(normalized.github.repo || '');
-      setGithubBranch(normalized.github.branch || '');
       setVercelTeamId(normalized.vercel.teamId || '');
       setSignozEndpoint(normalized.signoz.endpoint || '');
+      setBitbucketUsername(normalized.bitbucket.username || '');
+      setBitbucketWorkspace(normalized.bitbucket.workspace || '');
     } catch (err) {
       setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to load integration settings' });
     } finally {
@@ -302,21 +313,23 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
     try {
       const updated = await api.org.updateIntegrationSettings({
         githubAccessToken: githubAccessToken.trim() || undefined,
-        githubRepo: githubRepo.trim() || null,
-        githubBranch: githubBranch.trim() || null,
         vercelAccessToken: vercelAccessToken.trim() || undefined,
         vercelTeamId: vercelTeamId.trim() || null,
         signozApiKey: signozApiKey.trim() || undefined,
         signozEndpoint: signozEndpoint.trim() || null,
+        bitbucketAppPassword: bitbucketAppPassword.trim() || undefined,
+        bitbucketUsername: bitbucketUsername.trim() || null,
+        bitbucketWorkspace: bitbucketWorkspace.trim() || null,
       });
       const normalizedUpdated = normalizeIntegrationSettings(updated);
       setSettings(normalizedUpdated);
-      setGithubRepo(normalizedUpdated.github.repo || '');
-      setGithubBranch(normalizedUpdated.github.branch || '');
       setSignozEndpoint(normalizedUpdated.signoz.endpoint || '');
+      setBitbucketUsername(normalizedUpdated.bitbucket.username || '');
+      setBitbucketWorkspace(normalizedUpdated.bitbucket.workspace || '');
       setGithubAccessToken('');
       setVercelAccessToken('');
       setSignozApiKey('');
+      setBitbucketAppPassword('');
       setMessage({ type: 'success', text: 'Integration settings saved' });
     } catch (err) {
       setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to save integration settings' });
@@ -401,6 +414,38 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
     }
   };
 
+  const handleCheckBitbucket = async () => {
+    setChecking('bitbucket');
+    setMessage(null);
+    try {
+      const repos = await api.org.bitbucketRepos() as BitbucketRepositorySummary[];
+      setMessage({ type: 'success', text: `Bitbucket connected: ${repos.length} repositories found` });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Bitbucket check failed' });
+    } finally {
+      setChecking(null);
+    }
+  };
+
+  const handleClearBitbucket = async () => {
+    if (!bitbucketSettings.configured || saving) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      const updated = await api.org.updateIntegrationSettings({
+        clearBitbucketAppPassword: true,
+      });
+      const norm = normalizeIntegrationSettings(updated);
+      setSettings(norm);
+      setBitbucketAppPassword('');
+      setMessage({ type: 'success', text: 'Bitbucket app password cleared' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to clear Bitbucket app password' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (loading) {
     return <div className="text-gray-500 text-sm">Loading integrations...</div>;
   }
@@ -408,6 +453,7 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
   const githubSettings = settings?.github ?? EMPTY_GITHUB_SETTINGS;
   const vercelSettings = settings?.vercel ?? EMPTY_VERCEL_SETTINGS;
   const signozSettings = settings?.signoz ?? EMPTY_SIGNOZ_SETTINGS;
+  const bitbucketSettings = settings?.bitbucket ?? EMPTY_BITBUCKET_SETTINGS;
 
   return (
     <div className="max-w-3xl">
@@ -455,24 +501,8 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
               placeholder={githubSettings.configured ? 'Paste a new token to replace' : 'ghp_...'}
               className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
             />
-            <label className="mb-1 mt-3 block text-xs font-medium text-gray-400">Repository</label>
-            <input
-              value={githubRepo}
-              onChange={event => setGithubRepo(event.target.value)}
-              disabled={!isAdmin}
-              placeholder="owner/repo (e.g. krishrathi1/Mutual-Fund-Co-Pilot-)"
-              className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
-            />
-            <label className="mb-1 mt-3 block text-xs font-medium text-gray-400">Branch</label>
-            <input
-              value={githubBranch}
-              onChange={event => setGithubBranch(event.target.value)}
-              disabled={!isAdmin}
-              placeholder="main"
-              className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
-            />
             <p className="mt-2 text-xs text-gray-500">
-              The repo the auto-fix pipeline monitors and pushes fixes to. Required for GitHub error detection and API-based commits.
+              Set the repo and branch per production group in Board Settings.
             </p>
           </div>
 
@@ -561,6 +591,63 @@ function IntegrationsTab({ isAdmin }: { isAdmin: boolean }) {
             />
             <p className="mt-2 text-xs text-gray-500">
               Nexus reads the production website's logs from SigNoz for the Logs tab and to auto-trigger fixes on production errors. Key from SigNoz → Settings → Service Accounts.
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-white/5 bg-surface-900 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-semibold text-white">Bitbucket</h4>
+                <p className="text-xs text-gray-500">{bitbucketSettings.configured ? (bitbucketSettings.username ? `@${bitbucketSettings.username}` : bitbucketSettings.tokenMasked) : 'Not connected'}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {bitbucketSettings.configured && (
+                  <button
+                    type="button"
+                    onClick={handleClearBitbucket}
+                    disabled={!isAdmin || saving}
+                    className="rounded-lg border border-red-500/20 px-3 py-1.5 text-xs text-red-300 transition-colors hover:bg-red-500/10 disabled:opacity-50"
+                  >
+                    Clear
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleCheckBitbucket}
+                  disabled={!bitbucketSettings.configured || checking === 'bitbucket'}
+                  className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:bg-white/5 disabled:opacity-50"
+                >
+                  {checking === 'bitbucket' ? 'Checking...' : 'Check'}
+                </button>
+              </div>
+            </div>
+            <label className="mb-1 block text-xs font-medium text-gray-400">Username or email</label>
+            <input
+              value={bitbucketUsername}
+              onChange={event => setBitbucketUsername(event.target.value)}
+              disabled={!isAdmin}
+              placeholder="API token → Atlassian email; app password → Bitbucket username"
+              className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
+            />
+            <label className="mb-1 mt-3 block text-xs font-medium text-gray-400">Workspace</label>
+            <input
+              value={bitbucketWorkspace}
+              onChange={event => setBitbucketWorkspace(event.target.value)}
+              disabled={!isAdmin}
+              placeholder="the part after bitbucket.org/ (e.g. blostem)"
+              className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
+            />
+            <label className="mb-1 mt-3 block text-xs font-medium text-gray-400">API token / app password</label>
+            <input
+              type="password"
+              value={bitbucketAppPassword}
+              onChange={event => setBitbucketAppPassword(event.target.value)}
+              disabled={!isAdmin}
+              placeholder={bitbucketSettings.configured ? 'Paste a new token to replace' : 'Bitbucket API token (or legacy app password)'}
+              className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500 disabled:opacity-50"
+            />
+            <p className="mt-2 text-xs text-gray-500">
+              Bitbucket is retiring app passwords — use an <strong>API token with scopes</strong> (Repositories: Read+Write, Pull requests: Read+Write). For an API token, enter your <strong>Atlassian account email</strong> above; for a legacy app password, enter your Bitbucket username. Set the repo and branch per production group in Board Settings.
             </p>
           </div>
         </div>

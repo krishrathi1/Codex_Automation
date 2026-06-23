@@ -1,8 +1,9 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
-import { RefreshCw, ArrowUpRight, ArrowDownRight, Minus, Coins, DollarSign, Gauge, CheckCircle2 } from 'lucide-react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { RefreshCw, ArrowUpRight, ArrowDownRight, Minus, Coins, DollarSign, Gauge, CheckCircle2, Zap } from 'lucide-react';
 import { Header } from '../components/layout/Header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { getSocket } from '@/lib/socket';
 import type { TokenUsage, MetricSnapshot } from '@/types';
 import {
   AreaChart,
@@ -82,6 +83,14 @@ function trendPct(series: number[]): number | null {
   return ((curr - prev) / prev) * 100;
 }
 
+interface LiveJobUsage {
+  jobId: string;
+  agentId: string;
+  inputTokens: number;
+  outputTokens: number;
+  updatedAt: number;
+}
+
 export function Metrics() {
   const [tokenUsage, setTokenUsage] = useState<TokenUsage[]>([]);
   const [tokenSummary, setTokenSummary] = useState<TokenSummary | null>(null);
@@ -89,6 +98,8 @@ export function Metrics() {
   const [metricsSummary, setMetricsSummary] = useState<MetricsSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [liveJobs, setLiveJobs] = useState<Map<string, LiveJobUsage>>(new Map());
+  const liveJobsRef = useRef<Map<string, LiveJobUsage>>(new Map());
 
   const fetchData = useCallback(async () => {
     setRefreshing(true);
@@ -112,6 +123,36 @@ export function Metrics() {
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Live token tracking via WebSocket
+  useEffect(() => {
+    const socket = getSocket();
+    const handleJobUpdate = (data: {
+      id?: string;
+      agentId?: string;
+      status?: string;
+      usage?: { inputTokens: number; outputTokens: number };
+    }) => {
+      const jobId = data.id;
+      if (!jobId) return;
+      const map = new Map(liveJobsRef.current);
+      if (data.status === 'COMPLETED' || data.status === 'FAILED') {
+        map.delete(jobId);
+      } else if (data.usage) {
+        map.set(jobId, {
+          jobId,
+          agentId: data.agentId ?? '',
+          inputTokens: data.usage.inputTokens,
+          outputTokens: data.usage.outputTokens,
+          updatedAt: Date.now(),
+        });
+      }
+      liveJobsRef.current = map;
+      setLiveJobs(new Map(map));
+    };
+    socket.on('agent-run-job:update', handleJobUpdate);
+    return () => { socket.off('agent-run-job:update', handleJobUpdate); };
+  }, []);
 
   // Unified 24h hourly series powering both the headline sparklines and the charts.
   const hourly = useMemo(() => {
@@ -161,6 +202,13 @@ export function Metrics() {
     const successRate = metrics.length ? Math.round((totalSucc / metrics.length) * 1000) / 10 : 0;
     return { totalTokens24h, totalCost24h, avgResponseTime, successRate, totalCalls };
   }, [hourly, metrics]);
+
+  const liveStats = useMemo(() => {
+    const jobs = Array.from(liveJobs.values());
+    const input = jobs.reduce((s, j) => s + j.inputTokens, 0);
+    const output = jobs.reduce((s, j) => s + j.outputTokens, 0);
+    return { activeRuns: jobs.length, inputTokens: input, outputTokens: output, total: input + output };
+  }, [liveJobs]);
 
   const costByAgent = useMemo(() => {
     if (!tokenSummary) return [];
@@ -220,6 +268,29 @@ export function Metrics() {
           </button>
         </div>
       </div>
+
+      {/* Live token ticker */}
+      {liveStats.activeRuns > 0 && (
+        <div className="mt-4 mb-2 flex items-center gap-3 rounded-xl border border-nexus-500/30 bg-nexus-500/10 px-4 py-3">
+          <span className="relative flex h-2.5 w-2.5 shrink-0">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-nexus-400 opacity-75" />
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-nexus-500" />
+          </span>
+          <Zap className="h-4 w-4 text-nexus-400" />
+          <span className="text-sm font-medium text-nexus-300">
+            {liveStats.activeRuns} active run{liveStats.activeRuns !== 1 ? 's' : ''}
+          </span>
+          <span className="text-xs text-gray-500">—</span>
+          <span className="text-sm tabular-nums text-white">
+            <span className="text-gray-400">in </span>{formatNumber(liveStats.inputTokens)}
+            <span className="mx-1 text-gray-600">·</span>
+            <span className="text-gray-400">out </span>{formatNumber(liveStats.outputTokens)}
+            <span className="mx-1 text-gray-600">·</span>
+            <span className="text-nexus-300 font-semibold">{formatNumber(liveStats.total)} total</span>
+          </span>
+          <span className="ml-auto text-[10px] uppercase tracking-wider text-gray-600">live</span>
+        </div>
+      )}
 
       {/* Headline stat cards with embedded sparklines + trend */}
       <div className="mt-6 mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">

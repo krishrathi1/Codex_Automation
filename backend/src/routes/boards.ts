@@ -2,6 +2,8 @@ import { Router } from 'express';
 import * as boardService from '../services/board.service.js';
 import * as collaborationService from '../services/board-collaboration.service.js';
 import * as blackboardService from '../services/blackboard.service.js';
+import * as platformIntegrations from '../services/platform-integrations.service.js';
+import * as productionErrorPipeline from '../services/production-error-pipeline.service.js';
 
 const router = Router();
 
@@ -50,6 +52,42 @@ router.get('/:id/live-blackboard/trace', async (req, res) => {
       typeof req.query.conversationId === 'string' ? req.query.conversationId : undefined,
     );
     res.json(trace);
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
+});
+
+// Live SigNoz logs scoped to this production group's service.name
+router.get('/:id/logs', async (req, res) => {
+  try {
+    const severityParam = typeof req.query.severity === 'string' ? req.query.severity : '';
+    const severities = severityParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const sinceMs = req.query.sinceMs ? Number(req.query.sinceMs) : undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : undefined;
+    const logs = await platformIntegrations.getBoardSignozLogs(req.organizationId!, req.params.id, {
+      severities: severities.length ? severities : undefined,
+      search,
+      sinceMs: Number.isFinite(sinceMs) ? sinceMs : undefined,
+      limit: Number.isFinite(limit) ? limit : undefined,
+    });
+    res.json({ logs });
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
+});
+
+// Human-triggered fix for a MANUAL production group
+router.post('/:id/manual-fix', async (req, res) => {
+  try {
+    const result = await productionErrorPipeline.startManualFix(
+      req.organizationId!,
+      { boardId: req.params.id, instructions: req.body?.instructions, log: req.body?.log },
+      { io: req.app.get('io') },
+    );
+    res.status(201).json(result);
   } catch (err) {
     const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
     res.status(statusCode).json({ error: (err as Error).message });

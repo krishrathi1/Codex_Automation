@@ -30,14 +30,16 @@ const createApiKeySchema = z.object({
 const integrationSettingsSchema = z.object({
   githubAccessToken: z.string().optional().nullable(),
   clearGithubAccessToken: z.boolean().optional(),
-  githubRepo: z.string().optional().nullable(),
-  githubBranch: z.string().optional().nullable(),
   vercelAccessToken: z.string().optional().nullable(),
   clearVercelAccessToken: z.boolean().optional(),
   vercelTeamId: z.string().optional().nullable(),
   signozApiKey: z.string().optional().nullable(),
   clearSignozApiKey: z.boolean().optional(),
   signozEndpoint: z.string().optional().nullable(),
+  bitbucketAppPassword: z.string().optional().nullable(),
+  clearBitbucketAppPassword: z.boolean().optional(),
+  bitbucketUsername: z.string().optional().nullable(),
+  bitbucketWorkspace: z.string().optional().nullable(),
 });
 
 // GET / — get organization details
@@ -94,6 +96,16 @@ router.get('/integrations/vercel/projects', requireRole('OWNER', 'ADMIN'), async
   try {
     const projects = await platformIntegrations.listVercelProjects(req.organizationId!);
     res.json(projects);
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
+});
+
+router.get('/integrations/bitbucket/repos', requireRole('OWNER', 'ADMIN'), async (req, res) => {
+  try {
+    const repos = await platformIntegrations.listBitbucketRepositories(req.organizationId!);
+    res.json(repos);
   } catch (err) {
     const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
     res.status(statusCode).json({ error: (err as Error).message });

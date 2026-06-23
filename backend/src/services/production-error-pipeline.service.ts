@@ -4,8 +4,10 @@ import type { Server as SocketIOServer } from 'socket.io';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import * as activityService from './activity.service.js';
-import { getMonitorIntegrationCredentials } from './platform-integrations.service.js';
-import { getFileContent, pushFilesViaApi, type PushResult } from './github-api.service.js';
+import { getMonitorIntegrationCredentials, getBoardGithubScope, getBoardBitbucketScope, getBoardPrimaryProvider } from './platform-integrations.service.js';
+import * as githubApi from './github-api.service.js';
+import * as bitbucketApi from './bitbucket-api.service.js';
+import type { PushResult } from './github-api.service.js';
 import { extractRepoFilePaths, parseFileBlocks } from './autofix-parsing.js';
 
 type JsonRecord = Record<string, unknown>;
@@ -118,24 +120,17 @@ async function resolveAutomationBoard(organizationId: string, boardId?: string) 
     return board;
   }
 
-  return prisma.board.upsert({
-    where: {
-      organizationId_slug: {
-        organizationId,
-        slug: DEFAULT_AUTOMATION_BOARD_SLUG,
-      },
-    },
-    update: {},
-    create: {
-      organizationId,
-      name: 'Production Error Automation',
-      slug: DEFAULT_AUTOMATION_BOARD_SLUG,
-      description: 'Default production group for website, Telegram, Slack, and MCP error automation.',
-      objective: 'Capture production errors, queue local Claude agents, review fixes, and prepare commit/PR audit trails.',
-      boardType: 'automation',
-      requireReviewBeforeDone: true,
-    },
+  const board = await prisma.board.findFirst({
+    where: { organizationId, slug: DEFAULT_AUTOMATION_BOARD_SLUG },
   });
+  if (!board) {
+    const err = new Error(
+      `Default automation board "${DEFAULT_AUTOMATION_BOARD_SLUG}" not found — create it in the UI or set boardId explicitly.`
+    ) as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+  return board;
 }
 
 async function ensurePipelineAgent(organizationId: string, board: Board, role: PipelineRole, workspace: string) {
@@ -217,10 +212,9 @@ const MAX_CONTEXT_FILES = 8;
  * contents from GitHub so the Debug agent can reason over real source instead
  * of a local clone. Returns a prompt-ready string ('' when nothing is found).
  */
-async function fetchErrorFileContext(organizationId: string, errorEvent: ProductionErrorEvent): Promise<string> {
-  const creds = await getMonitorIntegrationCredentials(organizationId).catch(() => null);
-  const github = creds?.github;
-  if (!github?.token) return '';
+async function fetchErrorFileContext(_organizationId: string, errorEvent: ProductionErrorEvent): Promise<string> {
+  const adapter = await resolveBoardProvider(errorEvent).catch(() => null);
+  if (!adapter) return '';
 
   const haystack = [errorEvent.message, errorEvent.stack, errorEvent.title].filter(Boolean).join('\n');
   const paths = extractRepoFilePaths(haystack).slice(0, MAX_CONTEXT_FILES);
@@ -228,14 +222,14 @@ async function fetchErrorFileContext(organizationId: string, errorEvent: Product
 
   const sections: string[] = [];
   for (const p of paths) {
-    const file = await getFileContent(github, p, github.branch || 'main').catch(() => null);
+    const file = await adapter.getFile(p).catch(() => null);
     if (file) sections.push(`===FILE: ${p}===\n${file.content}\n===END FILE===`);
   }
   if (sections.length === 0) return '';
 
   return [
     '',
-    'CURRENT REPOSITORY FILES (fetched from GitHub — these are the live contents):',
+    `CURRENT REPOSITORY FILES (fetched live from ${adapter.provider === 'bitbucket' ? 'Bitbucket' : 'GitHub'}):`,
     ...sections,
   ].join('\n');
 }
@@ -384,6 +378,7 @@ export async function ingestProductionErrorEvent(
   }
 
   const board = await resolveAutomationBoard(organizationId, input.boardId);
+  const isManual = String((board as { mode?: string }).mode || '').toUpperCase() === 'MANUAL';
   // The repo clone the agents must edit & push from (per-error, else env defaults).
   const workspace = stringValue(objectRecord(input.payload).workspace)
     || process.env.MUTUAL_FUND_WORKSPACE
@@ -408,12 +403,31 @@ export async function ingestProductionErrorEvent(
       environment: input.environment || process.env.NODE_ENV || 'development',
       fingerprint,
       payload: input.payload as any ?? undefined,
-      status: 'RECEIVED',
+      status: isManual ? 'AWAITING_MANUAL' : 'RECEIVED',
+      origin: 'AUTOMATIC',
       debugAgentId: debugAgent.id,
       reviewAgentId: reviewAgent.id,
       commitAgentId: commitAgent.id,
     },
   });
+
+  // Manual-mode groups do NOT auto-trigger the pipeline. The error is recorded
+  // and surfaced in the Manual tab; a human selects it (or a live log) and
+  // explicitly kicks off the fix via startManualFix().
+  if (isManual) {
+    emitPipelineEvent(options.io, organizationId, {
+      id: errorEvent.id,
+      status: errorEvent.status,
+      boardId: board.id,
+    });
+    return {
+      errorEvent,
+      board,
+      task: null,
+      agents: { debugAgent, reviewAgent, commitAgent },
+      runJobs: { debugRunJob: null },
+    };
+  }
 
   const thread = await prisma.thread.create({
     data: {
@@ -486,6 +500,159 @@ export async function ingestProductionErrorEvent(
       source: 'production_error_pipeline',
     },
   }).catch(() => {});
+
+  emitPipelineEvent(options.io, organizationId, {
+    id: errorEvent.id,
+    status: updatedErrorEvent.status,
+    boardId: board.id,
+    taskId: task.id,
+    debugRunJobId: debugRunJob.id,
+  });
+  options.io?.to(`org:${organizationId}`).emit('task:update', task);
+  options.io?.to(`org:${organizationId}`).emit('agent-run-job:update', debugRunJob);
+
+  return {
+    errorEvent: updatedErrorEvent,
+    board,
+    task,
+    agents: { debugAgent, reviewAgent, commitAgent },
+    runJobs: { debugRunJob },
+  };
+}
+
+export type ManualFixInput = {
+  boardId: string;
+  instructions: string;
+  log?: {
+    body?: string;
+    severity?: string;
+    timestamp?: string;
+    traceId?: string;
+    serviceName?: string;
+    route?: string;
+  };
+};
+
+/**
+ * Human-triggered fix for a MANUAL production group. The user picks a log (or
+ * pastes one) from the Manual tab and says what to fix; this kicks off the SAME
+ * debug→review→commit pipeline (which lands on a new branch + PR).
+ */
+export async function startManualFix(
+  organizationId: string,
+  input: ManualFixInput,
+  options: { io?: SocketIOServer } = {},
+) {
+  const instructions = input.instructions?.trim();
+  if (!instructions) {
+    const err = new Error('instructions are required') as Error & { statusCode?: number };
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!input.boardId) {
+    const err = new Error('boardId is required for a manual fix') as Error & { statusCode?: number };
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const board = await resolveAutomationBoard(organizationId, input.boardId);
+  const workspace = process.env.MUTUAL_FUND_WORKSPACE || process.env.CLAUDE_WORKSPACE_ROOT || '';
+  const { debugAgent, reviewAgent, commitAgent } = await ensurePipelineAgents(organizationId, board, workspace);
+
+  const log = input.log || {};
+  const message = (log.body?.trim() || instructions);
+  const title = truncate(message.split(/\r?\n/)[0] || 'Manual fix request', 180);
+  const ingestInput: ProductionErrorIngestInput = {
+    boardId: board.id,
+    source: 'manual',
+    severity: log.severity?.trim() || 'error',
+    title,
+    message,
+    route: log.route,
+    payload: { manualInstructions: instructions, log },
+  };
+  const fingerprint = fingerprintFor(ingestInput);
+
+  const errorEvent = await prisma.productionErrorEvent.create({
+    data: {
+      organizationId,
+      boardId: board.id,
+      source: 'manual',
+      severity: ingestInput.severity || 'error',
+      title,
+      message,
+      route: log.route || null,
+      environment: process.env.NODE_ENV || 'development',
+      fingerprint,
+      payload: { manualInstructions: instructions, log } as any,
+      status: 'RECEIVED',
+      origin: 'MANUAL',
+      debugAgentId: debugAgent.id,
+      reviewAgentId: reviewAgent.id,
+      commitAgentId: commitAgent.id,
+    },
+  });
+
+  const thread = await prisma.thread.create({
+    data: { organizationId, title: `Manual fix: ${title}` },
+  });
+
+  const task = await prisma.task.create({
+    data: {
+      organizationId,
+      boardId: board.id,
+      agentId: debugAgent.id,
+      title: `Manual fix: ${title}`,
+      description: [
+        `Manual fix request (event ${errorEvent.id})`,
+        '',
+        'USER INSTRUCTIONS:',
+        instructions,
+        log.body ? `\nSelected log:\n${log.body}` : '',
+      ].filter(Boolean).join('\n'),
+      status: 'ASSIGNED',
+      priority: 'HIGH',
+    },
+  });
+
+  const debugFileContext = await fetchErrorFileContext(organizationId, errorEvent);
+  const basePrompt = composeDebugPrompt(errorEvent, 0, undefined, debugFileContext);
+  const prompt = [
+    'USER FIX INSTRUCTIONS (highest priority — follow these exactly):',
+    instructions,
+    '',
+    basePrompt,
+  ].join('\n');
+
+  const debugRunJob = await enqueuePipelineJob({
+    organizationId,
+    boardId: board.id,
+    taskId: task.id,
+    threadId: thread.id,
+    agentId: debugAgent.id,
+    prompt,
+    role: 'debug',
+    productionErrorEventId: errorEvent.id,
+  });
+
+  const updatedErrorEvent = await prisma.productionErrorEvent.update({
+    where: { id: errorEvent.id },
+    data: { taskId: task.id, debugRunJobId: debugRunJob.id, status: 'DEBUG_QUEUED' },
+  });
+
+  await activityService.createActivity(organizationId, {
+    agentId: debugAgent.id,
+    type: 'ERROR',
+    message: `Manual fix queued for Debug Agent: ${title}`,
+    metadata: {
+      source: 'production_error_pipeline',
+      origin: 'manual',
+      productionErrorEventId: errorEvent.id,
+      boardId: board.id,
+      taskId: task.id,
+      debugRunJobId: debugRunJob.id,
+    },
+  }).catch(err => logger.warn({ err, productionErrorEventId: errorEvent.id }, 'Failed to persist manual fix activity'));
 
   emitPipelineEvent(options.io, organizationId, {
     id: errorEvent.id,
@@ -611,18 +778,128 @@ async function queueDebugReworkJob(errorEvent: ProductionErrorEvent, job: Comple
   return debugRunJob;
 }
 
+export type FixPushResult = PushResult & {
+  prUrl: string;
+  prNumber: number;
+  prBranch: string;
+  provider: 'github' | 'bitbucket';
+};
+
 /**
- * Push the Debug agent's approved fix straight to GitHub via the API.
- * Returns the push result, or null when API push isn't possible (no token/repo
- * configured, or no parseable file blocks) so the caller can fall back to the
- * local-workspace commit agent.
+ * A provider-agnostic view of the board's source repo: how to read a file and
+ * how to land a fix (branch + commit + PR). Resolves the board's PRIMARY
+ * provider (github | bitbucket) and its credentials + repo scope. Returns null
+ * when the chosen provider isn't fully configured for this board.
  */
-async function pushApprovedFixViaApi(errorEvent: ProductionErrorEvent): Promise<PushResult | null> {
+type ProviderAdapter = {
+  provider: 'github' | 'bitbucket';
+  baseBranch: string;
+  getFile: (path: string) => Promise<{ content: string } | null>;
+  openFix: (
+    errorEvent: ProductionErrorEvent,
+    commitMessage: string,
+    prTitle: string,
+    files: Array<{ path: string; content: string | null }>,
+  ) => Promise<FixPushResult>;
+};
+
+function buildPrBody(errorEvent: ProductionErrorEvent): string {
+  return [
+    `Automated fix for production error \`${errorEvent.id}\`.`,
+    '',
+    `**Title:** ${errorEvent.title}`,
+    errorEvent.fingerprint ? `**Fingerprint:** ${errorEvent.fingerprint}` : '',
+    '',
+    'Generated by the Nexus production error pipeline. Review and merge to deploy.',
+  ].filter(Boolean).join('\n');
+}
+
+async function resolveBoardProvider(errorEvent: ProductionErrorEvent): Promise<ProviderAdapter | null> {
+  const creds = await getMonitorIntegrationCredentials(errorEvent.organizationId).catch(() => null);
+  const provider = await getBoardPrimaryProvider(errorEvent.boardId).catch(() => 'github' as const);
+
+  if (provider === 'bitbucket') {
+    const bb = creds?.bitbucket;
+    const scope = await getBoardBitbucketScope(errorEvent.boardId).catch(() => null);
+    if (!bb?.username || !bb?.token || !scope?.repo) return null;
+    const cfg: bitbucketApi.BitbucketConfig = { username: bb.username, token: bb.token, repo: scope.repo };
+    const baseBranch = scope.branch || 'main';
+    return {
+      provider: 'bitbucket',
+      baseBranch,
+      getFile: (path) => bitbucketApi.getFileContent(cfg, path, baseBranch),
+      openFix: (ev, msg, title, files) => landFix('bitbucket', cfg, baseBranch, ev, msg, title, files),
+    };
+  }
+
+  const gh = creds?.github;
+  const scope = await getBoardGithubScope(errorEvent.boardId).catch(() => null);
+  if (!gh?.token || !scope?.repo) return null;
+  const cfg: githubApi.GitHubConfig = { token: gh.token, repo: scope.repo };
+  const baseBranch = scope.branch || 'main';
+  return {
+    provider: 'github',
+    baseBranch,
+    getFile: (path) => githubApi.getFileContent(cfg, path, baseBranch).then(f => (f ? { content: f.content } : null)),
+    openFix: (ev, msg, title, files) => landFix('github', cfg, baseBranch, ev, msg, title, files),
+  };
+}
+
+/**
+ * Land an approved fix as a NEW branch + pull request on the given provider
+ * (never a direct push to the base branch). Creates `nexus-fix/<short-id>`,
+ * pushes the files, opens a PR into the base branch, and persists the PR
+ * coordinates on the error event.
+ */
+async function landFix(
+  provider: 'github' | 'bitbucket',
+  cfg: githubApi.GitHubConfig | bitbucketApi.BitbucketConfig,
+  baseBranch: string,
+  errorEvent: ProductionErrorEvent,
+  commitMessage: string,
+  prTitle: string,
+  files: Array<{ path: string; content: string | null }>,
+): Promise<FixPushResult> {
+  const prBranch = `nexus-fix/${errorEvent.id.slice(0, 8)}`;
+  const prBody = buildPrBody(errorEvent);
+
+  let push: PushResult;
+  let pr: { number: number; htmlUrl: string };
+  if (provider === 'bitbucket') {
+    const bb = cfg as bitbucketApi.BitbucketConfig;
+    await bitbucketApi.createBranch(bb, prBranch, baseBranch);
+    push = await bitbucketApi.pushFilesViaApi(bb, prBranch, commitMessage, files);
+    pr = await bitbucketApi.createPullRequest(bb, prBranch, baseBranch, prTitle, prBody);
+  } else {
+    const gh = cfg as githubApi.GitHubConfig;
+    await githubApi.createBranch(gh, prBranch, baseBranch);
+    push = await githubApi.pushFilesViaApi(gh, prBranch, commitMessage, files);
+    pr = await githubApi.createPullRequest(gh, prBranch, baseBranch, prTitle, prBody);
+  }
+
+  await prisma.productionErrorEvent.update({
+    where: { id: errorEvent.id },
+    data: { prBranch, prUrl: pr.htmlUrl, prNumber: pr.number },
+  }).catch(err => logger.warn({ err, id: errorEvent.id }, '[pipeline] Failed to persist PR fields'));
+
+  logger.info(
+    { id: errorEvent.id, provider, prBranch, prNumber: pr.number, files: push.filesPushed },
+    '[pipeline] Opened pull request for fix',
+  );
+  return { ...push, prUrl: pr.htmlUrl, prNumber: pr.number, prBranch, provider };
+}
+
+/**
+ * Push the Debug agent's approved fix to a new branch + PR via the board's
+ * primary provider API. Returns the push result, or null when not possible
+ * (provider not configured, or no parseable file blocks) so the caller can fall
+ * back to the commit agent.
+ */
+async function pushApprovedFixViaApi(errorEvent: ProductionErrorEvent): Promise<FixPushResult | null> {
   if (!errorEvent.debugRunJobId) return null;
 
-  const creds = await getMonitorIntegrationCredentials(errorEvent.organizationId).catch(() => null);
-  const github = creds?.github;
-  if (!github?.token || !github?.repo) return null; // not configured for UI-driven API push
+  const adapter = await resolveBoardProvider(errorEvent).catch(() => null);
+  if (!adapter) return null; // provider not configured for this board
 
   const debugJob = await prisma.agentRunJob.findUnique({
     where: { id: errorEvent.debugRunJobId },
@@ -631,27 +908,25 @@ async function pushApprovedFixViaApi(errorEvent: ProductionErrorEvent): Promise<
   const files = parseFileBlocks(debugJob?.output || '');
   if (files.length === 0) return null; // nothing to push → let the commit agent handle it
 
-  const branch = github.branch || 'main';
-  const message = `fix: ${truncate(errorEvent.title, 72)}\n\nAuto-fixed by Nexus production error pipeline (event ${errorEvent.id}).`;
-  return pushFilesViaApi(github, branch, message, files);
+  const title = `fix: ${truncate(errorEvent.title, 72)}`;
+  const message = `${title}\n\nAuto-fixed by Nexus production error pipeline (event ${errorEvent.id}).`;
+  return adapter.openFix(errorEvent, message, title, files);
 }
 
 const COMMIT_TITLE_RE = /COMMIT TITLE:\s*(.+)/i;
 
 /**
- * Push the approved fix to the target branch via the GitHub API. Prefers the
- * persisted payload.proposedFix; falls back to parsing the commit agent's
- * output. Returns the push result or null when nothing could be pushed.
- * Lets pushFilesViaApi errors propagate (caller handles them).
+ * Land the approved fix as a new branch + PR via the board's primary provider.
+ * Prefers the persisted payload.proposedFix; falls back to parsing the commit
+ * agent's output. Returns the push result or null when nothing could be pushed.
  */
 async function pushApprovedFix(
   errorEvent: ProductionErrorEvent,
   commitOutput: string,
-): Promise<{ commitSha: string; htmlUrl: string } | null> {
-  const creds = await getMonitorIntegrationCredentials(errorEvent.organizationId).catch(() => null);
-  const github = creds?.github;
-  if (!github?.token) {
-    logger.info({ id: errorEvent.id }, '[pipeline] No GitHub token configured; skipping push');
+): Promise<FixPushResult | null> {
+  const adapter = await resolveBoardProvider(errorEvent).catch(() => null);
+  if (!adapter) {
+    logger.info({ id: errorEvent.id }, '[pipeline] No source provider configured; skipping push');
     return null;
   }
 
@@ -669,13 +944,9 @@ async function pushApprovedFix(
     return null;
   }
 
-  const branch = github.branch || 'main';
   const title = (commitOutput.match(COMMIT_TITLE_RE)?.[1] ?? `fix: auto-fix for ${errorEvent.title}`).trim().slice(0, 100);
   const message = `${title}\n\nNexus production auto-fix for error ${errorEvent.id}.`;
-
-  const result = await pushFilesViaApi(github, branch, message, files);
-  logger.info({ id: errorEvent.id, commitSha: result.commitSha, files: result.filesPushed }, '[pipeline] Pushed fix to GitHub');
-  return { commitSha: result.commitSha, htmlUrl: result.htmlUrl };
+  return adapter.openFix(errorEvent, message, title, files);
 }
 
 export async function advanceProductionErrorPipelineAfterJob(
@@ -719,7 +990,7 @@ export async function advanceProductionErrorPipelineAfterJob(
       // Preferred path: push the approved fix directly to GitHub via the API
       // (UI-configured token + repo). Falls back to the local-clone commit
       // agent when the API push isn't possible or fails.
-      let pushed: PushResult | null = null;
+      let pushed: FixPushResult | null = null;
       try {
         pushed = await pushApprovedFixViaApi(errorEvent);
       } catch (err) {
@@ -732,31 +1003,37 @@ export async function advanceProductionErrorPipelineAfterJob(
           data: {
             status: 'COMPLETED',
             resolvedAt: new Date(),
-            // Persist the commit so the Auto-Fix dashboard can link straight to it.
+            // Persist the commit + PR so the Auto-Fix dashboard can link straight to it.
             payload: {
               ...objectRecord(errorEvent.payload),
               commitSha: pushed.commitSha,
               commitUrl: pushed.htmlUrl,
               filesPushed: pushed.filesPushed,
+              prUrl: pushed.prUrl,
+              prNumber: pushed.prNumber,
+              prBranch: pushed.prBranch,
             } as any,
           },
         });
         if (errorEvent.taskId) {
           await prisma.task.update({
             where: { id: errorEvent.taskId },
-            data: { status: 'DONE' },
+            data: { status: 'REVIEW' },
           }).catch(() => {});
         }
         await activityService.createActivity(job.organizationId, {
           agentId: errorEvent.commitAgentId || job.agentId,
           type: 'TASK_COMPLETE',
-          message: `Pushed fix to GitHub: ${pushed.filesPushed} file(s), commit ${pushed.commitSha.slice(0, 7)}`,
+          message: `Opened PR #${pushed.prNumber} with fix: ${pushed.filesPushed} file(s) on ${pushed.prBranch}`,
           metadata: {
             source: 'production_error_pipeline',
             productionErrorEventId: errorEvent.id,
             commitSha: pushed.commitSha,
             commitUrl: pushed.htmlUrl,
             filesPushed: pushed.filesPushed,
+            prUrl: pushed.prUrl,
+            prNumber: pushed.prNumber,
+            prBranch: pushed.prBranch,
           },
         }).catch(err => logger.warn({ err, productionErrorEventId: errorEvent.id }, 'Failed to persist GitHub push activity'));
         emitPipelineEvent(options.io, job.organizationId, {
@@ -764,6 +1041,8 @@ export async function advanceProductionErrorPipelineAfterJob(
           status: 'COMPLETED',
           commitSha: pushed.commitSha,
           commitUrl: pushed.htmlUrl,
+          prUrl: pushed.prUrl,
+          prNumber: pushed.prNumber,
         });
         nextJob = null;
       } else {

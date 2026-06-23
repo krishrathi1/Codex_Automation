@@ -25,6 +25,7 @@ export interface SigNozLog {
 export interface QueryLogsOptions {
   severities?: string[]; // severity_text values to match (OR-ed). Empty => all.
   search?: string; // substring match on the log body
+  service?: string; // restrict to a single service.name (per production group)
   sinceMs?: number; // look-back window in ms (default 15m)
   limit?: number; // max rows (default 100)
 }
@@ -73,6 +74,9 @@ function buildFilterExpression(opts: QueryLogsOptions): string {
   }
   if (opts.search?.trim()) {
     clauses.push(`body CONTAINS ${quote(opts.search.trim())}`);
+  }
+  if (opts.service?.trim()) {
+    clauses.push(`service.name = ${quote(opts.service.trim())}`);
   }
   return clauses.join(' AND ');
 }
@@ -137,7 +141,11 @@ function toLog(row: unknown): SigNozLog | null {
 function extractRows(json: unknown): unknown[] {
   const j = objectRecord(json);
   const data = objectRecord(j.data);
+  // v5 "raw" shape: { data: { data: { results: [{ rows: [...] }] } } }
+  const nested = objectRecord(data.data);
+  const nestedResults = Array.isArray(nested.results) ? nested.results as Record<string, unknown>[] : null;
   const candidates =
+    (nestedResults && Array.isArray(nestedResults[0]?.rows) && nestedResults[0].rows) ||
     (Array.isArray(j.result) && j.result) ||
     (Array.isArray((data.results as unknown[]) ) && (data.results as Record<string, unknown>[])?.[0]?.rows) ||
     (Array.isArray((data.result as unknown[])) && (data.result as Record<string, unknown>[])?.[0]?.list) ||

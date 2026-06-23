@@ -3,7 +3,7 @@ import { RefreshCw } from 'lucide-react';
 import { Header } from '../components/layout/Header';
 import { api } from '../lib/api';
 import { cn } from '../lib/utils';
-import type { SigNozLog } from '../types';
+import type { SigNozLog, Board } from '../types';
 
 const SEVERITY_FILTERS = ['ALL', 'ERROR', 'WARN', 'INFO'] as const;
 type SeverityFilter = (typeof SEVERITY_FILTERS)[number];
@@ -30,8 +30,14 @@ export function Logs() {
   const [severity, setSeverity] = useState<SeverityFilter>('ERROR');
   const [search, setSearch] = useState('');
   const [windowMs, setWindowMs] = useState(WINDOWS[1].ms);
+  const [boards, setBoards] = useState<Board[]>([]);
+  const [boardId, setBoardId] = useState(''); // '' = all org logs
   // Monotonic request id so a slow earlier fetch can't overwrite a newer one.
   const reqRef = useRef(0);
+
+  useEffect(() => {
+    api.boards.list().then(setBoards).catch(() => setBoards([]));
+  }, []);
 
   const load = useCallback(async () => {
     const myReq = ++reqRef.current;
@@ -44,7 +50,9 @@ export function Logs() {
       };
       if (severity !== 'ALL') params.severity = severity;
       if (search.trim()) params.search = search.trim();
-      const result = await api.org.signozLogs(params);
+      const result = boardId
+        ? await api.boards.logs(boardId, params)
+        : await api.org.signozLogs(params);
       if (reqRef.current !== myReq) return; // a newer request superseded this one
       setLogs(result.logs);
     } catch (err) {
@@ -54,7 +62,7 @@ export function Logs() {
     } finally {
       if (reqRef.current === myReq) setLoading(false);
     }
-  }, [severity, search, windowMs]);
+  }, [severity, search, windowMs, boardId]);
 
   useEffect(() => {
     load();
@@ -67,6 +75,17 @@ export function Logs() {
       {/* Controls */}
       <div className="mb-6 rounded-xl border border-white/5 bg-surface-850 p-4">
         <div className="flex flex-wrap items-center gap-3">
+          <select
+            value={boardId}
+            onChange={e => setBoardId(e.target.value)}
+            className="rounded-lg border border-white/10 bg-surface-900 px-2.5 py-1 text-xs font-medium text-gray-300 outline-none focus:border-nexus-500"
+            title="Scope logs to a production group"
+          >
+            <option value="">All services</option>
+            {boards.map(b => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
           <div className="flex items-center gap-1">
             {SEVERITY_FILTERS.map(s => (
               <button

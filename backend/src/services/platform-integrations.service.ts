@@ -5,6 +5,19 @@ import { queryLogs, checkSigNozConnection, type QueryLogsOptions, type SigNozLog
 
 type JsonRecord = Record<string, unknown>;
 
+export type BitbucketRepositorySummary = {
+  uuid: string;
+  name: string;
+  fullName: string;
+  isPrivate: boolean;
+  htmlUrl: string;
+  cloneUrl: string;
+  sshUrl: string;
+  defaultBranch: string;
+  ownerUsername: string;
+  updatedAt: string | null;
+};
+
 export type GithubRepositorySummary = {
   id: number;
   name: string;
@@ -54,7 +67,7 @@ function looksMaskedToken(token: string) {
   return token.includes('...') || token.includes('…') || token.includes('*');
 }
 
-function normalizeAccessToken(provider: 'GitHub' | 'Vercel' | 'SigNoz', value: string | null | undefined) {
+function normalizeAccessToken(provider: 'GitHub' | 'Vercel' | 'SigNoz' | 'Bitbucket', value: string | null | undefined) {
   const token = value?.trim();
   if (!token) return undefined;
   if (looksMaskedToken(token)) {
@@ -76,7 +89,7 @@ async function readErrorText(response: Response) {
   return response.text().catch(() => response.statusText);
 }
 
-function tokenFromSettings(providerSettings: JsonRecord, provider: 'GitHub' | 'Vercel' | 'SigNoz') {
+function tokenFromSettings(providerSettings: JsonRecord, provider: 'GitHub' | 'Vercel' | 'SigNoz' | 'Bitbucket') {
   const encrypted = stringValue(providerSettings.accessToken);
   if (!encrypted) return undefined;
   // A token saved under a different/old ENCRYPTION_KEY (or legacy format) can't be
@@ -90,7 +103,7 @@ function tokenFromSettings(providerSettings: JsonRecord, provider: 'GitHub' | 'V
   }
 }
 
-function sanitizeProvider(value: unknown, options?: { includeTeamId?: boolean; includeRepo?: boolean; includeEndpoint?: boolean }) {
+function sanitizeProvider(value: unknown, options?: { includeTeamId?: boolean; includeRepo?: boolean; includeEndpoint?: boolean; includeUsername?: boolean }) {
   const provider = objectRecord(value);
   const token = stringValue(provider.accessToken);
   const endpoint = stringValue(provider.endpoint) || null;
@@ -110,15 +123,20 @@ function sanitizeProvider(value: unknown, options?: { includeTeamId?: boolean; i
   if (options?.includeEndpoint) {
     sanitized.endpoint = endpoint;
   }
+  if (options?.includeUsername) {
+    sanitized.username = stringValue(provider.username) || null;
+    sanitized.workspace = stringValue(provider.workspace) || null;
+  }
   return sanitized;
 }
 
 function sanitizeIntegrationSettings(settings: unknown) {
   const integrations = integrationSettings(settings);
   return {
-    github: sanitizeProvider(integrations.github, { includeRepo: true }),
+    github: sanitizeProvider(integrations.github),
     vercel: sanitizeProvider(integrations.vercel, { includeTeamId: true }),
     signoz: sanitizeProvider(integrations.signoz, { includeEndpoint: true }),
+    bitbucket: sanitizeProvider(integrations.bitbucket, { includeUsername: true }),
   };
 }
 
@@ -138,8 +156,9 @@ export function sanitizeOrganizationSettings(settings: unknown) {
     integrations: {
       ...integrations,
       signoz: sanitizeProvider(integrations.signoz, { includeEndpoint: true }),
-      github: sanitizeProvider(integrations.github, { includeRepo: true }),
+      github: sanitizeProvider(integrations.github),
       vercel: sanitizeProvider(integrations.vercel, { includeTeamId: true }),
+      bitbucket: sanitizeProvider(integrations.bitbucket, { includeUsername: true }),
     },
   };
 }
@@ -147,14 +166,16 @@ export function sanitizeOrganizationSettings(settings: unknown) {
 export async function updateIntegrationSettings(organizationId: string, input: {
   githubAccessToken?: string | null;
   clearGithubAccessToken?: boolean;
-  githubRepo?: string | null;
-  githubBranch?: string | null;
   vercelAccessToken?: string | null;
   clearVercelAccessToken?: boolean;
   vercelTeamId?: string | null;
   signozApiKey?: string | null;
   clearSignozApiKey?: boolean;
   signozEndpoint?: string | null;
+  bitbucketAppPassword?: string | null;
+  clearBitbucketAppPassword?: boolean;
+  bitbucketUsername?: string | null;
+  bitbucketWorkspace?: string | null;
 }) {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
@@ -174,16 +195,6 @@ export async function updateIntegrationSettings(organizationId: string, input: {
   } else if (githubAccessToken) {
     nextGithub.accessToken = encryptField(githubAccessToken);
     nextGithub.tokenMasked = maskToken(githubAccessToken);
-  }
-  if (input.githubRepo !== undefined) {
-    const repo = input.githubRepo?.trim();
-    if (repo) nextGithub.repo = repo;
-    else delete nextGithub.repo;
-  }
-  if (input.githubBranch !== undefined) {
-    const branch = input.githubBranch?.trim();
-    if (branch) nextGithub.branch = branch;
-    else delete nextGithub.branch;
   }
   if (Object.keys(nextGithub).length > 0) {
     nextGithub.updatedAt = now;
@@ -238,6 +249,33 @@ export async function updateIntegrationSettings(organizationId: string, input: {
     nextIntegrations.signoz = {};
   }
 
+  const bitbucket = objectRecord(integrations.bitbucket);
+  const nextBitbucket: JsonRecord = { ...bitbucket };
+  const bitbucketAppPassword = normalizeAccessToken('Bitbucket', input.bitbucketAppPassword);
+  if (input.clearBitbucketAppPassword) {
+    delete nextBitbucket.accessToken;
+    delete nextBitbucket.tokenMasked;
+  } else if (bitbucketAppPassword) {
+    nextBitbucket.accessToken = encryptField(bitbucketAppPassword);
+    nextBitbucket.tokenMasked = maskToken(bitbucketAppPassword);
+  }
+  if (input.bitbucketUsername !== undefined) {
+    const username = input.bitbucketUsername?.trim();
+    if (username) nextBitbucket.username = username;
+    else delete nextBitbucket.username;
+  }
+  if (input.bitbucketWorkspace !== undefined) {
+    const workspace = input.bitbucketWorkspace?.trim();
+    if (workspace) nextBitbucket.workspace = workspace;
+    else delete nextBitbucket.workspace;
+  }
+  if (Object.keys(nextBitbucket).length > 0) {
+    nextBitbucket.updatedAt = now;
+    nextIntegrations.bitbucket = nextBitbucket;
+  } else {
+    nextIntegrations.bitbucket = {};
+  }
+
   const updated = await prisma.organization.update({
     where: { id: organizationId },
     data: {
@@ -251,13 +289,13 @@ export async function updateIntegrationSettings(organizationId: string, input: {
   return sanitizeIntegrationSettings(updated.settings);
 }
 
-async function getProviderToken(organizationId: string, provider: 'github' | 'vercel' | 'signoz') {
+async function getProviderToken(organizationId: string, provider: 'github' | 'vercel' | 'signoz' | 'bitbucket') {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
     select: { settings: true },
   });
   const providerSettings = objectRecord(integrationSettings(org?.settings)[provider]);
-  const providerLabel = provider === 'github' ? 'GitHub' : provider === 'vercel' ? 'Vercel' : 'SigNoz';
+  const providerLabel = provider === 'github' ? 'GitHub' : provider === 'vercel' ? 'Vercel' : provider === 'bitbucket' ? 'Bitbucket' : 'SigNoz';
   const token = tokenFromSettings(providerSettings, providerLabel);
   return {
     token,
@@ -271,10 +309,11 @@ async function getProviderToken(organizationId: string, provider: 'github' | 've
  * and falls back to environment variables when a UI token is not set.
  */
 export async function getMonitorIntegrationCredentials(organizationId: string) {
-  const [github, vercel, signoz] = await Promise.all([
+  const [github, vercel, signoz, bitbucket] = await Promise.all([
     getProviderToken(organizationId, 'github'),
     getProviderToken(organizationId, 'vercel'),
     getProviderToken(organizationId, 'signoz'),
+    getProviderToken(organizationId, 'bitbucket'),
   ]);
 
   return {
@@ -293,7 +332,53 @@ export async function getMonitorIntegrationCredentials(organizationId: string) {
       projectId: process.env.VERCEL_PROJECT_ID || null,
       projectName: process.env.VERCEL_PROJECT_NAME || 'mutual-fund',
     },
+    bitbucket: {
+      username: stringValue(bitbucket.settings.username) || process.env.BITBUCKET_USERNAME || '',
+      token: bitbucket.token || process.env.BITBUCKET_APP_PASSWORD || '',
+    },
   };
+}
+
+export async function getBoardGithubScope(boardId: string | null): Promise<{ repo: string | null; branch: string }> {
+  if (!boardId) return { repo: null, branch: 'main' };
+  const board = await prisma.board.findUnique({
+    where: { id: boardId },
+    select: { successMetrics: true },
+  });
+  const metrics = objectRecord(board?.successMetrics);
+  const scope = objectRecord(metrics.integrationScope);
+  const githubRepo = objectRecord(scope.githubRepo);
+  return {
+    repo: stringValue(githubRepo.fullName) || null,
+    branch: stringValue(githubRepo.branch) || 'main',
+  };
+}
+
+export async function getBoardBitbucketScope(boardId: string | null): Promise<{ repo: string | null; branch: string }> {
+  if (!boardId) return { repo: null, branch: 'main' };
+  const board = await prisma.board.findUnique({
+    where: { id: boardId },
+    select: { successMetrics: true },
+  });
+  const metrics = objectRecord(board?.successMetrics);
+  const scope = objectRecord(metrics.integrationScope);
+  const bitbucketRepo = objectRecord(scope.bitbucketRepo);
+  return {
+    repo: stringValue(bitbucketRepo.fullName) || null,
+    branch: stringValue(bitbucketRepo.branch) || 'main',
+  };
+}
+
+/** Which provider a board pushes fixes to. Defaults to 'github'. */
+export async function getBoardPrimaryProvider(boardId: string | null): Promise<'github' | 'bitbucket'> {
+  if (!boardId) return 'github';
+  const board = await prisma.board.findUnique({
+    where: { id: boardId },
+    select: { successMetrics: true },
+  });
+  const metrics = objectRecord(board?.successMetrics);
+  const scope = objectRecord(metrics.integrationScope);
+  return stringValue(scope.primaryProvider) === 'bitbucket' ? 'bitbucket' : 'github';
 }
 
 export async function checkSignozConnection(organizationId: string): Promise<{ ok: boolean; detail: string }> {
@@ -307,6 +392,27 @@ export async function getSignozLogs(organizationId: string, opts: QueryLogsOptio
     throw integrationError('SigNoz endpoint and API key are not configured in Settings.');
   }
   return queryLogs(creds.signoz, opts);
+}
+
+/** Resolve the per-board SigNoz service name from its integrationScope. */
+export async function getBoardSignozService(organizationId: string, boardId: string): Promise<string | null> {
+  const board = await prisma.board.findFirst({
+    where: { id: boardId, organizationId },
+    select: { successMetrics: true },
+  });
+  const metrics = objectRecord(board?.successMetrics);
+  const scope = objectRecord(metrics.integrationScope);
+  return stringValue(scope.signozService) || null;
+}
+
+/** Live SigNoz logs scoped to a production group's service.name. */
+export async function getBoardSignozLogs(
+  organizationId: string,
+  boardId: string,
+  opts: QueryLogsOptions,
+): Promise<SigNozLog[]> {
+  const service = await getBoardSignozService(organizationId, boardId);
+  return getSignozLogs(organizationId, { ...opts, service: service || undefined });
 }
 
 export async function listGithubRepositories(organizationId: string): Promise<GithubRepositorySummary[]> {
@@ -358,6 +464,92 @@ export async function listGithubRepositories(organizationId: string): Promise<Gi
 
     if (batch.length < 100) break;
     page += 1;
+  }
+
+  return repos;
+}
+
+/** Best-effort discovery of the workspaces an authenticated user belongs to. */
+async function discoverBitbucketWorkspaces(authHeaders: Record<string, string>): Promise<string[]> {
+  try {
+    const res = await fetch('https://api.bitbucket.org/2.0/workspaces?pagelen=50', { headers: authHeaders });
+    if (!res.ok) return [];
+    const data = await res.json() as Record<string, unknown>;
+    const values = Array.isArray(data.values) ? data.values as Array<Record<string, unknown>> : [];
+    return values.map(w => stringValue(w.slug)).filter((s): s is string => Boolean(s));
+  } catch {
+    return [];
+  }
+}
+
+export async function listBitbucketRepositories(organizationId: string): Promise<BitbucketRepositorySummary[]> {
+  const { token, settings } = await getProviderToken(organizationId, 'bitbucket');
+  const username = stringValue(settings.username);
+  if (!token || !username) {
+    throw integrationError('Bitbucket identity (username or email) and app password / API token are not configured in Settings.');
+  }
+
+  // Auth identity is whatever the user stored: a Bitbucket username (legacy app
+  // passwords) or an Atlassian account email (scoped API tokens).
+  const basicAuth = Buffer.from(`${username}:${token}`).toString('base64');
+  const authHeaders = {
+    Authorization: `Basic ${basicAuth}`,
+    Accept: 'application/json',
+    'User-Agent': 'nexus-ai-dashboard',
+  };
+
+  // Atlassian deprecated the global /2.0/repositories endpoint (CHANGE-2770), so
+  // we must scope the listing to a workspace. Prefer the workspace saved in
+  // Settings; otherwise try to auto-discover the user's workspaces.
+  const configuredWorkspace = stringValue(settings.workspace);
+  const workspaces = configuredWorkspace
+    ? [configuredWorkspace]
+    : await discoverBitbucketWorkspaces(authHeaders);
+  if (workspaces.length === 0) {
+    throw integrationError(
+      'Set your Bitbucket workspace in Settings — it is the part after bitbucket.org/ in your repo URL (e.g. bitbucket.org/<workspace>/<repo>). Auto-discovery failed with the current token scopes.',
+    );
+  }
+
+  const repos: BitbucketRepositorySummary[] = [];
+  for (const ws of workspaces) {
+    let nextUrl: string | null = `https://api.bitbucket.org/2.0/repositories/${encodeURIComponent(ws)}?pagelen=50&sort=-updated_on`;
+    while (nextUrl && repos.length < 150) {
+      const response = await fetch(nextUrl, { headers: authHeaders });
+      if (!response.ok) {
+        const details = await response.text().catch(() => response.statusText);
+        const error = new Error(`Bitbucket repository fetch failed: ${response.status} ${details}`);
+        (error as Error & { statusCode?: number }).statusCode = response.status === 401 || response.status === 403 ? response.status : 502;
+        throw error;
+      }
+
+      const data = await response.json() as Record<string, unknown>;
+      const values = Array.isArray(data.values) ? data.values as Array<Record<string, unknown>> : [];
+
+      repos.push(...values.map(repo => {
+        const owner = objectRecord(objectRecord(repo.owner));
+        const links = objectRecord(repo.links);
+        const cloneLinks = Array.isArray(links.clone) ? links.clone as Array<Record<string, unknown>> : [];
+        const httpsClone = cloneLinks.find(l => stringValue(l.name) === 'https');
+        const sshClone = cloneLinks.find(l => stringValue(l.name) === 'ssh');
+        const htmlLink = objectRecord(links.html);
+        const mainbranch = objectRecord(repo.mainbranch);
+        return {
+          uuid: stringValue(repo.uuid) || '',
+          name: stringValue(repo.name) || '',
+          fullName: stringValue(repo.full_name) || '',
+          isPrivate: Boolean(repo.is_private),
+          htmlUrl: stringValue(htmlLink.href) || '',
+          cloneUrl: stringValue(httpsClone?.href) || '',
+          sshUrl: stringValue(sshClone?.href) || '',
+          defaultBranch: stringValue(mainbranch.name) || 'main',
+          ownerUsername: stringValue(owner.nickname) || stringValue(owner.display_name) || ws,
+          updatedAt: stringValue(repo.updated_on) || null,
+        };
+      }).filter(r => r.fullName));
+
+      nextUrl = typeof data.next === 'string' ? data.next : null;
+    }
   }
 
   return repos;

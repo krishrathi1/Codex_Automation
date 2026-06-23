@@ -206,6 +206,7 @@ describe('Type Validation', () => {
       gatewayId: null,
       boardGroupId: null,
       boardType: 'DEFAULT',
+      mode: 'AUTOMATIC',
       objective: null,
       successMetrics: null,
       targetDate: null,

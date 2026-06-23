@@ -1422,6 +1422,7 @@ async function processJob(job: AgentRunJobWithRelations, io?: SocketIOServer) {
         nexusSessionId: session.id,
         codexSessionId: state.codexSessionId,
         event,
+        usage: state.usage ?? undefined,
       });
       await persistRunJobActivity({
         job,
