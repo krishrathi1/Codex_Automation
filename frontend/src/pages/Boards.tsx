@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { Plus, ChevronRight, LayoutGrid, CheckSquare, Users, CalendarDays, Target } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn, timeAgo } from '@/lib/utils';
 import type { Board, BoardGroup } from '@/types';
 
-const boardTypeStyles: Record<string, { badge: string; label: string }> = {
-  goal: { badge: 'text-blue-400 bg-blue-500/10 border-blue-500/20', label: 'Goal' },
-  sprint: { badge: 'text-violet-400 bg-violet-500/10 border-violet-500/20', label: 'Sprint' },
-  continuous: { badge: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20', label: 'Continuous' },
+const boardTypeStyles: Record<string, { badge: string; label: string; accent: string }> = {
+  goal: { badge: 'text-blue-300 bg-blue-500/10 border-blue-500/20', label: 'Goal', accent: '#3b8eff' },
+  sprint: { badge: 'text-violet-300 bg-violet-500/10 border-violet-500/20', label: 'Sprint', accent: '#8b5cf6' },
+  continuous: { badge: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20', label: 'Continuous', accent: '#10b981' },
 };
 
 interface BoardWithGroup extends Board {
@@ -74,36 +75,38 @@ export function Boards() {
   const ungroupedBoards = boards.filter(b => !b.boardGroupId);
 
   return (
-    <div>
-      <Header title="Boards" subtitle="Organize agents and tasks into focused workstreams" />
-
-      {/* Action bar */}
-      <div className="flex justify-end mb-6">
+    <div className="max-w-[1400px]">
+      <div className="flex items-start justify-between gap-4">
+        <Header title="Boards" subtitle="Organize agents and tasks into focused workstreams" />
         <button
           onClick={() => setShowCreateModal(true)}
-          className="px-4 py-2 bg-nexus-600 hover:bg-nexus-500 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+          className="mt-1 inline-flex shrink-0 items-center gap-2 rounded-lg bg-nexus-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-nexus-500"
         >
-          <span className="text-lg leading-none">+</span>
+          <Plus className="h-4 w-4" />
           Create Board
         </button>
       </div>
+      <div className="mb-6" />
 
       {loading ? (
         <div className="flex items-center justify-center py-20">
           <div className="w-8 h-8 border-2 border-nexus-500 border-t-transparent rounded-full animate-spin" />
         </div>
       ) : boards.length === 0 ? (
-        <div className="rounded-xl border border-white/5 bg-surface-850 p-12 text-center">
-          <div className="text-4xl mb-3 text-gray-600">&#9776;</div>
-          <h3 className="text-lg font-semibold text-white mb-1">No Boards Yet</h3>
-          <p className="text-sm text-gray-500 mb-4">
-            Create your first board to start organizing agents and tasks into focused workstreams.
+        <div className="rounded-2xl border border-dashed border-white/10 bg-surface-850/50 p-12 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-nexus-500/10 text-nexus-300">
+            <LayoutGrid className="h-6 w-6" />
+          </div>
+          <h3 className="mb-1 text-base font-semibold text-white">No boards yet</h3>
+          <p className="mx-auto mb-5 max-w-sm text-sm text-gray-500">
+            Create your first board to organize agents and tasks into focused workstreams.
           </p>
           <button
             onClick={() => setShowCreateModal(true)}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-nexus-600 text-white hover:bg-nexus-500 transition-colors"
+            className="inline-flex items-center gap-2 rounded-lg bg-nexus-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-nexus-500"
           >
-            + Create Board
+            <Plus className="h-4 w-4" />
+            Create Board
           </button>
         </div>
       ) : (
@@ -113,25 +116,24 @@ export function Boards() {
             <div key={group.id}>
               <button
                 onClick={() => toggleGroup(group.id)}
-                className="flex items-center gap-3 mb-4 group w-full text-left"
+                className="group mb-4 flex w-full items-center gap-2 text-left"
               >
-                <span
+                <ChevronRight
                   className={cn(
-                    'text-gray-500 transition-transform text-xs',
+                    'h-4 w-4 text-gray-500 transition-transform',
                     collapsedGroups.has(group.id) ? 'rotate-0' : 'rotate-90'
                   )}
-                >
-                  &#9654;
-                </span>
-                <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider group-hover:text-white transition-colors">
+                />
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 transition-colors group-hover:text-white">
                   {group.name}
                 </h3>
-                <span className="text-xs text-gray-600 bg-white/5 px-2 py-0.5 rounded-full">
+                <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] tabular-nums text-gray-400">
                   {groupBoards.length}
                 </span>
+                <span className="ml-2 h-px flex-1 bg-white/5" />
               </button>
               {!collapsedGroups.has(group.id) && (
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
                   {groupBoards.map(board => (
                     <BoardCard key={board.id} board={board} />
                   ))}
@@ -144,11 +146,12 @@ export function Boards() {
           {ungroupedBoards.length > 0 && (
             <div>
               {groupedBoards.length > 0 && (
-                <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
-                  Ungrouped
-                </h3>
+                <div className="mb-4 flex items-center gap-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Ungrouped</h3>
+                  <span className="ml-1 h-px flex-1 bg-white/5" />
+                </div>
               )}
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {ungroupedBoards.map(board => (
                   <BoardCard key={board.id} board={board} />
                 ))}
@@ -180,55 +183,54 @@ function BoardCard({ board }: { board: BoardWithGroup }) {
   return (
     <Link
       to={`/boards/${board.id}`}
-      className="block rounded-xl border border-white/5 bg-surface-850 p-5 transition-all duration-300 hover:scale-[1.02] hover:border-nexus-500/30"
+      className="group relative flex flex-col overflow-hidden rounded-xl border border-white/5 bg-surface-850 p-4 transition-colors hover:border-white/15 hover:bg-surface-800"
     >
-      {/* Header row */}
-      <div className="flex items-start justify-between mb-3">
-        <h3 className="font-semibold text-white text-sm leading-tight pr-2">{board.name}</h3>
-        <span
-          className={cn(
-            'text-[10px] px-2 py-0.5 rounded-full font-medium uppercase tracking-wider border shrink-0',
-            style.badge
-          )}
-        >
-          {style.label}
-        </span>
-      </div>
+      {/* Type accent rail */}
+      <span
+        className="absolute inset-y-3 left-0 w-[3px] rounded-full opacity-70 transition-opacity group-hover:opacity-100"
+        style={{ background: style.accent }}
+      />
 
-      {/* Description */}
-      {board.description && (
-        <p className="text-xs text-gray-500 mb-3 line-clamp-2">{board.description}</p>
-      )}
-
-      {/* Objective */}
-      {board.objective && (
-        <div className="mb-3 px-2.5 py-1.5 rounded-md bg-nexus-600/10 border border-nexus-500/20">
-          <span className="text-xs text-nexus-400 line-clamp-1">{board.objective}</span>
-        </div>
-      )}
-
-      {/* Stats row */}
-      <div className="flex items-center gap-3 mb-3">
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs text-gray-600">Tasks:</span>
-          <span className="text-xs text-white font-medium">{taskCount}</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs text-gray-600">Agents:</span>
-          <span className="text-xs text-white font-medium">{agentCount}</span>
-        </div>
-      </div>
-
-      {/* Footer */}
-      <div className="flex items-center justify-between pt-3 border-t border-white/5">
-        {board.targetDate ? (
-          <span className="text-xs text-gray-500">
-            Target: {new Date(board.targetDate).toLocaleDateString()}
+      <div className="pl-2.5">
+        {/* Title + type */}
+        <div className="flex items-start justify-between gap-2">
+          <h3 className="truncate text-sm font-semibold text-white">{board.name}</h3>
+          <span className={cn('shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider', style.badge)}>
+            {style.label}
           </span>
-        ) : (
-          <span className="text-xs text-gray-600">No target date</span>
+        </div>
+
+        {/* Description */}
+        <p className="mt-1 line-clamp-2 min-h-[2rem] text-xs leading-5 text-gray-500">
+          {board.description || 'No description'}
+        </p>
+
+        {/* Objective — inline, no box */}
+        {board.objective && (
+          <div className="mt-2 flex items-start gap-1.5 text-xs text-nexus-300/90">
+            <Target className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span className="line-clamp-1">{board.objective}</span>
+          </div>
         )}
-        <span className="text-xs text-gray-600">{timeAgo(board.createdAt)}</span>
+
+        {/* Single compact meta row */}
+        <div className="mt-3 flex items-center gap-3 text-[11px] text-gray-500">
+          <span className="inline-flex items-center gap-1" title="Tasks">
+            <CheckSquare className="h-3.5 w-3.5 text-gray-600" />
+            <span className="tabular-nums text-gray-300">{taskCount}</span>
+          </span>
+          <span className="inline-flex items-center gap-1" title="Agents">
+            <Users className="h-3.5 w-3.5 text-gray-600" />
+            <span className="tabular-nums text-gray-300">{agentCount}</span>
+          </span>
+          {board.targetDate && (
+            <span className="inline-flex items-center gap-1" title="Target date">
+              <CalendarDays className="h-3.5 w-3.5 text-gray-600" />
+              <span className="tabular-nums">{new Date(board.targetDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+            </span>
+          )}
+          <span className="ml-auto text-gray-600">{timeAgo(board.createdAt)}</span>
+        </div>
       </div>
     </Link>
   );

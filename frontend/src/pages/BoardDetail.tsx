@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd';
-import { AlertTriangle, Trash2 } from 'lucide-react';
+import { AlertTriangle, Trash2, Plus, X, Inbox } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -9,12 +9,14 @@ import type { Board, Task, TaskStatus, Agent } from '@/types';
 
 const COLUMNS: TaskStatus[] = ['BACKLOG', 'ASSIGNED', 'IN_PROGRESS', 'REVIEW', 'DONE'];
 
-const columnConfig: Record<TaskStatus, { label: string; bg: string; border: string; dot: string }> = {
-  BACKLOG: { label: 'Backlog', bg: 'bg-gray-500/5', border: 'border-gray-500/20', dot: 'bg-gray-500' },
-  ASSIGNED: { label: 'Assigned', bg: 'bg-blue-500/5', border: 'border-blue-500/20', dot: 'bg-blue-500' },
-  IN_PROGRESS: { label: 'In Progress', bg: 'bg-violet-500/5', border: 'border-violet-500/20', dot: 'bg-violet-500' },
-  REVIEW: { label: 'Review', bg: 'bg-amber-500/5', border: 'border-amber-500/20', dot: 'bg-amber-500' },
-  DONE: { label: 'Done', bg: 'bg-emerald-500/5', border: 'border-emerald-500/20', dot: 'bg-emerald-500' },
+// Neutral panels — the status color lives in the dot + header accent line, not a
+// full tinted rectangle (which read as heavy/chunky, especially when empty).
+const columnConfig: Record<TaskStatus, { label: string; dot: string; accent: string }> = {
+  BACKLOG: { label: 'Backlog', dot: 'bg-gray-400', accent: '#9ca3af' },
+  ASSIGNED: { label: 'Assigned', dot: 'bg-blue-400', accent: '#3b8eff' },
+  IN_PROGRESS: { label: 'In Progress', dot: 'bg-violet-400', accent: '#8b5cf6' },
+  REVIEW: { label: 'Review', dot: 'bg-amber-400', accent: '#f59e0b' },
+  DONE: { label: 'Done', dot: 'bg-emerald-400', accent: '#10b981' },
 };
 
 const priorityBadge: Record<string, string> = {
@@ -304,9 +306,10 @@ export function BoardDetail() {
             ))}
             <button
               onClick={() => { setShowAddAgent(true); loadAllAgents(); }}
-              className="w-8 h-8 rounded-full bg-white/5 border border-white/10 border-dashed flex items-center justify-center text-gray-500 hover:text-white hover:border-white/20 transition-colors text-sm"
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-dashed border-white/10 bg-white/5 text-gray-500 transition-colors hover:border-white/20 hover:text-white"
+              title="Add agent"
             >
-              +
+              <Plus className="h-4 w-4" />
             </button>
             <Link
               to={`/agents/new?boardId=${encodeURIComponent(board.id)}&returnTo=${encodeURIComponent(`/production/${board.id}`)}`}
@@ -348,31 +351,32 @@ export function BoardDetail() {
 
       {/* Kanban board */}
       <DragDropContext onDragEnd={handleDragEnd}>
-        <div className="grid grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
           {COLUMNS.map(status => {
             const col = columnConfig[status];
             const statusTasks = tasksByStatus(status);
 
             return (
-              <div key={status} className={cn('rounded-xl border p-3 min-h-[400px]', col.bg, col.border)}>
-                {/* Column header */}
-                <div className="flex items-center justify-between mb-3 px-1">
-                  <div className="flex items-center gap-2">
-                    <div className={cn('w-2.5 h-2.5 rounded-full', col.dot)} />
-                    <span className="text-sm font-semibold text-white">{col.label}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-gray-500 bg-white/5 px-2 py-0.5 rounded-full">
-                      {statusTasks.length}
-                    </span>
+              <div key={status} className="flex flex-col rounded-xl border border-white/5 bg-surface-900/40">
+                {/* Column header with a thin status accent line */}
+                <div className="border-b border-white/5 px-3 py-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className={cn('h-2 w-2 rounded-full', col.dot)} />
+                      <span className="text-[13px] font-semibold text-gray-200">{col.label}</span>
+                      <span className="rounded-full bg-white/5 px-1.5 py-0.5 text-[11px] tabular-nums text-gray-400">
+                        {statusTasks.length}
+                      </span>
+                    </div>
                     <button
                       onClick={() => setShowAddTask(status)}
-                      className="text-gray-600 hover:text-white transition-colors text-sm leading-none"
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-white/5 hover:text-white"
                       title="Add task"
                     >
-                      +
+                      <Plus className="h-3.5 w-3.5" />
                     </button>
                   </div>
+                  <div className="mt-2 h-0.5 rounded-full" style={{ background: `${col.accent}55` }} />
                 </div>
 
                 {/* Droppable area */}
@@ -382,10 +386,20 @@ export function BoardDetail() {
                       ref={provided.innerRef}
                       {...provided.droppableProps}
                       className={cn(
-                        'min-h-[300px] rounded-lg transition-colors p-1',
-                        snapshot.isDraggingOver && 'bg-white/5'
+                        'flex-1 rounded-b-xl p-2 transition-colors',
+                        statusTasks.length === 0 ? 'min-h-[120px]' : 'min-h-[60px]',
+                        snapshot.isDraggingOver && 'bg-white/[0.03]'
                       )}
                     >
+                      {statusTasks.length === 0 && !snapshot.isDraggingOver && (
+                        <button
+                          onClick={() => setShowAddTask(status)}
+                          className="flex h-[104px] w-full flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-white/5 text-gray-600 transition-colors hover:border-white/15 hover:text-gray-400"
+                        >
+                          <Inbox className="h-4 w-4" />
+                          <span className="text-[11px]">No tasks</span>
+                        </button>
+                      )}
                       {statusTasks.map((task, index) => (
                         <Draggable key={task.id} draggableId={task.id} index={index}>
                           {(dragProvided, dragSnapshot) => (
@@ -412,9 +426,10 @@ export function BoardDetail() {
                                 </span>
                                 <button
                                   onClick={e => { e.stopPropagation(); handleDeleteTask(task.id); }}
-                                  className="text-gray-600 hover:text-red-400 transition-colors text-xs"
+                                  className="text-gray-600 transition-colors hover:text-red-400"
+                                  title="Delete task"
                                 >
-                                  &#10005;
+                                  <X className="h-3.5 w-3.5" />
                                 </button>
                               </div>
 
