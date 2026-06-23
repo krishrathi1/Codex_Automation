@@ -1,11 +1,22 @@
 import { prisma } from '../lib/prisma.js';
 
-export async function addMemory(boardId: string, data: {
+// Ensure the board belongs to the caller's org before any memory access.
+async function assertBoardInOrg(boardId: string, organizationId: string) {
+  const board = await prisma.board.findFirst({ where: { id: boardId, organizationId }, select: { id: true } });
+  if (!board) {
+    const err = new Error('Board not found') as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+}
+
+export async function addMemory(boardId: string, organizationId: string, data: {
   content: string;
   tags?: string[];
   isChat?: boolean;
   source?: string;
 }) {
+  await assertBoardInOrg(boardId, organizationId);
   return prisma.boardMemory.create({
     data: {
       boardId,
@@ -17,7 +28,7 @@ export async function addMemory(boardId: string, data: {
   });
 }
 
-export async function listMemory(boardId: string, options?: {
+export async function listMemory(boardId: string, organizationId: string, options?: {
   limit?: number;
   offset?: number;
   since?: Date;
@@ -26,6 +37,7 @@ export async function listMemory(boardId: string, options?: {
   return prisma.boardMemory.findMany({
     where: {
       boardId,
+      board: { organizationId },
       ...(options?.since && { createdAt: { gte: options.since } }),
       ...(options?.isChat !== undefined && { isChat: options.isChat }),
     },
@@ -35,6 +47,7 @@ export async function listMemory(boardId: string, options?: {
   });
 }
 
-export async function deleteMemory(id: string, boardId: string) {
-  return prisma.boardMemory.delete({ where: { id, boardId } });
+export async function deleteMemory(id: string, boardId: string, organizationId: string) {
+  // deleteMany with the org-scoped board relation: a cross-org id affects 0 rows.
+  return prisma.boardMemory.deleteMany({ where: { id, boardId, board: { organizationId } } });
 }

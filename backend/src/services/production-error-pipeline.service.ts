@@ -729,7 +729,17 @@ export async function advanceProductionErrorPipelineAfterJob(
       if (pushed) {
         await prisma.productionErrorEvent.update({
           where: { id: errorEvent.id },
-          data: { status: 'COMPLETED', resolvedAt: new Date() },
+          data: {
+            status: 'COMPLETED',
+            resolvedAt: new Date(),
+            // Persist the commit so the Auto-Fix dashboard can link straight to it.
+            payload: {
+              ...objectRecord(errorEvent.payload),
+              commitSha: pushed.commitSha,
+              commitUrl: pushed.htmlUrl,
+              filesPushed: pushed.filesPushed,
+            } as any,
+          },
         });
         if (errorEvent.taskId) {
           await prisma.task.update({

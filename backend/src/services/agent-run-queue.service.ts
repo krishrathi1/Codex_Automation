@@ -1358,14 +1358,27 @@ async function processJob(job: AgentRunJobWithRelations, io?: SocketIOServer) {
     resumeCodexSessionId: contextPacket.resumeCodexSessionId,
   });
 
+  // Ensure the job has a thread BEFORE persisting messages, so both the user
+  // prompt and the agent's response land in the same conversation. Without this,
+  // a threadless job creates a throwaway thread for the prompt only, and
+  // createAgentRunMessage (which requires job.threadId) silently drops the reply.
+  if (!job.threadId) {
+    const runThread = await prisma.thread.create({
+      data: {
+        organizationId: job.organizationId,
+        title: `Queued run for ${job.agent.displayName}`,
+      },
+    });
+    job.threadId = runThread.id;
+    await prisma.agentRunJob.update({
+      where: { id: job.id },
+      data: { threadId: runThread.id },
+    }).catch(err => logger.warn({ err, jobId: job.id }, 'Failed to persist run thread id'));
+  }
+
   await prisma.message.create({
     data: {
-      threadId: job.threadId ?? (await prisma.thread.create({
-        data: {
-          organizationId: job.organizationId,
-          title: `Queued run for ${job.agent.displayName}`,
-        },
-      })).id,
+      threadId: job.threadId,
       senderId: adminAgent.id,
       receiverId: job.agentId,
       content: job.prompt,

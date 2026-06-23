@@ -990,3 +990,40 @@ export interface SoulTemplate {
   createdAt: string;
   updatedAt: string;
 }
+
+export type ProductionErrorStatus =
+  | 'RECEIVED' | 'TASK_CREATED' | 'DEBUG_QUEUED' | 'REVIEW_QUEUED'
+  | 'APPROVED' | 'REJECTED' | 'COMMIT_QUEUED' | 'COMPLETED' | 'FAILED';
+
+export interface ProposedFixFile {
+  path: string;
+  content: string | null; // null = delete
+}
+
+export interface ProductionErrorEvent {
+  id: string;
+  source: string;            // vercel | signoz | github | website
+  severity: string;          // critical | error | warning
+  title: string;
+  message: string;
+  stack: string | null;
+  url: string | null;
+  route: string | null;
+  environment: string | null;
+  status: ProductionErrorStatus;
+  fingerprint: string;
+  payload: {
+    proposedFix?: ProposedFixFile[];
+    commitSha?: string;
+    commitUrl?: string;
+    filesPushed?: number;
+    repo?: string;
+    branch?: string;
+    [k: string]: unknown;
+  } | null;
+  board: { id: string; name: string; slug: string } | null;
+  task: { id: string; title: string; status: string } | null;
+  resolvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}

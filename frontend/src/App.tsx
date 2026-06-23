@@ -5,6 +5,7 @@ import { useAuthStore } from './stores/auth-store';
 import { Dashboard } from './pages/Dashboard';
 import { ActivityFeed } from './pages/ActivityFeed';
 import { Logs } from './pages/Logs';
+import { ProductionFixes } from './pages/ProductionFixes';
 import { KanbanBoard } from './pages/KanbanBoard';
 import { AgentProfile } from './pages/AgentProfile';
 import { Communications } from './pages/Communications';
@@ -92,6 +93,7 @@ export function App() {
         <Route element={<Layout />}>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/activity" element={<ActivityFeed />} />
+          <Route path="/fixes" element={<ProductionFixes />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/comms" element={<Communications />} />
           <Route path="/timeline" element={<Timeline />} />

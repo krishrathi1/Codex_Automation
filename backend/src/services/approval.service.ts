@@ -131,8 +131,15 @@ export async function createApproval(organizationId: string, data: {
       const board = await prisma.board.findFirst({ where: { id: data.boardId, organizationId } });
       if (!board) throw new Error('Board not found');
 
-      // Normalize all task IDs from multiple sources
-      const allTaskIds = normalizeTaskIds(data.taskId, data.taskIds, data.payload);
+      // Normalize all task IDs from multiple sources, then keep only those that
+      // actually belong to this org (drop any cross-org ids before linking).
+      const requestedTaskIds = normalizeTaskIds(data.taskId, data.taskIds, data.payload);
+      const allTaskIds = requestedTaskIds.length > 0
+        ? (await prisma.task.findMany({
+            where: { id: { in: requestedTaskIds }, organizationId },
+            select: { id: true },
+          })).map(t => t.id)
+        : [];
       const primaryTaskId = allTaskIds[0] || null;
 
       // Check for pending approval conflicts (one pending per task)
@@ -226,7 +233,9 @@ export async function resolveApproval(id: string, organizationId: string, status
         }
         if (linkedTaskIds.length > 0) {
           await prisma.task.updateMany({
-            where: { id: { in: linkedTaskIds } },
+            // Org-scope the write so a stray cross-org task link can never flip
+            // another org's tasks to DONE.
+            where: { id: { in: linkedTaskIds }, organizationId },
             data: { status: 'DONE' },
           });
         }

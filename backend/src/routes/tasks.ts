@@ -24,7 +24,11 @@ router.post('/', async (req, res) => {
   if (task.boardId) {
     const duplicate = await fingerprintService.findDuplicate(task.boardId, hash);
     if (!duplicate) {
-      await fingerprintService.createFingerprint(task.boardId, task.id, hash);
+      // createFingerprint can race with a concurrent identical create (unique on
+      // [boardId, fingerprintHash]); swallow the unique-violation instead of 500ing.
+      await fingerprintService.createFingerprint(task.boardId, task.id, hash).catch((err: unknown) => {
+        if ((err as { code?: string })?.code !== 'P2002') throw err;
+      });
     } else {
       (task as any).duplicateOf = duplicate.task;
     }

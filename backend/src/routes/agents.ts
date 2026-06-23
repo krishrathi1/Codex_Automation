@@ -100,20 +100,23 @@ const HEARTBEAT_RATE_LIMIT_MS = 5 * 1000;              // Reject heartbeats fast
 router.post('/:id/heartbeat', async (req, res) => {
   const agentId = req.params.id;
   const now = Date.now();
+  // Key throttle maps by org+agent so one org can't poison another org's
+  // in-memory throttle state by probing arbitrary agent IDs.
+  const throttleKey = `${req.organizationId}:${agentId}`;
 
   // Rate limit: reject if heartbeat came in within 5 seconds
-  const lastPing = heartbeatRateLimit.get(agentId);
+  const lastPing = heartbeatRateLimit.get(throttleKey);
   if (lastPing && now - lastPing < HEARTBEAT_RATE_LIMIT_MS) {
     return res.status(429).json({ error: 'Too many heartbeats', retryAfterMs: HEARTBEAT_RATE_LIMIT_MS - (now - lastPing) });
   }
-  heartbeatRateLimit.set(agentId, now);
+  heartbeatRateLimit.set(throttleKey, now);
 
   const agent = await agentService.recordHeartbeat(agentId, req.organizationId!);
 
   // Throttle activity creation: only write to DB every 5 minutes per agent
-  const lastActivity = heartbeatActivityThrottle.get(agentId);
+  const lastActivity = heartbeatActivityThrottle.get(throttleKey);
   if (!lastActivity || now - lastActivity >= HEARTBEAT_ACTIVITY_INTERVAL_MS) {
-    heartbeatActivityThrottle.set(agentId, now);
+    heartbeatActivityThrottle.set(throttleKey, now);
     await activityService.createActivity(req.organizationId!, {
       agentId: agent.id,
       type: 'HEARTBEAT',
@@ -142,8 +145,8 @@ router.post('/:id/heartbeat', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   await agentService.deleteAgent(req.params.id, req.organizationId!);
-  heartbeatActivityThrottle.delete(req.params.id);
-  heartbeatRateLimit.delete(req.params.id);
+  heartbeatActivityThrottle.delete(`${req.organizationId}:${req.params.id}`);
+  heartbeatRateLimit.delete(`${req.organizationId}:${req.params.id}`);
   req.app.get('io')?.to(`org:${req.organizationId}`).emit('agent:deleted', { id: req.params.id });
   res.status(204).end();
 });

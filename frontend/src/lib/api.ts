@@ -1,4 +1,4 @@
-import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, ChatHistory, ChatResponse, MotherChatContext, MotherChatDiagnostics, WorkspaceFile, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate, CommEdge, LiveBlackboardTrace, PlatformIntegrationSettings, GithubRepositorySummary, VercelProjectSummary, SigNozLog, AgentDesignProposal } from '../types';
+import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, ChatHistory, ChatResponse, MotherChatContext, MotherChatDiagnostics, WorkspaceFile, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate, CommEdge, LiveBlackboardTrace, PlatformIntegrationSettings, GithubRepositorySummary, VercelProjectSummary, SigNozLog, ProductionErrorEvent, AgentDesignProposal } from '../types';
 import { useAuthStore } from '../stores/auth-store';
 import { AUTH_DISABLED } from './auth-mode';
 
@@ -486,6 +486,16 @@ export const api = {
       request<SoulTemplate>(`/soul-templates/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/soul-templates/${id}`, { method: 'DELETE' }),
     search: (q: string) => request<SoulTemplate[]>(`/soul-templates/search?q=${encodeURIComponent(q)}`),
+  },
+  errorEvents: {
+    list: (params?: { boardId?: string; limit?: number }) => {
+      const q = new URLSearchParams();
+      if (params?.boardId) q.set('boardId', params.boardId);
+      if (params?.limit) q.set('limit', String(params.limit));
+      const qs = q.toString();
+      return request<ProductionErrorEvent[]>(`/error-events${qs ? `?${qs}` : ''}`);
+    },
+    get: (id: string) => request<ProductionErrorEvent>(`/error-events/${id}`),
   },
   invites: {
     list: () => request<OrgInvite[]>('/org/invites'),

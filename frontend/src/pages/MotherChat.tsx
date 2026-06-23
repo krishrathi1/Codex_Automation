@@ -990,7 +990,7 @@ export function MotherChat() {
               value={input}
               onChange={event => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={sending || dispatchingAll || startingLiveBlackboard}
+              disabled={sending || dispatchingAll || startingLiveWorkflow || startingLiveBlackboard}
               rows={2}
               placeholder={scopedBoard ? `Ask about ${scopedBoard.name}...` : 'Ask Mother Chat...'}
               className="min-h-[48px] flex-1 resize-none rounded-xl border border-white/10 bg-surface-850 px-4 py-3 text-sm text-white placeholder-gray-600 focus:border-nexus-500 focus:outline-none disabled:opacity-50"
@@ -998,7 +998,7 @@ export function MotherChat() {
             {scopedBoardId && (
               <button
                 onClick={() => handleDispatchAll()}
-                disabled={!input.trim() || sending || dispatchingAll || startingLiveBlackboard}
+                disabled={!input.trim() || sending || dispatchingAll || startingLiveWorkflow || startingLiveBlackboard}
                 className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 text-sm font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Assign all agents"
               >
@@ -1008,7 +1008,7 @@ export function MotherChat() {
             )}
             <button
               onClick={handleSend}
-              disabled={!input.trim() || sending || dispatchingAll || startingLiveBlackboard}
+              disabled={!input.trim() || sending || dispatchingAll || startingLiveWorkflow || startingLiveBlackboard}
               className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-nexus-600 text-white transition-colors hover:bg-nexus-500 disabled:cursor-not-allowed disabled:opacity-50"
               title="Send"
             >

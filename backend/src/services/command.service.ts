@@ -15,6 +15,13 @@ export async function sendCommand(organizationId: string, data: {
       span.setAttribute('org.id', organizationId);
       span.setAttribute('agent.id', data.agentId);
       span.setAttribute('command.type', data.type);
+      // The target agent must belong to the caller's org (prevent cross-org command issuance).
+      const agent = await prisma.agent.findFirst({ where: { id: data.agentId, organizationId }, select: { id: true } });
+      if (!agent) {
+        const err = new Error('Agent not found') as Error & { statusCode?: number };
+        err.statusCode = 404;
+        throw err;
+      }
       const command = await prisma.command.create({
         data: {
           organizationId,

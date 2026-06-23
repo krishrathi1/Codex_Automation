@@ -63,14 +63,29 @@ export async function attachToBoard(definitionId: string, organizationId: string
   return results;
 }
 
-export async function getBoardFields(boardId: string) {
+export async function getBoardFields(boardId: string, organizationId: string) {
   return prisma.boardTaskCustomField.findMany({
-    where: { boardId },
+    where: { boardId, board: { organizationId } },
     include: { definition: true },
   });
 }
 
-export async function setFieldValue(taskId: string, definitionId: string, value: string) {
+export async function setFieldValue(taskId: string, definitionId: string, value: string, organizationId: string) {
+  if (!taskId || !definitionId) {
+    const err = new Error('taskId and definitionId are required') as Error & { statusCode?: number };
+    err.statusCode = 400;
+    throw err;
+  }
+  // Both the task and the definition must belong to the caller's org.
+  const [task, definition] = await Promise.all([
+    prisma.task.findFirst({ where: { id: taskId, organizationId }, select: { id: true } }),
+    prisma.taskCustomFieldDefinition.findFirst({ where: { id: definitionId, organizationId }, select: { id: true } }),
+  ]);
+  if (!task || !definition) {
+    const err = new Error('Task or custom field definition not found') as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
   return prisma.taskCustomFieldValue.upsert({
     where: { taskId_definitionId: { taskId, definitionId } },
     create: { taskId, definitionId, value },
@@ -78,9 +93,9 @@ export async function setFieldValue(taskId: string, definitionId: string, value:
   });
 }
 
-export async function getTaskFieldValues(taskId: string) {
+export async function getTaskFieldValues(taskId: string, organizationId: string) {
   return prisma.taskCustomFieldValue.findMany({
-    where: { taskId },
+    where: { taskId, task: { organizationId } },
     include: { definition: true },
   });
 }

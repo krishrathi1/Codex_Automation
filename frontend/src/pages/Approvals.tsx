@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
@@ -29,8 +29,12 @@ export function Approvals() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<ApprovalStatus | 'ALL'>('ALL');
   const [boardFilter, setBoardFilter] = useState<string>('ALL');
+  // Monotonic request id so a slow earlier fetch can't overwrite a newer one
+  // when filters change rapidly.
+  const reqRef = useRef(0);
 
   const fetchData = useCallback(async () => {
+    const myReq = ++reqRef.current;
     try {
       const params: Record<string, string> = {};
       if (statusFilter !== 'ALL') params.status = statusFilter;
@@ -41,13 +45,14 @@ export function Approvals() {
         api.approvals.stats(),
         api.boards.list(),
       ]);
+      if (reqRef.current !== myReq) return; // superseded by a newer fetch
       setApprovals(approvalsData);
       setStats(statsData);
       setBoards(boardsData);
     } catch (err) {
       console.error('Failed to fetch approvals:', err);
     } finally {
-      setLoading(false);
+      if (reqRef.current === myReq) setLoading(false);
     }
   }, [statusFilter, boardFilter]);
 

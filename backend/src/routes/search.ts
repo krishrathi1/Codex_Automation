@@ -11,10 +11,13 @@ router.get('/', async (req, res) => {
     return res.status(400).json({ error: 'Search query "q" is required' });
   }
 
+  const parsedLimit = limit ? parseInt(limit as string, 10) : NaN;
   const result = await commandService.searchActivities(req.organizationId!, q, {
     agentId: agentId as string | undefined,
     type: type as ActivityType | undefined,
-    limit: limit ? parseInt(limit as string) : undefined,
+    // Guard against NaN/negative/oversized limits (a bad ?limit would otherwise
+    // pass NaN to Prisma `take` and 500).
+    limit: !Number.isNaN(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 200) : undefined,
   });
 
   res.json(result);

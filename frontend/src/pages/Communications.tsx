@@ -53,7 +53,7 @@ function CommGraph({
 
   // Calculate max message count for line thickness scaling
   const maxMessages = useMemo(
-    () => Math.max(...data.edges.map((e) => e.messageCount), 1),
+    () => data.edges.reduce((m, e) => Math.max(m, e.messageCount), 1),
     [data.edges],
   );
 
@@ -252,7 +252,6 @@ function CommGraph({
 // ─── Message Bubble ─────────────────────────────────────────
 
 function MessageBubble({ message, isFromSender }: { message: Message; isFromSender: boolean }) {
-  const agent = isFromSender ? message.sender : message.sender;
   return (
     <div className={cn('flex gap-3 max-w-[85%]', isFromSender ? 'self-start' : 'self-end flex-row-reverse')}>
       {/* Avatar */}

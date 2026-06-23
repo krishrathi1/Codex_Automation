@@ -215,6 +215,17 @@ export async function updateBoard(id: string, organizationId: string, data: {
             select: { successMetrics: true },
           })
         : null;
+      // successMetrics and integrationScope both write the successMetrics column.
+      // Compute a single value so neither silently clobbers the other: when an
+      // integrationScope is supplied, merge it onto the incoming successMetrics
+      // (falling back to the persisted value only if no new metrics were sent).
+      const nextSuccessMetrics =
+        data.integrationScope !== undefined
+          ? withIntegrationScope(
+              data.successMetrics !== undefined ? data.successMetrics : existingBoard?.successMetrics,
+              data.integrationScope,
+            )
+          : data.successMetrics;
       const board = await prisma.board.update({
         where: { id, organizationId },
         data: {
@@ -224,8 +235,7 @@ export async function updateBoard(id: string, organizationId: string, data: {
           ...(data.boardGroupId !== undefined && { boardGroupId: data.boardGroupId || null }),
           ...(data.boardType !== undefined && { boardType: data.boardType }),
           ...(data.objective !== undefined && { objective: data.objective }),
-          ...(data.successMetrics !== undefined && { successMetrics: data.successMetrics as any }),
-          ...(data.integrationScope !== undefined && { successMetrics: withIntegrationScope(existingBoard?.successMetrics, data.integrationScope) as any }),
+          ...((data.successMetrics !== undefined || data.integrationScope !== undefined) && { successMetrics: nextSuccessMetrics as any }),
           ...(data.targetDate !== undefined && { targetDate: data.targetDate ? new Date(data.targetDate) : null }),
           ...(data.maxAgents !== undefined && { maxAgents: data.maxAgents }),
           ...(data.requireApprovalForDone !== undefined && { requireApprovalForDone: data.requireApprovalForDone }),

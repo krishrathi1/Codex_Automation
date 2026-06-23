@@ -30,19 +30,24 @@ router.post('/:id/attach', async (req, res) => {
 });
 
 router.get('/boards/:boardId', async (req, res) => {
-  const fields = await customFieldService.getBoardFields(req.params.boardId);
+  const fields = await customFieldService.getBoardFields(req.params.boardId, req.organizationId!);
   res.json(fields);
 });
 
 // Task custom field values
 router.post('/values', async (req, res) => {
-  const { taskId, definitionId, value } = req.body;
-  const result = await customFieldService.setFieldValue(taskId, definitionId, value);
-  res.json(result);
+  try {
+    const { taskId, definitionId, value } = req.body;
+    const result = await customFieldService.setFieldValue(taskId, definitionId, value, req.organizationId!);
+    res.json(result);
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
 });
 
 router.get('/values/:taskId', async (req, res) => {
-  const values = await customFieldService.getTaskFieldValues(req.params.taskId);
+  const values = await customFieldService.getTaskFieldValues(req.params.taskId, req.organizationId!);
   res.json(values);
 });
 

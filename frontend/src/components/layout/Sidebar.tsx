@@ -9,6 +9,7 @@ const navSections = [
     items: [
       { path: '/dashboard', label: 'Production Groups', icon: '\u25C8' },
       { path: '/activity', label: 'Activity Feed', icon: '\u25C9' },
+      { path: '/fixes', label: 'Production Fixes', icon: '\u2726' },
       { path: '/mother-chat', label: 'Mother Chat', icon: '\u25B6' },
       { path: '/chat', label: 'Chat', icon: '\u25EC' },
       { path: '/comms', label: 'Communications', icon: '\u25CE' },

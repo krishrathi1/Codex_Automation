@@ -48,48 +48,36 @@ export function Layout() {
       setLiveAlerts((prev) => [alert, ...prev.filter((item) => item.id !== alert.id)].slice(0, 3));
       window.setTimeout(() => dismissAlert(alert.id), 12000);
     };
-
-    s.on('agent:status', (agent: Agent) => {
-      updateAgent(agent);
-    });
-
-    s.on('agent:heartbeat', (agent: Agent) => {
-      updateAgent(agent);
-    });
-
-    s.on('activity:new', (activity: Activity) => {
-      addActivity(activity);
-    });
-
-    s.on('task:update', (task: Task) => {
-      setTask(task);
-    });
-
-    s.on('task:delete', ({ id }: { id: string }) => {
-      removeTask(id);
-    });
-
-    // Agent-to-agent messaging events (real-time monitoring across the app)
-    s.on('agent:message', () => {
-      // Trigger a stats refresh so dashboard counters update
-      fetchStats();
-    });
-
-    s.on('agent:deleted', ({ id }: { id: string }) => {
+    // Named handlers so cleanup removes ONLY our listeners. `off(event)` with no
+    // handler would wipe listeners other components register on the shared socket.
+    const handleAgentStatus = (agent: Agent) => updateAgent(agent);
+    const handleAgentHeartbeat = (agent: Agent) => updateAgent(agent);
+    const handleActivityNew = (activity: Activity) => addActivity(activity);
+    const handleTaskUpdate = (task: Task) => setTask(task);
+    const handleTaskDelete = ({ id }: { id: string }) => removeTask(id);
+    const handleAgentMessage = () => fetchStats();
+    const handleAgentDeleted = ({ id }: { id: string }) => {
       removeAgentFromStore(id);
       fetchStats();
-    });
+    };
 
+    s.on('agent:status', handleAgentStatus);
+    s.on('agent:heartbeat', handleAgentHeartbeat);
+    s.on('activity:new', handleActivityNew);
+    s.on('task:update', handleTaskUpdate);
+    s.on('task:delete', handleTaskDelete);
+    s.on('agent:message', handleAgentMessage);
+    s.on('agent:deleted', handleAgentDeleted);
     s.on('alert:new', handleNewAlert);
 
     return () => {
-      s.off('agent:status');
-      s.off('agent:heartbeat');
-      s.off('activity:new');
-      s.off('task:update');
-      s.off('task:delete');
-      s.off('agent:message');
-      s.off('agent:deleted');
+      s.off('agent:status', handleAgentStatus);
+      s.off('agent:heartbeat', handleAgentHeartbeat);
+      s.off('activity:new', handleActivityNew);
+      s.off('task:update', handleTaskUpdate);
+      s.off('task:delete', handleTaskDelete);
+      s.off('agent:message', handleAgentMessage);
+      s.off('agent:deleted', handleAgentDeleted);
       s.off('alert:new', handleNewAlert);
     };
   }, [updateAgent, addActivity, setTask, removeTask, removeAgentFromStore, fetchStats]);

@@ -878,7 +878,7 @@ export function Topology() {
   const layoutSize = layoutSizeRef.current;
   const nodes = nodesRef.current;
   const particles = particlesRef.current;
-  const maxEdgeCount = Math.max(1, ...topologyEdges.map((e) => e.messageCount));
+  const maxEdgeCount = topologyEdges.reduce((m, e) => Math.max(m, e.messageCount), 1);
 
   function handlePointerDown(event: PointerEvent<SVGSVGElement>) {
     const target = event.target as Element;

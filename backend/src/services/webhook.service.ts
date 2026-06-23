@@ -95,15 +95,19 @@ export async function handleInbound(boardId: string, webhookId: string, payload:
   return stored;
 }
 
-export async function listPayloads(webhookId: string, options?: { limit?: number; offset?: number }) {
+export async function listPayloads(webhookId: string, organizationId: string, options?: { limit?: number; offset?: number }) {
   return prisma.boardWebhookPayload.findMany({
-    where: { webhookId },
+    // Scope through webhook -> board -> organization so payloads (which can carry
+    // secrets/PII) are never readable across orgs.
+    where: { webhookId, webhook: { board: { organizationId } } },
     orderBy: { receivedAt: 'desc' },
     take: options?.limit ?? 20,
     skip: options?.offset ?? 0,
   });
 }
 
-export async function getPayload(payloadId: string) {
-  return prisma.boardWebhookPayload.findUnique({ where: { id: payloadId } });
+export async function getPayload(payloadId: string, organizationId: string) {
+  return prisma.boardWebhookPayload.findFirst({
+    where: { id: payloadId, webhook: { board: { organizationId } } },
+  });
 }

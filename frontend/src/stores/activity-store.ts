@@ -24,8 +24,13 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
 
   fetchActivities: async (params) => {
     set({ loading: true });
-    const result = await api.activities.list({ limit: 100, ...params });
-    set({ activities: result.activities, total: result.total, loading: false });
+    try {
+      const result = await api.activities.list({ limit: 100, ...params });
+      set({ activities: result.activities, total: result.total });
+    } finally {
+      // Always clear loading, even on failure — otherwise the feed spins forever.
+      set({ loading: false });
+    }
   },
 
   clearActivities: async () => {

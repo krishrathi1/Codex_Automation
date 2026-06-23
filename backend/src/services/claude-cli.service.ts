@@ -554,15 +554,23 @@ export function applyClaudeJsonEvent(event: ClaudeJsonEvent, state: ClaudeRunSta
       ? event.message.content
       : [];
     const nexusEvents: NexusClaudeEvent[] = [];
+    const textParts: string[] = [];
 
     for (const block of blocks) {
       if (block.type === 'text' && typeof block.text === 'string') {
-        state.result = block.text;
+        textParts.push(block.text);
         nexusEvents.push({ type: 'response', content: block.text });
       } else if (block.type === 'tool_use') {
         const toolName = typeof block.name === 'string' ? block.name : 'tool';
         nexusEvents.push({ type: 'tool_call', content: toolName });
       }
+    }
+
+    // Keep all text blocks of this assistant message (don't let a later block
+    // clobber earlier ones). A terminal `result` event still overrides with the
+    // canonical full text when present.
+    if (textParts.length > 0) {
+      state.result = textParts.join('\n');
     }
 
     return nexusEvents;

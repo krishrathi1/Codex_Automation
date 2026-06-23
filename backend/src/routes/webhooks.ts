@@ -27,12 +27,12 @@ router.delete('/:boardId/webhooks/:id', async (req, res) => {
 router.get('/:boardId/webhooks/:id/payloads', async (req, res) => {
   const limit = parseInt(req.query.limit as string) || 20;
   const offset = parseInt(req.query.offset as string) || 0;
-  const payloads = await webhookService.listPayloads(req.params.id, { limit, offset });
+  const payloads = await webhookService.listPayloads(req.params.id, req.organizationId!, { limit, offset });
   res.json(payloads);
 });
 
 router.get('/:boardId/webhooks/:id/payloads/:payloadId', async (req, res) => {
-  const payload = await webhookService.getPayload(req.params.payloadId);
+  const payload = await webhookService.getPayload(req.params.payloadId, req.organizationId!);
   if (!payload) return res.status(404).json({ error: 'Payload not found' });
   res.json(payload);
 });

@@ -11,13 +11,13 @@ router.post('/:boardId/onboarding/start', async (req, res) => {
 
 router.post('/:boardId/onboarding/message', async (req, res) => {
   const { sessionId, content } = req.body;
-  const session = await onboardingService.sendMessage(sessionId, content);
+  const session = await onboardingService.sendMessage(sessionId, content, req.organizationId!);
   req.app.get('io')?.to(`org:${req.organizationId}`).emit('onboarding:message', { boardId: req.params.boardId });
   res.json(session);
 });
 
 router.get('/:boardId/onboarding', async (req, res) => {
-  const session = await onboardingService.getSession(req.params.boardId);
+  const session = await onboardingService.getSession(req.params.boardId, req.organizationId!);
   res.json(session);
 });
 

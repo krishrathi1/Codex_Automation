@@ -26,8 +26,10 @@ export async function startSession(boardId: string, organizationId: string) {
   });
 }
 
-export async function sendMessage(sessionId: string, content: string) {
-  const session = await prisma.boardOnboardingSession.findUnique({ where: { id: sessionId } });
+export async function sendMessage(sessionId: string, content: string, organizationId: string) {
+  const session = await prisma.boardOnboardingSession.findFirst({
+    where: { id: sessionId, board: { organizationId } },
+  });
   if (!session || session.status !== 'IN_PROGRESS') throw new Error('Session not found or completed');
 
   const messages = (session.messages as unknown as Array<{ role: string; content: string; timestamp: string }>) || [];
@@ -77,15 +79,17 @@ export async function sendMessage(sessionId: string, content: string) {
   });
 }
 
-export async function getSession(boardId: string) {
+export async function getSession(boardId: string, organizationId: string) {
   return prisma.boardOnboardingSession.findFirst({
-    where: { boardId },
+    where: { boardId, board: { organizationId } },
     orderBy: { createdAt: 'desc' },
   });
 }
 
 export async function confirmOnboarding(sessionId: string, organizationId: string) {
-  const session = await prisma.boardOnboardingSession.findUnique({ where: { id: sessionId } });
+  const session = await prisma.boardOnboardingSession.findFirst({
+    where: { id: sessionId, board: { organizationId } },
+  });
   if (!session || session.status !== 'IN_PROGRESS') throw new Error('Session not found or already completed');
 
   const draftGoal = session.draftGoal as Record<string, unknown> | null;

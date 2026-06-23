@@ -80,9 +80,12 @@ router.post('/heartbeat', async (req: any, res) => {
 // Agent logs activity
 router.post('/activity', async (req: any, res) => {
   const { type, message, metadata } = req.body;
+  // Only accept valid ActivityType values; default to SYSTEM ('INFO' is not a
+  // member of the enum and would throw a Prisma validation error.
+  const VALID_TYPES = ['HEARTBEAT', 'TASK_START', 'TASK_COMPLETE', 'ERROR', 'MESSAGE', 'DELEGATION', 'ALERT', 'SYSTEM'];
   const activity = await activityService.createActivity(req.organizationId, {
     agentId: req.agentId,
-    type: type || 'INFO',
+    type: VALID_TYPES.includes(type) ? type : 'SYSTEM',
     message: message || `Activity from ${req.agentName}`,
     metadata,
   });

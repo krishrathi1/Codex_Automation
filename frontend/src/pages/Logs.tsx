@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { Header } from '../components/layout/Header';
 import { api } from '../lib/api';
@@ -30,8 +30,11 @@ export function Logs() {
   const [severity, setSeverity] = useState<SeverityFilter>('ERROR');
   const [search, setSearch] = useState('');
   const [windowMs, setWindowMs] = useState(WINDOWS[1].ms);
+  // Monotonic request id so a slow earlier fetch can't overwrite a newer one.
+  const reqRef = useRef(0);
 
   const load = useCallback(async () => {
+    const myReq = ++reqRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -42,12 +45,14 @@ export function Logs() {
       if (severity !== 'ALL') params.severity = severity;
       if (search.trim()) params.search = search.trim();
       const result = await api.org.signozLogs(params);
+      if (reqRef.current !== myReq) return; // a newer request superseded this one
       setLogs(result.logs);
     } catch (err) {
+      if (reqRef.current !== myReq) return;
       setError(err instanceof Error ? err.message : 'Failed to load logs');
       setLogs([]);
     } finally {
-      setLoading(false);
+      if (reqRef.current === myReq) setLoading(false);
     }
   }, [severity, search, windowMs]);
 
