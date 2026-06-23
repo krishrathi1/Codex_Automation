@@ -394,6 +394,16 @@ export async function getSignozLogs(organizationId: string, opts: QueryLogsOptio
   return queryLogs(creds.signoz, opts);
 }
 
+/** Distinct service.name values seen in recent logs — for the service picker. */
+export async function getSignozServices(organizationId: string): Promise<string[]> {
+  const logs = await getSignozLogs(organizationId, { sinceMs: 24 * 60 * 60 * 1000, limit: 1000 });
+  const set = new Set<string>();
+  for (const l of logs) {
+    if (l.serviceName) set.add(l.serviceName);
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
 /** Resolve the per-board SigNoz service name from its integrationScope. */
 export async function getBoardSignozService(organizationId: string, boardId: string): Promise<string | null> {
   const board = await prisma.board.findFirst({

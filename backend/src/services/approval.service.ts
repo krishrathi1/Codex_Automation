@@ -241,6 +241,28 @@ export async function resolveApproval(id: string, organizationId: string, status
         }
       }
 
+      // MERGE_PR approvals: close or revert the linked ProductionErrorEvent.
+      if (updated.actionType === 'MERGE_PR') {
+        const payload = updated.payload as Record<string, unknown> | null;
+        const eventId = typeof payload?.productionErrorEventId === 'string' ? payload.productionErrorEventId : null;
+        if (eventId) {
+          const eventStatus = status === 'APPROVED' ? 'COMPLETED' : 'REJECTED';
+          await prisma.productionErrorEvent.updateMany({
+            where: { id: eventId, organizationId },
+            data: {
+              status: eventStatus,
+              ...(status === 'APPROVED' ? { resolvedAt: new Date() } : {}),
+            },
+          }).catch(err => logger.error({ err, eventId, approvalId: id }, '[approval] Failed to update ProductionErrorEvent after MERGE_PR resolution'));
+          if (updated.taskId) {
+            await prisma.task.updateMany({
+              where: { id: updated.taskId, organizationId },
+              data: { status: status === 'APPROVED' ? 'DONE' : 'BACKLOG' },
+            }).catch(err => logger.warn({ err, taskId: updated.taskId }, '[approval] Failed to update task after MERGE_PR resolution'));
+          }
+        }
+      }
+
       logger.info({ approvalId: id, status }, 'Approval resolved');
       return enrichApprovalResponse(updated);
     } catch (err) {

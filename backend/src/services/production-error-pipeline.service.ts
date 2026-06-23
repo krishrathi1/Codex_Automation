@@ -4,6 +4,7 @@ import type { Server as SocketIOServer } from 'socket.io';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import * as activityService from './activity.service.js';
+import * as approvalService from './approval.service.js';
 import { getMonitorIntegrationCredentials, getBoardGithubScope, getBoardBitbucketScope, getBoardPrimaryProvider } from './platform-integrations.service.js';
 import * as githubApi from './github-api.service.js';
 import * as bitbucketApi from './bitbucket-api.service.js';
@@ -103,10 +104,15 @@ function parsePipelineContext(value: unknown): PipelineSourceContext {
 }
 
 function isReviewApproved(output: string) {
-  const normalized = output.trim().toLowerCase();
+  // Only check the first non-empty line — the review agent is instructed to put
+  // the verdict on line 1 as "APPROVED: yes" or "APPROVED: no". Checking the
+  // whole body risks false positives when the agent incidentally uses the word
+  // "approved" in its explanation.
+  const firstLine = output.trim().split(/\r?\n/).find(l => l.trim()) ?? '';
+  const normalized = firstLine.toLowerCase();
   if (/approved\s*:\s*yes/.test(normalized)) return true;
   if (/approved\s*:\s*no/.test(normalized)) return false;
-  return /\bapproved\b/.test(normalized) && !/\brejected\b|\bnot approved\b|\bblocked\b/.test(normalized);
+  return false; // default to not approved when verdict is ambiguous
 }
 
 async function resolveAutomationBoard(organizationId: string, boardId?: string) {
@@ -379,14 +385,72 @@ export async function ingestProductionErrorEvent(
 
   const board = await resolveAutomationBoard(organizationId, input.boardId);
   const isManual = String((board as { mode?: string }).mode || '').toUpperCase() === 'MANUAL';
+  const fingerprint = fingerprintFor(input);
+  const title = truncate(input.title || input.message.split(/\r?\n/)[0] || 'Production error', 180);
+
+  // Dedup: if an active event for this fingerprint already exists, skip.
+  const existing = await prisma.productionErrorEvent.findFirst({
+    where: {
+      organizationId,
+      fingerprint,
+      status: { notIn: ['COMPLETED', 'FAILED', 'REJECTED'] },
+    },
+    select: { id: true },
+  });
+  if (existing) {
+    logger.debug({ fingerprint, existingId: existing.id }, '[pipeline] Duplicate fingerprint — skipping ingest');
+    const err = new Error('already exists') as Error & { statusCode?: number };
+    err.statusCode = 409;
+    throw err;
+  }
+
+  // ── MANUAL MODE ──────────────────────────────────────────────────────────────
+  // Manual groups only watch logs and ping on errors. No Claude agents are
+  // created or run. The error is stored and surfaced in the Manual tab;
+  // a human decides if and when to act on it.
+  if (isManual) {
+    const errorEvent = await prisma.productionErrorEvent.create({
+      data: {
+        organizationId,
+        boardId: board.id,
+        source: input.source?.trim() || 'website',
+        severity: input.severity?.trim() || 'error',
+        title,
+        message: input.message,
+        stack: input.stack || null,
+        url: input.url || null,
+        route: input.route || null,
+        userAgent: input.userAgent || null,
+        environment: input.environment || process.env.NODE_ENV || 'development',
+        fingerprint,
+        payload: input.payload as any ?? undefined,
+        status: 'AWAITING_MANUAL',
+        origin: 'AUTOMATIC',
+      },
+    });
+    // Ping the board room so the Manual tab updates in real-time.
+    emitPipelineEvent(options.io, organizationId, {
+      id: errorEvent.id,
+      status: errorEvent.status,
+      boardId: board.id,
+      title: errorEvent.title,
+      severity: errorEvent.severity,
+      source: errorEvent.source,
+    });
+    logger.info(
+      { eventId: errorEvent.id, boardId: board.id, source: errorEvent.source },
+      '[pipeline] Manual-mode error pinged — no agents triggered',
+    );
+    return { errorEvent, board, task: null, agents: null, runJobs: { debugRunJob: null } };
+  }
+
+  // ── AUTOMATIC MODE ───────────────────────────────────────────────────────────
   // The repo clone the agents must edit & push from (per-error, else env defaults).
   const workspace = stringValue(objectRecord(input.payload).workspace)
     || process.env.MUTUAL_FUND_WORKSPACE
     || process.env.CLAUDE_WORKSPACE_ROOT
     || '';
   const { debugAgent, reviewAgent, commitAgent } = await ensurePipelineAgents(organizationId, board, workspace);
-  const fingerprint = fingerprintFor(input);
-  const title = truncate(input.title || input.message.split(/\r?\n/)[0] || 'Production error', 180);
 
   const errorEvent = await prisma.productionErrorEvent.create({
     data: {
@@ -403,31 +467,13 @@ export async function ingestProductionErrorEvent(
       environment: input.environment || process.env.NODE_ENV || 'development',
       fingerprint,
       payload: input.payload as any ?? undefined,
-      status: isManual ? 'AWAITING_MANUAL' : 'RECEIVED',
+      status: 'RECEIVED',
       origin: 'AUTOMATIC',
       debugAgentId: debugAgent.id,
       reviewAgentId: reviewAgent.id,
       commitAgentId: commitAgent.id,
     },
   });
-
-  // Manual-mode groups do NOT auto-trigger the pipeline. The error is recorded
-  // and surfaced in the Manual tab; a human selects it (or a live log) and
-  // explicitly kicks off the fix via startManualFix().
-  if (isManual) {
-    emitPipelineEvent(options.io, organizationId, {
-      id: errorEvent.id,
-      status: errorEvent.status,
-      boardId: board.id,
-    });
-    return {
-      errorEvent,
-      board,
-      task: null,
-      agents: { debugAgent, reviewAgent, commitAgent },
-      runJobs: { debugRunJob: null },
-    };
-  }
 
   const thread = await prisma.thread.create({
     data: {
@@ -717,6 +763,7 @@ async function queueReviewJob(errorEvent: ProductionErrorEvent, job: CompletedPi
 
 async function queueCommitJob(errorEvent: ProductionErrorEvent, job: CompletedPipelineJob, reviewOutput: string) {
   if (!errorEvent.boardId || !job.threadId || !errorEvent.commitAgentId) return null;
+  const ctx = parsePipelineContext(job.contextPacket);
   const commitRunJob = await enqueuePipelineJob({
     organizationId: job.organizationId,
     boardId: errorEvent.boardId,
@@ -726,6 +773,7 @@ async function queueCommitJob(errorEvent: ProductionErrorEvent, job: CompletedPi
     prompt: composeCommitPrompt(errorEvent, reviewOutput),
     role: 'commit',
     productionErrorEventId: errorEvent.id,
+    pipelineAttempt: ctx.pipelineAttempt ?? 0,
   });
 
   if (errorEvent.taskId) {
@@ -998,12 +1046,12 @@ export async function advanceProductionErrorPipelineAfterJob(
       }
 
       if (pushed) {
+        // PR is open on the new branch — event is APPROVED (awaiting admin merge sign-off),
+        // NOT yet COMPLETED. The admin must verify in the Approvals tab before we close it.
         await prisma.productionErrorEvent.update({
           where: { id: errorEvent.id },
           data: {
-            status: 'COMPLETED',
-            resolvedAt: new Date(),
-            // Persist the commit + PR so the Auto-Fix dashboard can link straight to it.
+            status: 'APPROVED',
             payload: {
               ...objectRecord(errorEvent.payload),
               commitSha: pushed.commitSha,
@@ -1021,10 +1069,35 @@ export async function advanceProductionErrorPipelineAfterJob(
             data: { status: 'REVIEW' },
           }).catch(() => {});
         }
+
+        // Create a PENDING Approval so it appears in the Approvals tab for admin review.
+        const approval = await approvalService.createApproval(job.organizationId, {
+          boardId: errorEvent.boardId!,
+          taskId: errorEvent.taskId ?? undefined,
+          agentId: errorEvent.commitAgentId || job.agentId,
+          actionType: 'MERGE_PR',
+          payload: {
+            productionErrorEventId: errorEvent.id,
+            provider: pushed.provider,
+            prUrl: pushed.prUrl,
+            prNumber: pushed.prNumber,
+            prBranch: pushed.prBranch,
+            commitSha: pushed.commitSha,
+            filesPushed: pushed.filesPushed,
+          },
+        }).catch(err => {
+          logger.error({ err, productionErrorEventId: errorEvent.id }, '[pipeline] Failed to create PR approval record');
+          return null;
+        });
+
+        if (approval) {
+          options.io?.to(`org:${job.organizationId}`).emit('approval:created', approval);
+        }
+
         await activityService.createActivity(job.organizationId, {
           agentId: errorEvent.commitAgentId || job.agentId,
           type: 'TASK_COMPLETE',
-          message: `Opened PR #${pushed.prNumber} with fix: ${pushed.filesPushed} file(s) on ${pushed.prBranch}`,
+          message: `Opened PR #${pushed.prNumber} on branch ${pushed.prBranch} — awaiting admin approval to merge`,
           metadata: {
             source: 'production_error_pipeline',
             productionErrorEventId: errorEvent.id,
@@ -1035,14 +1108,16 @@ export async function advanceProductionErrorPipelineAfterJob(
             prNumber: pushed.prNumber,
             prBranch: pushed.prBranch,
           },
-        }).catch(err => logger.warn({ err, productionErrorEventId: errorEvent.id }, 'Failed to persist GitHub push activity'));
+        }).catch(err => logger.warn({ err, productionErrorEventId: errorEvent.id }, 'Failed to persist push activity'));
+
         emitPipelineEvent(options.io, job.organizationId, {
           id: errorEvent.id,
-          status: 'COMPLETED',
+          status: 'APPROVED',
           commitSha: pushed.commitSha,
           commitUrl: pushed.htmlUrl,
           prUrl: pushed.prUrl,
           prNumber: pushed.prNumber,
+          prBranch: pushed.prBranch,
         });
         nextJob = null;
       } else {

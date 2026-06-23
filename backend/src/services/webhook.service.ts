@@ -8,8 +8,12 @@ function generateSecret(): string {
 }
 
 export function verifyWebhookSignature(payload: string, secret: string, signature: string): boolean {
-  const expected = createHmac('sha256', secret).update(payload).digest('hex');
-  return `sha256=${expected}` === signature;
+  if (!signature) return false;
+  const expected = `sha256=${createHmac('sha256', secret).update(payload).digest('hex')}`;
+  const expectedBuf = Buffer.from(expected);
+  const signatureBuf = Buffer.from(signature);
+  if (expectedBuf.length !== signatureBuf.length) return false;
+  return timingSafeEqual(expectedBuf, signatureBuf);
 }
 
 export async function listWebhooks(boardId: string, organizationId: string) {
@@ -44,11 +48,15 @@ export async function createWebhook(boardId: string, organizationId: string, dat
   });
 }
 
-export async function updateWebhook(webhookId: string, boardId: string, data: {
+export async function updateWebhook(webhookId: string, boardId: string, organizationId: string, data: {
   description?: string;
   agentId?: string | null;
   enabled?: boolean;
 }) {
+  // Verify the board (and therefore the webhook) belongs to the caller's org before mutating.
+  const board = await prisma.board.findFirst({ where: { id: boardId, organizationId } });
+  if (!board) throw new Error('Board not found');
+
   return prisma.boardWebhook.update({
     where: { id: webhookId, boardId },
     data: {
@@ -60,7 +68,10 @@ export async function updateWebhook(webhookId: string, boardId: string, data: {
   });
 }
 
-export async function deleteWebhook(webhookId: string, boardId: string) {
+export async function deleteWebhook(webhookId: string, boardId: string, organizationId: string) {
+  const board = await prisma.board.findFirst({ where: { id: boardId, organizationId } });
+  if (!board) throw new Error('Board not found');
+
   return prisma.boardWebhook.delete({ where: { id: webhookId, boardId } });
 }
 

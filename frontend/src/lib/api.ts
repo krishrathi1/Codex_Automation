@@ -136,6 +136,7 @@ export const api = {
 	    githubRepos: () => request<GithubRepositorySummary[]>('/org/integrations/github/repos'),
 	    vercelProjects: () => request<VercelProjectSummary[]>('/org/integrations/vercel/projects'),
     bitbucketRepos: () => request<BitbucketRepositorySummary[]>('/org/integrations/bitbucket/repos'),
+    signozServices: () => request<string[]>('/org/integrations/signoz/services'),
     signozCheck: () => request<{ ok: boolean; detail: string }>('/org/integrations/signoz/check'),
     signozLogs: (params?: { severity?: string; search?: string; sinceMs?: number; limit?: number }) => {
       const q = new URLSearchParams();

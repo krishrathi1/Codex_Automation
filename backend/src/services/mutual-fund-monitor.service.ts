@@ -256,14 +256,31 @@ async function checkGitHubFailures(orgId: string, boardId: string | undefined, c
   return found;
 }
 
+async function resolveBoardSignozService(boardId: string | undefined): Promise<string | undefined> {
+  if (!boardId) return undefined;
+  const board = await prisma.board.findUnique({
+    where: { id: boardId },
+    select: { successMetrics: true },
+  });
+  const scope = (board?.successMetrics as Record<string, unknown> | null)?.integrationScope as Record<string, unknown> | undefined;
+  const svc = scope?.signozService;
+  return typeof svc === 'string' && svc.trim() ? svc.trim() : undefined;
+}
+
 async function checkSigNozErrors(
   orgId: string,
   boardId: string | undefined,
   cfg: signoz.SigNozConfig,
+  signozService?: string,
 ): Promise<number> {
   let logs: signoz.SigNozLog[] = [];
   try {
-    logs = await signoz.queryLogs(cfg, { severities: ['ERROR', 'FATAL'], sinceMs: 15 * 60 * 1000, limit: 20 });
+    logs = await signoz.queryLogs(cfg, {
+      severities: ['ERROR', 'FATAL'],
+      sinceMs: 15 * 60 * 1000,
+      limit: 20,
+      ...(signozService ? { service: signozService } : {}),
+    });
   } catch (err) {
     logger.warn({ err }, '[mutual-fund-monitor] SigNoz query failed');
     return 0;
@@ -337,6 +354,7 @@ async function runCheck(): Promise<void> {
   }
 
   const boardId = await resolveBoardId(orgId);
+  const signozService = await resolveBoardSignozService(boardId);
 
   let errorsThisCheck = 0;
 
@@ -363,7 +381,7 @@ async function runCheck(): Promise<void> {
 
   // Check SigNoz production logs
   if (signozConfigured) {
-    const signozErrors = await checkSigNozErrors(orgId, boardId, creds.signoz).catch(err => {
+    const signozErrors = await checkSigNozErrors(orgId, boardId, creds.signoz, signozService).catch(err => {
       logger.error({ err }, '[mutual-fund-monitor] SigNoz check threw');
       return 0;
     });

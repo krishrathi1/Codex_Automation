@@ -21,7 +21,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { getSocket } from '../lib/socket';
 import { cn } from '../lib/utils';
-import type { ChatMessage, MotherChatContext } from '../types';
+import type { ChatMessage, MotherChatContext, SigNozLog } from '../types';
 
 type MotherChatSocketEvent = {
   type: 'response' | 'activity' | 'tool_call' | 'tool_result' | 'terminal_output' | 'file_read' | 'file_write' | 'status_update' | 'response_end' | 'error';
@@ -323,6 +323,9 @@ export function MotherChat() {
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamedResponseRequestsRef = useRef<Record<string, boolean>>({});
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [liveLogs, setLiveLogs] = useState<SigNozLog[]>([]);
+  const [logsLastFetched, setLogsLastFetched] = useState<Date | null>(null);
 
   async function loadContext() {
     const data = await api.motherChat.context(scopedBoardId);
@@ -460,6 +463,37 @@ export function MotherChat() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const isManualBoardMode = context?.scope?.board?.mode === 'MANUAL';
+
+  useEffect(() => {
+    if (!scopedBoardId || !isManualBoardMode) return;
+    let cancelled = false;
+    const boardId = scopedBoardId;
+    async function pollLogs() {
+      try {
+        const data = await api.boards.logs(boardId, { sinceMs: 10 * 60 * 1000, limit: 100 });
+        if (!cancelled) { setLiveLogs(data.logs); setLogsLastFetched(new Date()); }
+      } catch {}
+    }
+    pollLogs();
+    const intervalId = setInterval(pollLogs, 30_000);
+    return () => { cancelled = true; clearInterval(intervalId); };
+  }, [scopedBoardId, isManualBoardMode]);
+
+  function replyWithLog(log: SigNozLog) {
+    const lines = [
+      `[LOG: ${log.severity} — ${log.serviceName || 'unknown service'}]`,
+      `Time: ${new Date(log.timestamp).toLocaleString()}`,
+      `Message: ${log.body}`,
+    ];
+    if (log.traceId) lines.push(`Trace ID: ${log.traceId}`);
+    const attrs = Object.entries(log.attributes).slice(0, 6);
+    if (attrs.length) lines.push(`Attributes: ${attrs.map(([k, v]) => `${k}=${v}`).join(', ')}`);
+    lines.push('', '');
+    setInput(lines.join('\n'));
+    setTimeout(() => inputRef.current?.focus(), 50);
+  }
 
   async function handleSend() {
     if (!input.trim() || sending || dispatchingAll || startingLiveWorkflow || startingLiveBlackboard) return;
@@ -752,6 +786,7 @@ export function MotherChat() {
   }
 
   const scopedBoard = context?.scope?.board;
+  const isManualBoard = scopedBoard?.mode === 'MANUAL';
   const pageTitle = scopedBoard ? `${scopedBoard.name} Mother Chat` : 'Mother Chat';
   const pageSubtitle = scopedBoard
     ? scopedBoard.objective || scopedBoard.description || 'Production group context'
@@ -987,6 +1022,7 @@ export function MotherChat() {
         <div className="border-t border-white/5 px-6 py-4">
           <div className="mx-auto flex max-w-4xl gap-3">
             <textarea
+              ref={inputRef}
               value={input}
               onChange={event => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
@@ -1018,7 +1054,73 @@ export function MotherChat() {
         </div>
       </main>
 
-      <aside className="hidden w-[360px] shrink-0 overflow-y-auto border-l border-white/5 bg-surface-900 xl:block">
+      <aside className="hidden w-[360px] shrink-0 border-l border-white/5 bg-surface-900 xl:flex xl:flex-col">
+        {isManualBoard ? (
+          <>
+            {/* ── Live log panel for Manual mode boards ── */}
+            <div className="flex shrink-0 items-center justify-between border-b border-white/5 px-5 py-4">
+              <div>
+                <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+                  Live Logs
+                </h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  {logsLastFetched ? `Updated ${logsLastFetched.toLocaleTimeString()}` : 'Loading…'}
+                  {' · '}hover a log to reply
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  if (!scopedBoardId) return;
+                  api.boards.logs(scopedBoardId, { sinceMs: 10 * 60 * 1000, limit: 100 })
+                    .then(d => { setLiveLogs(d.logs); setLogsLastFetched(new Date()); })
+                    .catch(() => {});
+                }}
+                className="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-white/5 hover:text-white"
+                title="Refresh"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto divide-y divide-white/5">
+              {liveLogs.length === 0 && (
+                <p className="p-6 text-center text-sm text-gray-500">
+                  {logsLastFetched ? 'No recent logs from this service' : 'Fetching logs…'}
+                </p>
+              )}
+              {liveLogs.map((log, i) => (
+                <div key={i} className="group cursor-default px-4 py-3 transition-colors hover:bg-white/[0.03]">
+                  <div className="mb-1.5 flex items-center gap-2">
+                    <span className={cn(
+                      'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase',
+                      log.severity === 'ERROR' || log.severity === 'FATAL' || log.severity === 'CRITICAL'
+                        ? 'bg-red-500/20 text-red-300'
+                        : log.severity === 'WARN' || log.severity === 'WARNING'
+                          ? 'bg-amber-500/20 text-amber-300'
+                          : 'bg-white/5 text-gray-400',
+                    )}>
+                      {log.severity}
+                    </span>
+                    {log.serviceName && (
+                      <span className="truncate text-[10px] text-blue-400">{log.serviceName}</span>
+                    )}
+                    <span className="ml-auto shrink-0 text-[10px] text-gray-600">
+                      {new Date(log.timestamp).toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <p className="line-clamp-3 text-xs leading-5 text-gray-300">{log.body}</p>
+                  <button
+                    onClick={() => replyWithLog(log)}
+                    className="mt-2 text-[10px] text-nexus-400 opacity-0 transition-opacity hover:text-nexus-300 group-hover:opacity-100"
+                  >
+                    ↩ Reply in chat
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="overflow-y-auto">
         <div className="border-b border-white/5 px-5 py-4">
           <h2 className="text-sm font-semibold text-white">{scopedBoard ? 'Production Snapshot' : 'Context Snapshot'}</h2>
           <p className="mt-1 text-xs text-gray-500">{context ? formatTime(context.generatedAt) : 'Not loaded'}</p>
@@ -1158,6 +1260,8 @@ export function MotherChat() {
             </div>
           </section>
         </div>
+          </div>
+        )}
       </aside>
 
       {showA2AStarter && scopedBoardId && (
