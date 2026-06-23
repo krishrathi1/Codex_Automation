@@ -15,12 +15,12 @@ router.post('/:boardId/webhooks', async (req, res) => {
 });
 
 router.patch('/:boardId/webhooks/:id', async (req, res) => {
-  const webhook = await webhookService.updateWebhook(req.params.id, req.params.boardId, req.body);
+  const webhook = await webhookService.updateWebhook(req.params.id, req.params.boardId, req.organizationId!, req.body);
   res.json(webhook);
 });
 
 router.delete('/:boardId/webhooks/:id', async (req, res) => {
-  await webhookService.deleteWebhook(req.params.id, req.params.boardId);
+  await webhookService.deleteWebhook(req.params.id, req.params.boardId, req.organizationId!);
   res.status(204).end();
 });
 

@@ -82,6 +82,16 @@ router.get('/integrations/github/repos', requireRole('OWNER', 'ADMIN'), async (r
   }
 });
 
+router.get('/integrations/signoz/services', requireRole('OWNER', 'ADMIN'), async (req, res) => {
+  try {
+    const services = await platformIntegrations.getSignozServices(req.organizationId!);
+    res.json(services);
+  } catch (err) {
+    const statusCode = (err as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ error: (err as Error).message });
+  }
+});
+
 router.get('/integrations/signoz/check', requireRole('OWNER', 'ADMIN'), async (req, res) => {
   try {
     const result = await platformIntegrations.checkSignozConnection(req.organizationId!);

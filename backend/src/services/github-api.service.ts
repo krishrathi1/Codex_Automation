@@ -49,7 +49,8 @@ export interface GitHubIssue {
 }
 
 function getRepo(cfg: GitHubConfig): string {
-  return cfg.repo || 'krishrathi1/Mutual-Fund-Co-Pilot-';
+  if (!cfg.repo) throw new Error('GitHub repo not configured. Set it in Settings → Integrations → GitHub repo.');
+  return cfg.repo;
 }
 
 export async function getFailedWorkflowRuns(cfg: GitHubConfig, limit = 5): Promise<GitHubWorkflowRun[]> {

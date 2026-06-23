@@ -420,6 +420,7 @@ export interface MotherChatContext {
       description: string;
       objective: string | null;
       boardType: string;
+      mode: string;
     } | null;
   };
   counts: {

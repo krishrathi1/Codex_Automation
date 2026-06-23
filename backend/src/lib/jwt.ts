@@ -17,6 +17,10 @@ function requireSecret(envVar: string, name: string): string {
 const ACCESS_SECRET = requireSecret('JWT_SECRET', 'JWT access');
 const REFRESH_SECRET = requireSecret('JWT_REFRESH_SECRET', 'JWT refresh');
 
+if (ACCESS_SECRET === REFRESH_SECRET) {
+  throw new Error('FATAL: JWT_SECRET and JWT_REFRESH_SECRET must be different values');
+}
+
 const ACCESS_EXPIRY = '15m';
 const REFRESH_EXPIRY = '7d';
 
@@ -27,17 +31,17 @@ export interface TokenPayload {
 }
 
 export function signAccessToken(payload: TokenPayload): string {
-  return jwt.sign(payload, ACCESS_SECRET, { expiresIn: ACCESS_EXPIRY });
+  return jwt.sign(payload, ACCESS_SECRET, { expiresIn: ACCESS_EXPIRY, algorithm: 'HS256' });
 }
 
 export function signRefreshToken(payload: TokenPayload): string {
-  return jwt.sign(payload, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRY });
+  return jwt.sign(payload, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRY, algorithm: 'HS256' });
 }
 
 export function verifyAccessToken(token: string): TokenPayload {
-  return jwt.verify(token, ACCESS_SECRET) as TokenPayload;
+  return jwt.verify(token, ACCESS_SECRET, { algorithms: ['HS256'] }) as TokenPayload;
 }
 
 export function verifyRefreshToken(token: string): TokenPayload {
-  return jwt.verify(token, REFRESH_SECRET) as TokenPayload;
+  return jwt.verify(token, REFRESH_SECRET, { algorithms: ['HS256'] }) as TokenPayload;
 }

@@ -5,7 +5,7 @@ import { AlertTriangle, Trash2, Plus, X, Inbox } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import type { Board, Task, TaskStatus, Agent, SigNozLog } from '@/types';
+import type { Board, Task, TaskStatus, Agent, SigNozLog, GithubRepositorySummary, BitbucketRepositorySummary } from '@/types';
 
 const COLUMNS: TaskStatus[] = ['BACKLOG', 'ASSIGNED', 'IN_PROGRESS', 'REVIEW', 'DONE'];
 
@@ -625,12 +625,19 @@ function ManualTab({ board }: { board: Board }) {
                   isSel ? 'border-nexus-500/60 bg-nexus-600/10' : 'border-white/5 bg-surface-900 hover:bg-white/5'
                 )}
               >
-                <div className="mb-1 flex items-center gap-2">
-                  <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium uppercase', SEVERITY_COLOR[sev] || 'text-gray-400 bg-gray-500/10')}>
+                <div className="mb-1 flex items-center gap-1.5 flex-wrap">
+                  <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-bold uppercase', SEVERITY_COLOR[sev] || 'text-gray-400 bg-gray-500/10')}>
                     {sev || 'log'}
                   </span>
-                  <span className="text-[10px] text-gray-500">{new Date(log.timestamp).toLocaleTimeString()}</span>
-                  {log.serviceName && <span className="text-[10px] text-gray-600">{log.serviceName}</span>}
+                  {log.serviceName && (
+                    <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-300">{log.serviceName}</span>
+                  )}
+                  <span className="ml-auto text-[10px] tabular-nums text-gray-500">
+                    {new Date(log.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                  {Object.keys(log.attributes ?? {}).length > 0 && (
+                    <span className="text-[9px] text-gray-600">{Object.keys(log.attributes).length} attrs</span>
+                  )}
                 </div>
                 <div className="line-clamp-2 font-mono text-xs text-gray-300">{log.body}</div>
               </button>
@@ -639,67 +646,101 @@ function ManualTab({ board }: { board: Board }) {
         </div>
       </div>
 
-      {/* Right: fix composer */}
-      <div className="rounded-xl border border-white/5 bg-surface-850 p-4">
-        <h3 className="mb-3 text-sm font-semibold text-white">Fix this</h3>
+      {/* Right: log detail + fix composer */}
+      <div className="flex max-h-[80vh] flex-col gap-3 overflow-y-auto">
 
-        <label className="mb-1 block text-xs uppercase tracking-wider text-gray-400">Selected log</label>
+        {/* Log detail panel */}
         {selected ? (
-          <div className="mb-3 rounded-lg border border-white/10 bg-surface-900 p-3">
-            <div className="mb-1 flex items-center gap-2">
-              <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium uppercase', SEVERITY_COLOR[(selected.severity || '').toUpperCase()] || 'text-gray-400 bg-gray-500/10')}>
-                {(selected.severity || 'log').toUpperCase()}
+          <div className="rounded-xl border border-nexus-500/30 bg-surface-850 p-4">
+            {/* Header row */}
+            <div className="mb-3 flex items-center gap-2">
+              <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-bold uppercase', SEVERITY_COLOR[(selected.severity || '').toUpperCase()] || 'text-gray-400 bg-gray-500/10')}>
+                {(selected.severity || 'LOG').toUpperCase()}
               </span>
-              <span className="text-[10px] text-gray-500">{new Date(selected.timestamp).toLocaleString()}</span>
-              <button onClick={() => setSelected(null)} className="ml-auto text-gray-500 hover:text-white" title="clear">
+              {selected.serviceName && (
+                <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-300">
+                  {selected.serviceName}
+                </span>
+              )}
+              <span className="ml-auto text-[10px] tabular-nums text-gray-500">
+                {new Date(selected.timestamp).toLocaleString(undefined, {
+                  year: 'numeric', month: 'short', day: '2-digit',
+                  hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3,
+                })}
+              </span>
+              <button onClick={() => setSelected(null)} className="text-gray-500 hover:text-white" title="deselect">
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap font-mono text-xs text-gray-300">{selected.body}</pre>
+
+            {/* Trace ID */}
+            {selected.traceId && (
+              <div className="mb-3 flex items-center gap-2 rounded-lg bg-surface-900 px-3 py-2">
+                <span className="text-[10px] uppercase tracking-wider text-gray-500">Trace ID</span>
+                <span className="ml-auto font-mono text-[11px] text-gray-300">{selected.traceId}</span>
+              </div>
+            )}
+
+            {/* Full log body */}
+            <div className="mb-3">
+              <div className="mb-1 text-[10px] uppercase tracking-wider text-gray-500">Message</div>
+              <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-lg bg-surface-900 p-3 font-mono text-xs text-gray-200">
+                {selected.body}
+              </pre>
+            </div>
+
+            {/* All attributes */}
+            {Object.keys(selected.attributes ?? {}).length > 0 && (
+              <div>
+                <div className="mb-2 text-[10px] uppercase tracking-wider text-gray-500">Attributes</div>
+                <div className="rounded-lg border border-white/5 bg-surface-900 divide-y divide-white/5">
+                  {Object.entries(selected.attributes).map(([k, v]) => (
+                    <div key={k} className="flex items-start gap-3 px-3 py-1.5">
+                      <span className="w-[45%] shrink-0 font-mono text-[11px] text-gray-500 break-all">{k}</span>
+                      <span className="font-mono text-[11px] text-gray-200 break-all">
+                        {v === null ? <span className="text-gray-600">null</span>
+                          : typeof v === 'object' ? JSON.stringify(v)
+                          : String(v)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
-          <div className="mb-3 rounded-lg border border-dashed border-white/10 bg-surface-900 p-3 text-xs text-gray-500">
-            Click a log on the left to attach it (optional).
+          <div className="rounded-xl border border-dashed border-white/10 bg-surface-850 p-6 text-center text-xs text-gray-500">
+            Click a log on the left to see its full details.
           </div>
         )}
 
-        <label className="mb-1 block text-xs uppercase tracking-wider text-gray-400">What should the agent fix?</label>
-        <textarea
-          value={instructions}
-          onChange={e => setInstructions(e.target.value)}
-          rows={6}
-          placeholder="Describe the fix. The agent has access to this group's repo and will open a pull request."
-          className="w-full resize-y rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-white placeholder-gray-600 focus:border-nexus-500/50 focus:outline-none"
-        />
-
-        <button
-          onClick={handleSubmit}
-          disabled={submitting || !instructions.trim()}
-          className="mt-3 w-full rounded-lg bg-nexus-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-nexus-500 disabled:opacity-50"
-        >
-          {submitting ? 'Starting fix…' : 'Send to agent'}
-        </button>
-
-        {result && (
-          <div
-            className={cn(
-              'mt-3 rounded-lg border p-3 text-xs',
-              result.type === 'success'
-                ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300'
-                : 'border-red-500/20 bg-red-500/5 text-red-300'
-            )}
+        {/* Fix composer */}
+        <div className="rounded-xl border border-white/5 bg-surface-850 p-4">
+          <h3 className="mb-3 text-sm font-semibold text-white">Fix this</h3>
+          <label className="mb-1 block text-xs uppercase tracking-wider text-gray-400">What should the agent fix?</label>
+          <textarea
+            value={instructions}
+            onChange={e => setInstructions(e.target.value)}
+            rows={4}
+            placeholder="Describe the fix. The agent has access to this group's repo and will open a pull request."
+            className="w-full resize-y rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-white placeholder-gray-600 focus:border-nexus-500/50 focus:outline-none"
+          />
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || !instructions.trim()}
+            className="mt-3 w-full rounded-lg bg-nexus-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-nexus-500 disabled:opacity-50"
           >
-            {result.text}
-            {result.prUrl && (
-              <>
-                {' '}
-                <a href={result.prUrl} target="_blank" rel="noreferrer" className="underline hover:text-white">
-                  View pull request
-                </a>
-              </>
-            )}
-          </div>
-        )}
+            {submitting ? 'Starting fix…' : 'Send to agent'}
+          </button>
+          {result && (
+            <div className={cn('mt-3 rounded-lg border p-3 text-xs', result.type === 'success' ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300' : 'border-red-500/20 bg-red-500/5 text-red-300')}>
+              {result.text}
+              {result.prUrl && (
+                <> <a href={result.prUrl} target="_blank" rel="noreferrer" className="underline hover:text-white">View pull request</a></>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -930,6 +971,18 @@ function BoardSettings({
   const [signozService, setSignozService] = useState(
     board.successMetrics?.integrationScope?.signozService || ''
   );
+  const [signozServices, setSignozServices] = useState<string[]>([]);
+  const [githubRepos, setGithubRepos] = useState<GithubRepositorySummary[]>([]);
+  const [bbRepoList, setBbRepoList] = useState<BitbucketRepositorySummary[]>([]);
+  const [showGhPicker, setShowGhPicker] = useState(false);
+  const [ghPickerQ, setGhPickerQ] = useState('');
+  const [showBbPicker, setShowBbPicker] = useState(false);
+  const [bbPickerQ, setBbPickerQ] = useState('');
+  useEffect(() => {
+    api.org.signozServices().then(setSignozServices).catch(() => setSignozServices([]));
+    api.org.githubRepos().then(setGithubRepos).catch(() => setGithubRepos([]));
+    api.org.bitbucketRepos().then(setBbRepoList).catch(() => setBbRepoList([]));
+  }, []);
   const [ghRepo, setGhRepo] = useState(
     board.successMetrics?.integrationScope?.githubRepo?.fullName || ''
   );
@@ -1092,11 +1145,17 @@ function BoardSettings({
         <input
           value={signozService}
           onChange={e => setSignozService(e.target.value)}
-          placeholder="e.g. mutual-fund-api"
+          list="signoz-services-board"
+          placeholder={signozServices.length ? 'Pick the service for this repo…' : 'e.g. blostem-core-web'}
           className="w-full bg-surface-850 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50"
         />
+        <datalist id="signoz-services-board">
+          {signozServices.map(s => <option key={s} value={s} />)}
+        </datalist>
         <p className="mt-2 text-xs text-gray-500">
-          Scopes this group's live logs (the Manual tab and the Logs page filter by this <code>service.name</code>).
+          {signozServices.length
+            ? `Pick the service whose logs belong to this repo (${signozServices.length} found). The Manual tab and Logs page filter by this service.name.`
+            : <>Scopes this group's live logs (the Manual tab and the Logs page filter by this <code>service.name</code>).</>}
         </p>
       </div>
 
@@ -1134,12 +1193,60 @@ function BoardSettings({
           <span className="text-[10px] rounded px-1.5 py-0.5 bg-white/5 text-gray-400 border border-white/10 font-medium uppercase tracking-wider">repo</span>
         </div>
         <label className="mb-1 block text-xs text-gray-400 uppercase tracking-wider">Repository</label>
-        <input
-          value={ghRepo}
-          onChange={e => setGhRepo(e.target.value)}
-          placeholder="owner/repo (e.g. krishrathi1/my-app)"
-          className="w-full bg-surface-850 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50"
-        />
+        <div className="relative">
+          <input
+            value={ghRepo}
+            onChange={e => setGhRepo(e.target.value)}
+            placeholder="owner/repo (e.g. krishrathi1/my-app)"
+            className="w-full bg-surface-850 border border-white/10 rounded-lg px-3 py-2 pr-24 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50"
+          />
+          {githubRepos.length > 0 && (
+            <button
+              type="button"
+              onClick={() => { setShowGhPicker(v => !v); setGhPickerQ(''); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-nexus-400 hover:text-nexus-300 px-2 py-1 rounded border border-nexus-500/30 bg-nexus-600/10 transition-colors"
+            >
+              Browse {githubRepos.length}
+            </button>
+          )}
+          {showGhPicker && (
+            <div className="absolute z-50 left-0 right-0 top-full mt-1 rounded-lg border border-white/10 bg-[#141418] shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: '260px' }}>
+              <div className="flex items-center gap-2 px-3 py-2 border-b border-white/10">
+                <input
+                  autoFocus
+                  value={ghPickerQ}
+                  onChange={e => setGhPickerQ(e.target.value)}
+                  placeholder="Search GitHub repos…"
+                  className="flex-1 bg-transparent text-sm text-white placeholder-gray-600 focus:outline-none"
+                />
+                <button type="button" onClick={() => setShowGhPicker(false)} className="text-gray-500 hover:text-white text-xs">✕</button>
+              </div>
+              <div className="overflow-y-auto">
+                {githubRepos
+                  .filter(r => r.fullName.toLowerCase().includes(ghPickerQ.toLowerCase()))
+                  .map(r => (
+                    <button
+                      key={r.fullName}
+                      type="button"
+                      onClick={() => { setGhRepo(r.fullName); if (!ghBranch) setGhBranch(r.defaultBranch); setShowGhPicker(false); }}
+                      className="w-full text-left px-3 py-2 hover:bg-white/5 flex items-center gap-3 transition-colors"
+                    >
+                      <span className="text-gray-500 text-xs w-3 flex-shrink-0">{r.private ? '🔒' : '◉'}</span>
+                      <div className="min-w-0">
+                        <div className="text-sm text-white truncate">{r.name}</div>
+                        <div className="text-xs text-gray-500 truncate">{r.fullName}</div>
+                      </div>
+                      <span className="ml-auto text-[10px] text-gray-600 flex-shrink-0">{r.defaultBranch}</span>
+                    </button>
+                  ))
+                }
+                {githubRepos.filter(r => r.fullName.toLowerCase().includes(ghPickerQ.toLowerCase())).length === 0 && (
+                  <p className="px-3 py-4 text-xs text-gray-500 text-center">No repos match</p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
         <label className="mt-3 mb-1 block text-xs text-gray-400 uppercase tracking-wider">Branch</label>
         <input
           value={ghBranch}
@@ -1148,7 +1255,9 @@ function BoardSettings({
           className="w-full bg-surface-850 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50"
         />
         <p className="mt-2 text-xs text-gray-500">
-          The GitHub repo this production group pushes auto-fixes to. Access token is set in Settings → Integrations.
+          {githubRepos.length > 0
+            ? `Choose from your ${githubRepos.length} GitHub repos or type manually. Branch auto-fills from the repo's default.`
+            : 'The GitHub repo this production group pushes auto-fixes to. Access token is set in Settings → Integrations.'}
         </p>
       </div>
 
@@ -1159,12 +1268,60 @@ function BoardSettings({
           <span className="text-[10px] rounded px-1.5 py-0.5 bg-[#0052CC]/20 text-[#579DFF] border border-[#0052CC]/30 font-medium uppercase tracking-wider">repo</span>
         </div>
         <label className="mb-1 block text-xs text-gray-400 uppercase tracking-wider">Repository</label>
-        <input
-          value={bbRepo}
-          onChange={e => setBbRepo(e.target.value)}
-          placeholder="workspace/repo-slug"
-          className="w-full bg-surface-850 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50"
-        />
+        <div className="relative">
+          <input
+            value={bbRepo}
+            onChange={e => setBbRepo(e.target.value)}
+            placeholder="workspace/repo-slug"
+            className="w-full bg-surface-850 border border-white/10 rounded-lg px-3 py-2 pr-24 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50"
+          />
+          {bbRepoList.length > 0 && (
+            <button
+              type="button"
+              onClick={() => { setShowBbPicker(v => !v); setBbPickerQ(''); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-[#579DFF] hover:text-[#85baff] px-2 py-1 rounded border border-[#0052CC]/40 bg-[#0052CC]/10 transition-colors"
+            >
+              Browse {bbRepoList.length}
+            </button>
+          )}
+          {showBbPicker && (
+            <div className="absolute z-50 left-0 right-0 top-full mt-1 rounded-lg border border-white/10 bg-[#141418] shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: '260px' }}>
+              <div className="flex items-center gap-2 px-3 py-2 border-b border-white/10">
+                <input
+                  autoFocus
+                  value={bbPickerQ}
+                  onChange={e => setBbPickerQ(e.target.value)}
+                  placeholder="Search Bitbucket repos…"
+                  className="flex-1 bg-transparent text-sm text-white placeholder-gray-600 focus:outline-none"
+                />
+                <button type="button" onClick={() => setShowBbPicker(false)} className="text-gray-500 hover:text-white text-xs">✕</button>
+              </div>
+              <div className="overflow-y-auto">
+                {bbRepoList
+                  .filter(r => r.fullName.toLowerCase().includes(bbPickerQ.toLowerCase()))
+                  .map(r => (
+                    <button
+                      key={r.fullName}
+                      type="button"
+                      onClick={() => { setBbRepo(r.fullName); if (!bbBranch) setBbBranch(r.defaultBranch); setShowBbPicker(false); }}
+                      className="w-full text-left px-3 py-2 hover:bg-white/5 flex items-center gap-3 transition-colors"
+                    >
+                      <span className="text-gray-500 text-xs w-3 flex-shrink-0">{r.isPrivate ? '🔒' : '◉'}</span>
+                      <div className="min-w-0">
+                        <div className="text-sm text-white truncate">{r.name}</div>
+                        <div className="text-xs text-gray-500 truncate">{r.fullName}</div>
+                      </div>
+                      <span className="ml-auto text-[10px] text-gray-600 flex-shrink-0">{r.defaultBranch}</span>
+                    </button>
+                  ))
+                }
+                {bbRepoList.filter(r => r.fullName.toLowerCase().includes(bbPickerQ.toLowerCase())).length === 0 && (
+                  <p className="px-3 py-4 text-xs text-gray-500 text-center">No repos match</p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
         <label className="mt-3 mb-1 block text-xs text-gray-400 uppercase tracking-wider">Branch</label>
         <input
           value={bbBranch}
@@ -1173,7 +1330,9 @@ function BoardSettings({
           className="w-full bg-surface-850 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50"
         />
         <p className="mt-2 text-xs text-gray-500">
-          The Bitbucket repo this production group monitors and pushes fixes to. Connection credentials are set in Settings → Integrations.
+          {bbRepoList.length > 0
+            ? `Choose from your ${bbRepoList.length} Bitbucket repos or type manually. Branch auto-fills from the repo's default.`
+            : 'The Bitbucket repo this production group monitors and pushes fixes to. Connection credentials are set in Settings → Integrations.'}
         </p>
       </div>
 

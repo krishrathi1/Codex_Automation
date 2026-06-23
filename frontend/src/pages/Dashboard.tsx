@@ -361,6 +361,7 @@ function CreateProductionGroupModal({
   const [bitbucketRepoFullName, setBitbucketRepoFullName] = useState('');
   const [primaryProvider, setPrimaryProvider] = useState<'github' | 'bitbucket'>('github');
   const [signozService, setSignozService] = useState('');
+  const [signozServices, setSignozServices] = useState<string[]>([]);
 
   // Agent Designer chat state (ephemeral — lives only while the modal is open).
   const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([
@@ -473,7 +474,7 @@ function CreateProductionGroupModal({
       setBitbucketResourcesError(null);
       try {
         const settings = await api.org.integrationSettings();
-        const [repoResult, projectResult, bitbucketResult] = await Promise.allSettled([
+        const [repoResult, projectResult, bitbucketResult, signozResult] = await Promise.allSettled([
           settings.github.configured
             ? api.org.githubRepos()
             : Promise.resolve([] as GithubRepositorySummary[]),
@@ -483,8 +484,14 @@ function CreateProductionGroupModal({
           settings.bitbucket.configured
             ? api.org.bitbucketRepos()
             : Promise.resolve([] as BitbucketRepositorySummary[]),
+          settings.signoz.configured
+            ? api.org.signozServices()
+            : Promise.resolve([] as string[]),
         ]);
         if (cancelled) return;
+        if (signozResult.status === 'fulfilled') {
+          setSignozServices(signozResult.value as string[]);
+        }
         if (repoResult.status === 'fulfilled') {
           setRepos(repoResult.value as GithubRepositorySummary[]);
         }
@@ -769,10 +776,18 @@ function CreateProductionGroupModal({
                 <input
                   value={signozService}
                   onChange={event => setSignozService(event.target.value)}
-                  placeholder="e.g. mutual-fund-api"
+                  list="signoz-services-create"
+                  placeholder={signozServices.length ? 'Pick the service for this repo…' : 'e.g. blostem-core-web'}
                   className="w-full rounded-lg border border-white/10 bg-surface-850 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-gray-600 focus:border-nexus-500"
                 />
-                <p className="mt-1 text-[11px] text-gray-600">Scopes this group's live logs (used by the Manual tab).</p>
+                <datalist id="signoz-services-create">
+                  {signozServices.map(s => <option key={s} value={s} />)}
+                </datalist>
+                <p className="mt-1 text-[11px] text-gray-600">
+                  {signozServices.length
+                    ? `Pick the service whose logs belong to this repo (${signozServices.length} found).`
+                    : "Scopes this group's live logs (used by the Manual tab)."}
+                </p>
               </div>
             </div>
           </div>

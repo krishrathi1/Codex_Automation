@@ -44,6 +44,7 @@ type MotherChatBoardScope = {
   description: string;
   objective: string | null;
   boardType: string;
+  mode: string;
   successMetrics: unknown;
 };
 
@@ -348,6 +349,7 @@ async function resolveBoardScope(organizationId: string, boardId?: string): Prom
       description: true,
       objective: true,
       boardType: true,
+      mode: true,
       successMetrics: true,
     },
   });
