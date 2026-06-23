@@ -309,8 +309,6 @@ export interface PlatformIntegrationSettings {
   github: {
     configured: boolean;
     tokenMasked: string | null;
-    repo: string | null;
-    branch: string | null;
     updatedAt: string | null;
   };
   vercel: {
@@ -323,6 +321,13 @@ export interface PlatformIntegrationSettings {
     configured: boolean;
     tokenMasked: string | null;
     endpoint: string | null;
+    updatedAt: string | null;
+  };
+  bitbucket: {
+    configured: boolean;
+    tokenMasked: string | null;
+    username: string | null;
+    workspace: string | null;
     updatedAt: string | null;
   };
 }
@@ -356,6 +361,19 @@ export interface VercelProjectSummary {
   accountId: string | null;
   repo: string | null;
   productionUrl: string | null;
+  updatedAt: string | null;
+}
+
+export interface BitbucketRepositorySummary {
+  uuid: string;
+  name: string;
+  fullName: string;
+  isPrivate: boolean;
+  htmlUrl: string;
+  cloneUrl: string;
+  sshUrl: string;
+  defaultBranch: string;
+  ownerUsername: string;
   updatedAt: string | null;
 }
 
@@ -703,8 +721,17 @@ export interface Board {
   gatewayId: string | null;
   boardGroupId: string | null;
   boardType: string;
+  mode: 'AUTOMATIC' | 'MANUAL';
   objective: string | null;
-  successMetrics: Record<string, unknown> | null;
+  successMetrics: Record<string, unknown> & {
+    integrationScope?: {
+      githubRepo?: { fullName?: string; branch?: string };
+      vercelProject?: { id?: string; name?: string };
+      bitbucketRepo?: { fullName?: string; branch?: string };
+      signozService?: string;
+      primaryProvider?: 'github' | 'bitbucket';
+    };
+  } | null;
   targetDate: string | null;
   maxAgents: number;
   requireApprovalForDone: boolean;
@@ -993,7 +1020,8 @@ export interface SoulTemplate {
 
 export type ProductionErrorStatus =
   | 'RECEIVED' | 'TASK_CREATED' | 'DEBUG_QUEUED' | 'REVIEW_QUEUED'
-  | 'APPROVED' | 'REJECTED' | 'COMMIT_QUEUED' | 'COMPLETED' | 'FAILED';
+  | 'APPROVED' | 'REJECTED' | 'COMMIT_QUEUED' | 'COMPLETED' | 'FAILED'
+  | 'AWAITING_MANUAL';
 
 export interface ProposedFixFile {
   path: string;
@@ -1011,6 +1039,10 @@ export interface ProductionErrorEvent {
   route: string | null;
   environment: string | null;
   status: ProductionErrorStatus;
+  origin?: 'AUTOMATIC' | 'MANUAL';
+  prBranch?: string | null;
+  prUrl?: string | null;
+  prNumber?: number | null;
   fingerprint: string;
   payload: {
     proposedFix?: ProposedFixFile[];
@@ -1019,6 +1051,10 @@ export interface ProductionErrorEvent {
     filesPushed?: number;
     repo?: string;
     branch?: string;
+    prUrl?: string;
+    prNumber?: number;
+    prBranch?: string;
+    manualInstructions?: string;
     [k: string]: unknown;
   } | null;
   board: { id: string; name: string; slug: string } | null;

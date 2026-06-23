@@ -126,6 +126,7 @@ enum ProductionErrorStatus {
   COMMIT_QUEUED
   COMPLETED
   FAILED
+  AWAITING_MANUAL
 }
 
 // ─── Organization & Auth ────────────────────────────────
@@ -585,6 +586,10 @@ model ProductionErrorEvent {
   fingerprint    String
   payload        Json?
   status         ProductionErrorStatus @default(RECEIVED)
+  origin         String                @default("AUTOMATIC")
+  prBranch       String?
+  prUrl          String?
+  prNumber       Int?
   debugAgentId   String?
   reviewAgentId  String?
   commitAgentId  String?
@@ -800,6 +805,7 @@ model Board {
   boardGroupId                          String?
   boardGroup                            BoardGroup?  @relation(fields: [boardGroupId], references: [id], onDelete: SetNull)
   boardType                             String       @default("goal")
+  mode                                  String       @default("AUTOMATIC")
   objective                             String?
   successMetrics                        Json?
   targetDate                            DateTime?

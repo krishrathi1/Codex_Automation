@@ -5,7 +5,7 @@ import { AlertTriangle, Trash2, Plus, X, Inbox } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import type { Board, Task, TaskStatus, Agent } from '@/types';
+import type { Board, Task, TaskStatus, Agent, SigNozLog } from '@/types';
 
 const COLUMNS: TaskStatus[] = ['BACKLOG', 'ASSIGNED', 'IN_PROGRESS', 'REVIEW', 'DONE'];
 
@@ -48,6 +48,7 @@ export function BoardDetail() {
   const [agents, setAgents] = useState<BoardAgent[]>([]);
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
+  const [view, setView] = useState<'board' | 'manual'>('board');
   const [showAddTask, setShowAddTask] = useState<TaskStatus | null>(null);
   const [showAddAgent, setShowAddAgent] = useState(false);
   const [allAgents, setAllAgents] = useState<Agent[]>([]);
@@ -349,7 +350,33 @@ export function BoardDetail() {
         />
       )}
 
+      {/* Tabs (Manual mode only) */}
+      {board.mode === 'MANUAL' && (
+        <div className="mb-4 flex items-center gap-1 border-b border-white/5">
+          {(['board', 'manual'] as const).map(t => (
+            <button
+              key={t}
+              onClick={() => setView(t)}
+              className={cn(
+                'px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+                view === t
+                  ? 'border-nexus-500 text-white'
+                  : 'border-transparent text-gray-500 hover:text-gray-300'
+              )}
+            >
+              {t === 'board' ? 'Board' : 'Manual'}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Manual log-watch + fix composer */}
+      {board.mode === 'MANUAL' && view === 'manual' && (
+        <ManualTab board={board} />
+      )}
+
       {/* Kanban board */}
+      {!(board.mode === 'MANUAL' && view === 'manual') && (
       <DragDropContext onDragEnd={handleDragEnd}>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
           {COLUMNS.map(status => {
@@ -465,6 +492,7 @@ export function BoardDetail() {
           })}
         </div>
       </DragDropContext>
+      )}
 
       {/* Add task inline modal */}
       {showAddTask && (
@@ -485,6 +513,194 @@ export function BoardDetail() {
           onSubmit={handleAddAgent}
         />
       )}
+    </div>
+  );
+}
+
+// ─── Manual Tab: live logs + fix composer ────────────
+
+const SEVERITY_COLOR: Record<string, string> = {
+  ERROR: 'text-red-400 bg-red-500/10',
+  WARN: 'text-amber-400 bg-amber-500/10',
+  WARNING: 'text-amber-400 bg-amber-500/10',
+  INFO: 'text-blue-400 bg-blue-500/10',
+  DEBUG: 'text-gray-400 bg-gray-500/10',
+};
+
+function ManualTab({ board }: { board: Board }) {
+  const service = board.successMetrics?.integrationScope?.signozService;
+  const [logs, setLogs] = useState<SigNozLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<SigNozLog | null>(null);
+  const [instructions, setInstructions] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{ type: 'success' | 'error'; text: string; prUrl?: string | null } | null>(null);
+
+  const loadLogs = useCallback(async () => {
+    try {
+      const res = await api.boards.logs(board.id, { sinceMs: 60 * 60 * 1000, limit: 200 });
+      setLogs(res.logs);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load logs');
+    } finally {
+      setLoading(false);
+    }
+  }, [board.id]);
+
+  useEffect(() => {
+    loadLogs();
+    const t = setInterval(loadLogs, 10000);
+    return () => clearInterval(t);
+  }, [loadLogs]);
+
+  async function handleSubmit() {
+    if (!instructions.trim()) return;
+    setSubmitting(true);
+    setResult(null);
+    try {
+      const res = await api.boards.startManualFix(board.id, {
+        instructions: instructions.trim(),
+        log: selected
+          ? {
+              body: selected.body,
+              severity: selected.severity,
+              timestamp: selected.timestamp,
+              traceId: selected.traceId,
+              serviceName: selected.serviceName,
+            }
+          : undefined,
+      });
+      const prUrl = res.errorEvent?.prUrl ?? null;
+      setResult({
+        type: 'success',
+        text: `Fix queued (event ${res.errorEvent.id.slice(0, 8)}). The agent will open a pull request.`,
+        prUrl,
+      });
+      setInstructions('');
+      setSelected(null);
+    } catch (err) {
+      setResult({ type: 'error', text: err instanceof Error ? err.message : 'Failed to start fix' });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {/* Left: live logs */}
+      <div className="rounded-xl border border-white/5 bg-surface-850 p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-white">Live logs</h3>
+            <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" title="auto-refreshing" />
+          </div>
+          <span className="text-xs text-gray-500">{service ? service : 'no service set'}</span>
+        </div>
+
+        {!service && (
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-300">
+            Set a SigNoz service name in Settings to scope this group's logs.
+          </div>
+        )}
+        {error && (
+          <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-300">{error}</div>
+        )}
+        {loading && logs.length === 0 && <div className="py-8 text-center text-xs text-gray-500">Loading logs…</div>}
+        {!loading && logs.length === 0 && !error && (
+          <div className="py-8 text-center text-xs text-gray-500">No logs in the last hour.</div>
+        )}
+
+        <div className="max-h-[60vh] space-y-1.5 overflow-y-auto">
+          {logs.map((log, i) => {
+            const sev = (log.severity || '').toUpperCase();
+            const isSel = selected === log;
+            return (
+              <button
+                key={`${log.timestamp}-${i}`}
+                onClick={() => setSelected(log)}
+                className={cn(
+                  'w-full rounded-lg border px-3 py-2 text-left transition-colors',
+                  isSel ? 'border-nexus-500/60 bg-nexus-600/10' : 'border-white/5 bg-surface-900 hover:bg-white/5'
+                )}
+              >
+                <div className="mb-1 flex items-center gap-2">
+                  <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium uppercase', SEVERITY_COLOR[sev] || 'text-gray-400 bg-gray-500/10')}>
+                    {sev || 'log'}
+                  </span>
+                  <span className="text-[10px] text-gray-500">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                  {log.serviceName && <span className="text-[10px] text-gray-600">{log.serviceName}</span>}
+                </div>
+                <div className="line-clamp-2 font-mono text-xs text-gray-300">{log.body}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Right: fix composer */}
+      <div className="rounded-xl border border-white/5 bg-surface-850 p-4">
+        <h3 className="mb-3 text-sm font-semibold text-white">Fix this</h3>
+
+        <label className="mb-1 block text-xs uppercase tracking-wider text-gray-400">Selected log</label>
+        {selected ? (
+          <div className="mb-3 rounded-lg border border-white/10 bg-surface-900 p-3">
+            <div className="mb-1 flex items-center gap-2">
+              <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium uppercase', SEVERITY_COLOR[(selected.severity || '').toUpperCase()] || 'text-gray-400 bg-gray-500/10')}>
+                {(selected.severity || 'log').toUpperCase()}
+              </span>
+              <span className="text-[10px] text-gray-500">{new Date(selected.timestamp).toLocaleString()}</span>
+              <button onClick={() => setSelected(null)} className="ml-auto text-gray-500 hover:text-white" title="clear">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap font-mono text-xs text-gray-300">{selected.body}</pre>
+          </div>
+        ) : (
+          <div className="mb-3 rounded-lg border border-dashed border-white/10 bg-surface-900 p-3 text-xs text-gray-500">
+            Click a log on the left to attach it (optional).
+          </div>
+        )}
+
+        <label className="mb-1 block text-xs uppercase tracking-wider text-gray-400">What should the agent fix?</label>
+        <textarea
+          value={instructions}
+          onChange={e => setInstructions(e.target.value)}
+          rows={6}
+          placeholder="Describe the fix. The agent has access to this group's repo and will open a pull request."
+          className="w-full resize-y rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-white placeholder-gray-600 focus:border-nexus-500/50 focus:outline-none"
+        />
+
+        <button
+          onClick={handleSubmit}
+          disabled={submitting || !instructions.trim()}
+          className="mt-3 w-full rounded-lg bg-nexus-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-nexus-500 disabled:opacity-50"
+        >
+          {submitting ? 'Starting fix…' : 'Send to agent'}
+        </button>
+
+        {result && (
+          <div
+            className={cn(
+              'mt-3 rounded-lg border p-3 text-xs',
+              result.type === 'success'
+                ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300'
+                : 'border-red-500/20 bg-red-500/5 text-red-300'
+            )}
+          >
+            {result.text}
+            {result.prUrl && (
+              <>
+                {' '}
+                <a href={result.prUrl} target="_blank" rel="noreferrer" className="underline hover:text-white">
+                  View pull request
+                </a>
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -707,6 +923,25 @@ function BoardSettings({
   );
   const [maxAgents, setMaxAgents] = useState(board.maxAgents);
   const [requireApproval, setRequireApproval] = useState(board.requireApprovalForDone);
+  const [mode, setMode] = useState<'AUTOMATIC' | 'MANUAL'>(board.mode === 'MANUAL' ? 'MANUAL' : 'AUTOMATIC');
+  const [primaryProvider, setPrimaryProvider] = useState<'github' | 'bitbucket'>(
+    board.successMetrics?.integrationScope?.primaryProvider === 'bitbucket' ? 'bitbucket' : 'github'
+  );
+  const [signozService, setSignozService] = useState(
+    board.successMetrics?.integrationScope?.signozService || ''
+  );
+  const [ghRepo, setGhRepo] = useState(
+    board.successMetrics?.integrationScope?.githubRepo?.fullName || ''
+  );
+  const [ghBranch, setGhBranch] = useState(
+    board.successMetrics?.integrationScope?.githubRepo?.branch || ''
+  );
+  const [bbRepo, setBbRepo] = useState(
+    board.successMetrics?.integrationScope?.bitbucketRepo?.fullName || ''
+  );
+  const [bbBranch, setBbBranch] = useState(
+    board.successMetrics?.integrationScope?.bitbucketRepo?.branch || ''
+  );
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -714,11 +949,25 @@ function BoardSettings({
 
   async function handleSave() {
     setSaving(true);
+    const githubRepoFullName = ghRepo.trim();
+    const bitbucketRepoFullName = bbRepo.trim();
+    const signozServiceName = signozService.trim();
     await onUpdate({
+      mode,
       objective: objective.trim() || null,
       targetDate: targetDate || null,
       maxAgents,
       requireApprovalForDone: requireApproval,
+      integrationScope: {
+        primaryProvider,
+        ...(githubRepoFullName && {
+          githubRepo: { fullName: githubRepoFullName, branch: ghBranch.trim() || 'main' },
+        }),
+        ...(bitbucketRepoFullName && {
+          bitbucketRepo: { fullName: bitbucketRepoFullName, branch: bbBranch.trim() || 'main' },
+        }),
+        ...(signozServiceName && { signozService: signozServiceName }),
+      },
     });
     setSaving(false);
   }
@@ -810,6 +1059,122 @@ function BoardSettings({
             )}
           />
         </button>
+      </div>
+
+      {/* Mode: automatic pipeline vs manual log-watch */}
+      <div className="mb-4 rounded-lg border border-white/5 bg-surface-900 p-4">
+        <div className="mb-3 flex items-center gap-2">
+          <span className="text-xs font-semibold text-white">Mode</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {(['AUTOMATIC', 'MANUAL'] as const).map(m => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              className={cn(
+                'rounded-lg border px-3 py-2 text-left transition-colors',
+                mode === m
+                  ? 'border-nexus-500/60 bg-nexus-600/15 text-white'
+                  : 'border-white/10 bg-surface-850 text-gray-400 hover:bg-white/5'
+              )}
+            >
+              <div className="text-sm font-medium capitalize">{m.toLowerCase()}</div>
+              <div className="text-[11px] text-gray-500">
+                {m === 'AUTOMATIC'
+                  ? 'Auto-fix every captured error'
+                  : 'Watch logs; you trigger fixes'}
+              </div>
+            </button>
+          ))}
+        </div>
+        <label className="mt-3 mb-1 block text-xs text-gray-400 uppercase tracking-wider">SigNoz service name</label>
+        <input
+          value={signozService}
+          onChange={e => setSignozService(e.target.value)}
+          placeholder="e.g. mutual-fund-api"
+          className="w-full bg-surface-850 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50"
+        />
+        <p className="mt-2 text-xs text-gray-500">
+          Scopes this group's live logs (the Manual tab and the Logs page filter by this <code>service.name</code>).
+        </p>
+      </div>
+
+      {/* Primary source provider — where fixes are pushed */}
+      <div className="mb-4 rounded-lg border border-white/5 bg-surface-900 p-4">
+        <div className="mb-3 flex items-center gap-2">
+          <span className="text-xs font-semibold text-white">Primary source provider</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {(['github', 'bitbucket'] as const).map(p => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setPrimaryProvider(p)}
+              className={cn(
+                'rounded-lg border px-3 py-2 text-center text-sm font-medium capitalize transition-colors',
+                primaryProvider === p
+                  ? 'border-nexus-500/60 bg-nexus-600/15 text-white'
+                  : 'border-white/10 bg-surface-850 text-gray-400 hover:bg-white/5'
+              )}
+            >
+              {p === 'github' ? 'GitHub' : 'Bitbucket'}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-gray-500">
+          Fixes are committed and a pull request is opened on the <strong>{primaryProvider === 'bitbucket' ? 'Bitbucket' : 'GitHub'}</strong> repo below.
+        </p>
+      </div>
+
+      {/* GitHub repository for this production group */}
+      <div className="mb-4 rounded-lg border border-white/5 bg-surface-900 p-4">
+        <div className="mb-3 flex items-center gap-2">
+          <span className="text-xs font-semibold text-white">GitHub</span>
+          <span className="text-[10px] rounded px-1.5 py-0.5 bg-white/5 text-gray-400 border border-white/10 font-medium uppercase tracking-wider">repo</span>
+        </div>
+        <label className="mb-1 block text-xs text-gray-400 uppercase tracking-wider">Repository</label>
+        <input
+          value={ghRepo}
+          onChange={e => setGhRepo(e.target.value)}
+          placeholder="owner/repo (e.g. krishrathi1/my-app)"
+          className="w-full bg-surface-850 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50"
+        />
+        <label className="mt-3 mb-1 block text-xs text-gray-400 uppercase tracking-wider">Branch</label>
+        <input
+          value={ghBranch}
+          onChange={e => setGhBranch(e.target.value)}
+          placeholder="main"
+          className="w-full bg-surface-850 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50"
+        />
+        <p className="mt-2 text-xs text-gray-500">
+          The GitHub repo this production group pushes auto-fixes to. Access token is set in Settings → Integrations.
+        </p>
+      </div>
+
+      {/* Bitbucket repository for this production group */}
+      <div className="mb-4 rounded-lg border border-white/5 bg-surface-900 p-4">
+        <div className="mb-3 flex items-center gap-2">
+          <span className="text-xs font-semibold text-white">Bitbucket</span>
+          <span className="text-[10px] rounded px-1.5 py-0.5 bg-[#0052CC]/20 text-[#579DFF] border border-[#0052CC]/30 font-medium uppercase tracking-wider">repo</span>
+        </div>
+        <label className="mb-1 block text-xs text-gray-400 uppercase tracking-wider">Repository</label>
+        <input
+          value={bbRepo}
+          onChange={e => setBbRepo(e.target.value)}
+          placeholder="workspace/repo-slug"
+          className="w-full bg-surface-850 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50"
+        />
+        <label className="mt-3 mb-1 block text-xs text-gray-400 uppercase tracking-wider">Branch</label>
+        <input
+          value={bbBranch}
+          onChange={e => setBbBranch(e.target.value)}
+          placeholder="main"
+          className="w-full bg-surface-850 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-nexus-500/50"
+        />
+        <p className="mt-2 text-xs text-gray-500">
+          The Bitbucket repo this production group monitors and pushes fixes to. Connection credentials are set in Settings → Integrations.
+        </p>
       </div>
 
       {/* Assigned agents */}

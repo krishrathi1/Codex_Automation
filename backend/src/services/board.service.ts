@@ -34,13 +34,27 @@ function normalizeResource(value: unknown) {
   };
 }
 
+export function normalizeBoardMode(value: unknown): 'AUTOMATIC' | 'MANUAL' {
+  return String(value ?? '').trim().toUpperCase() === 'MANUAL' ? 'MANUAL' : 'AUTOMATIC';
+}
+
 export function normalizeIntegrationScope(value: unknown) {
   const scope = objectRecord(value);
   const githubRepo = normalizeResource(scope.githubRepo);
   const vercelProject = normalizeResource(scope.vercelProject);
+  const bitbucketRepo = normalizeResource(scope.bitbucketRepo);
+  const signozService = typeof scope.signozService === 'string' && scope.signozService.trim()
+    ? scope.signozService.trim()
+    : undefined;
+  const primaryProvider = String(scope.primaryProvider ?? '').toLowerCase() === 'bitbucket'
+    ? 'bitbucket'
+    : (String(scope.primaryProvider ?? '').toLowerCase() === 'github' ? 'github' : undefined);
   return {
     ...(githubRepo && { githubRepo }),
     ...(vercelProject && { vercelProject }),
+    ...(bitbucketRepo && { bitbucketRepo }),
+    ...(signozService && { signozService }),
+    ...(primaryProvider && { primaryProvider }),
   };
 }
 
@@ -146,6 +160,7 @@ export async function createBoard(organizationId: string, data: {
   gatewayId?: string;
   boardGroupId?: string;
   boardType?: string;
+  mode?: string;
   objective?: string;
   successMetrics?: Record<string, unknown>;
   integrationScope?: Record<string, unknown>;
@@ -166,6 +181,7 @@ export async function createBoard(organizationId: string, data: {
           gatewayId: data.gatewayId || null,
           boardGroupId: data.boardGroupId || null,
           boardType: data.boardType || 'goal',
+          mode: normalizeBoardMode(data.mode),
           objective: data.objective || null,
           successMetrics: withIntegrationScope(data.successMetrics, data.integrationScope) as any,
           targetDate: data.targetDate ? new Date(data.targetDate) : null,
@@ -195,6 +211,7 @@ export async function updateBoard(id: string, organizationId: string, data: {
   gatewayId?: string;
   boardGroupId?: string;
   boardType?: string;
+  mode?: string;
   objective?: string;
   successMetrics?: Record<string, unknown>;
   integrationScope?: Record<string, unknown>;
@@ -234,6 +251,7 @@ export async function updateBoard(id: string, organizationId: string, data: {
           ...(data.gatewayId !== undefined && { gatewayId: data.gatewayId || null }),
           ...(data.boardGroupId !== undefined && { boardGroupId: data.boardGroupId || null }),
           ...(data.boardType !== undefined && { boardType: data.boardType }),
+          ...(data.mode !== undefined && { mode: normalizeBoardMode(data.mode) }),
           ...(data.objective !== undefined && { objective: data.objective }),
           ...((data.successMetrics !== undefined || data.integrationScope !== undefined) && { successMetrics: nextSuccessMetrics as any }),
           ...(data.targetDate !== undefined && { targetDate: data.targetDate ? new Date(data.targetDate) : null }),

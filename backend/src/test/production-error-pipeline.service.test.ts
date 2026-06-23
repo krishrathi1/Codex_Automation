@@ -20,6 +20,16 @@ describe('production error pipeline service', () => {
     const setup = await createTestUser('production-error-pipeline');
     orgId = setup.organization.id;
 
+    // The automatic pipeline resolves the default automation board by slug when
+    // no boardId is supplied; seed it so ingestion has a target.
+    await prisma.board.create({
+      data: {
+        organizationId: orgId,
+        name: 'Production Error Automation',
+        slug: 'production-error-automation',
+      },
+    });
+
     tempDir = mkdtempSync(path.join(os.tmpdir(), 'nexus-fake-claude-pipeline-'));
     const fakeClaude = writeFakeClaudeCli(tempDir, `const args = process.argv.slice(2);
 
@@ -112,6 +122,12 @@ if (args.includes('--output-format') && args.includes('stream-json')) {
       environment: 'test',
       payload: { browser: 'vitest' },
     });
+
+    // Automatic-mode ingestion always creates a task + debug job (manual mode
+    // returns null for these); narrow the union for the rest of the test.
+    if (!ingestion.task || !ingestion.runJobs.debugRunJob) {
+      throw new Error('expected automatic ingestion to create a task and debug job');
+    }
 
     expect(ingestion.errorEvent.status).toBe('DEBUG_QUEUED');
     expect(ingestion.task.status).toBe('ASSIGNED');

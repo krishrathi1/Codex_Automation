@@ -1,4 +1,4 @@
-import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, ChatHistory, ChatResponse, MotherChatContext, MotherChatDiagnostics, WorkspaceFile, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate, CommEdge, LiveBlackboardTrace, PlatformIntegrationSettings, GithubRepositorySummary, VercelProjectSummary, SigNozLog, ProductionErrorEvent, AgentDesignProposal } from '../types';
+import type { Agent, AgentStats, Activity, Task, Thread, Message, Session, TokenUsage, MetricSnapshot, AlertRule, AlertEvent, Command, ChatHistory, ChatResponse, MotherChatContext, MotherChatDiagnostics, WorkspaceFile, Board, BoardGroup, Approval, Tag, TagAssignment, TaskCustomFieldDefinition, BoardTaskCustomField, TaskCustomFieldValue, MarketplaceSkill, SkillPack, AgentSkill, AgentIntegration, BoardWebhook, BoardWebhookPayload, BoardOnboardingSession, BoardGroupMemory, OrgInvite, SoulTemplate, CommEdge, LiveBlackboardTrace, PlatformIntegrationSettings, GithubRepositorySummary, VercelProjectSummary, BitbucketRepositorySummary, SigNozLog, ProductionErrorEvent, AgentDesignProposal } from '../types';
 import { useAuthStore } from '../stores/auth-store';
 import { AUTH_DISABLED } from './auth-mode';
 
@@ -122,17 +122,20 @@ export const api = {
 	    updateIntegrationSettings: (data: {
 	      githubAccessToken?: string | null;
 	      clearGithubAccessToken?: boolean;
-		      githubRepo?: string | null;
-		      githubBranch?: string | null;
 	      vercelAccessToken?: string | null;
 	      clearVercelAccessToken?: boolean;
 	      vercelTeamId?: string | null;
       signozApiKey?: string | null;
       clearSignozApiKey?: boolean;
       signozEndpoint?: string | null;
+      bitbucketAppPassword?: string | null;
+      clearBitbucketAppPassword?: boolean;
+      bitbucketUsername?: string | null;
+      bitbucketWorkspace?: string | null;
 	    }) => request<PlatformIntegrationSettings>('/org/integrations/settings', { method: 'PUT', body: JSON.stringify(data) }),
 	    githubRepos: () => request<GithubRepositorySummary[]>('/org/integrations/github/repos'),
 	    vercelProjects: () => request<VercelProjectSummary[]>('/org/integrations/vercel/projects'),
+    bitbucketRepos: () => request<BitbucketRepositorySummary[]>('/org/integrations/bitbucket/repos'),
     signozCheck: () => request<{ ok: boolean; detail: string }>('/org/integrations/signoz/check'),
     signozLogs: (params?: { severity?: string; search?: string; sinceMs?: number; limit?: number }) => {
       const q = new URLSearchParams();
@@ -327,6 +330,20 @@ export const api = {
       request<Board>('/boards', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Record<string, unknown>) =>
       request<Board>(`/boards/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    logs: (id: string, params?: { severity?: string; search?: string; sinceMs?: number; limit?: number }) => {
+      const q = new URLSearchParams();
+      if (params?.severity) q.set('severity', params.severity);
+      if (params?.search) q.set('search', params.search);
+      if (params?.sinceMs) q.set('sinceMs', String(params.sinceMs));
+      if (params?.limit) q.set('limit', String(params.limit));
+      const qs = q.toString();
+      return request<{ logs: SigNozLog[] }>(`/boards/${id}/logs${qs ? `?${qs}` : ''}`);
+    },
+    startManualFix: (id: string, data: { instructions: string; log?: Record<string, unknown> }) =>
+      request<{ errorEvent: ProductionErrorEvent; task: Task | null }>(
+        `/boards/${id}/manual-fix`,
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
     delete: (id: string, options?: { deleteScopedData?: boolean }) => {
       const qs = options?.deleteScopedData ? '?deleteScopedData=true' : '';
       return request<void>(`/boards/${id}${qs}`, { method: 'DELETE' });

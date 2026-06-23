@@ -154,9 +154,9 @@ async function checkVercelErrors(
   ].filter(Boolean).join('\n');
 
   const workspace = process.env.MUTUAL_FUND_WORKSPACE || '';
-  const repo = githubCfg.repo || 'krishrathi1/Mutual-Fund-Co-Pilot-';
+  const repo = githubCfg.repo || '';
   const branch = githubCfg.branch || 'main';
-  const commitExtra = workspace ? buildCommitAgentExtra(workspace, repo, branch) : '';
+  const commitExtra = workspace && repo ? buildCommitAgentExtra(workspace, repo, branch) : '';
 
   try {
     await ingestProductionErrorEvent(orgId, {
@@ -207,9 +207,9 @@ async function checkGitHubFailures(orgId: string, boardId: string | undefined, c
 
   let found = 0;
   const workspace = process.env.MUTUAL_FUND_WORKSPACE || '';
-  const repo = cfg.repo || 'krishrathi1/Mutual-Fund-Co-Pilot-';
+  const repo = cfg.repo || '';
   const branch = cfg.branch || 'main';
-  const commitExtra = workspace ? buildCommitAgentExtra(workspace, repo, branch) : '';
+  const commitExtra = workspace && repo ? buildCommitAgentExtra(workspace, repo, branch) : '';
 
   for (const run of runs) {
     // Only ingest runs from the last 24 hours

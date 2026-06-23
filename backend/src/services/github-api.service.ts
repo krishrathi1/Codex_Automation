@@ -167,6 +167,82 @@ export async function getRepoTree(cfg: GitHubConfig, ref?: string): Promise<stri
   return (data.tree ?? []).filter(t => t.type === 'blob').map(t => t.path);
 }
 
+/**
+ * Create a new branch `newBranch` pointing at the tip of `fromBranch`.
+ * Idempotent: if the branch already exists (422), it is left as-is.
+ */
+export async function createBranch(
+  cfg: GitHubConfig,
+  newBranch: string,
+  fromBranch?: string,
+): Promise<{ created: boolean; sha: string | null }> {
+  if (!cfg.token) throw new Error('GitHub token is not configured');
+  const repo = getRepo(cfg);
+  const base = fromBranch || cfg.branch || 'main';
+
+  const refRes = await fetch(`${GITHUB_API}/repos/${repo}/git/ref/heads/${encodeURIComponent(base)}`, {
+    headers: headers(cfg),
+  });
+  if (!refRes.ok) throw new Error(`GitHub base ref lookup failed: ${refRes.status} ${await refRes.text()}`);
+  const baseSha = ((await refRes.json()) as { object: { sha: string } }).object.sha;
+
+  const createRes = await fetch(`${GITHUB_API}/repos/${repo}/git/refs`, {
+    method: 'POST',
+    headers: { ...headers(cfg), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ref: `refs/heads/${newBranch}`, sha: baseSha }),
+  });
+  if (createRes.status === 422) {
+    // Branch already exists — fine, reuse it.
+    return { created: false, sha: baseSha };
+  }
+  if (!createRes.ok) throw new Error(`GitHub branch create failed: ${createRes.status} ${await createRes.text()}`);
+  return { created: true, sha: baseSha };
+}
+
+export interface PullRequestResult {
+  number: number;
+  htmlUrl: string;
+}
+
+/**
+ * Open a pull request from `head` into `base`. If an open PR for that head
+ * already exists, return it instead of erroring.
+ */
+export async function createPullRequest(
+  cfg: GitHubConfig,
+  head: string,
+  base: string,
+  title: string,
+  body: string,
+): Promise<PullRequestResult> {
+  if (!cfg.token) throw new Error('GitHub token is not configured');
+  const repo = getRepo(cfg);
+
+  const createRes = await fetch(`${GITHUB_API}/repos/${repo}/pulls`, {
+    method: 'POST',
+    headers: { ...headers(cfg), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, head, base, body }),
+  });
+  if (createRes.ok) {
+    const pr = (await createRes.json()) as { number: number; html_url: string };
+    return { number: pr.number, htmlUrl: pr.html_url };
+  }
+
+  // 422 commonly means a PR for this head already exists — look it up.
+  if (createRes.status === 422) {
+    const owner = repo.split('/')[0];
+    const listRes = await fetch(
+      `${GITHUB_API}/repos/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${head}`)}`,
+      { headers: headers(cfg) },
+    );
+    if (listRes.ok) {
+      const prs = (await listRes.json()) as Array<{ number: number; html_url: string }>;
+      if (prs.length > 0) return { number: prs[0].number, htmlUrl: prs[0].html_url };
+    }
+  }
+  throw new Error(`GitHub pull request create failed: ${createRes.status} ${await createRes.text()}`);
+}
+
 export async function pushFilesViaApi(
   cfg: GitHubConfig,
   branch: string,
