@@ -9,6 +9,10 @@ import { populateOrgDefaults } from './org-defaults.service.js';
 
 const tracer = trace.getTracer('nexus-auth');
 
+// A constant valid bcrypt hash (cost 12) used to equalize login timing when an
+// account does not exist, defeating user-enumeration via response-time analysis.
+const DUMMY_PASSWORD_HASH = '$2b$12$mA9T/q9OwA3aLBBCkA8e.ut7eh/a2kW.Vc.zZhKHhHRXfev7kvwPi';
+
 function toSlug(name: string): string {
   return name
     .toLowerCase()
@@ -230,6 +234,9 @@ export async function login(data: { email: string; password: string }) {
 
   const user = await prisma.user.findUnique({ where: { email: data.email } });
   if (!user) {
+    // Run a bcrypt comparison against a dummy hash so the unknown-user path costs
+    // the same as the wrong-password path (prevents email enumeration by timing).
+    await bcrypt.compare(data.password, DUMMY_PASSWORD_HASH);
     span.setStatus({ code: SpanStatusCode.ERROR, message: 'Invalid credentials' });
     logger.warn({ email: data.email }, 'Login failed: user not found');
     throw new Error('Invalid email or password');

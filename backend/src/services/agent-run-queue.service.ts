@@ -783,7 +783,6 @@ async function advanceLiveBlackboardAfterJob(
   options: { io?: SocketIOServer } = {},
 ) {
   const liveBlackboard = getLiveBlackboardJobContext(job.contextPacket);
-  logger.info({ jobId: job.id, hasLb: !!liveBlackboard, hasBoard: !!job.board, threadId: job.threadId, runJobId: job.id }, 'DEBUG advanceLiveBlackboard');
   if (!liveBlackboard || !job.board || !job.threadId) return;
 
   await postBlackboardEvent({

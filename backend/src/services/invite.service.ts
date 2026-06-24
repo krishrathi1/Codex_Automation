@@ -68,6 +68,15 @@ export async function acceptInvite(token: string, userId: string) {
   if (invite.status !== 'PENDING') throw new Error('Invite is no longer valid');
   if (invite.expiresAt && invite.expiresAt < new Date()) throw new Error('Invite has expired');
 
+  // Bind the invite to the address it was issued to: only the invited user may
+  // accept it. Without this, anyone holding the invite link/token could redeem it
+  // with an unrelated account and gain the granted role/board access.
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+  if (!user) throw new Error('User not found');
+  if (user.email.toLowerCase().trim() !== invite.invitedEmail.toLowerCase().trim()) {
+    throw new Error('This invite was issued to a different email address');
+  }
+
   // Check if user is already a member
   const existing = await prisma.orgMember.findUnique({
     where: { organizationId_userId: { organizationId: invite.organizationId, userId } },

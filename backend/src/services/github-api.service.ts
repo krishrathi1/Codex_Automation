@@ -1,4 +1,5 @@
 import { logger } from '../lib/logger.js';
+import { fetchWithTimeout } from '../lib/http.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -56,7 +57,7 @@ function getRepo(cfg: GitHubConfig): string {
 export async function getFailedWorkflowRuns(cfg: GitHubConfig, limit = 5): Promise<GitHubWorkflowRun[]> {
   const repo = getRepo(cfg);
   const url = `${GITHUB_API}/repos/${repo}/actions/runs?status=failure&per_page=${limit}`;
-  const res = await fetch(url, { headers: headers(cfg) });
+  const res = await fetchWithTimeout(url, { headers: headers(cfg) });
 
   if (!res.ok) {
     logger.warn({ status: res.status, repo }, 'GitHub workflow runs fetch failed');
@@ -69,7 +70,7 @@ export async function getFailedWorkflowRuns(cfg: GitHubConfig, limit = 5): Promi
 export async function getRunJobs(cfg: GitHubConfig, runId: number): Promise<GitHubJob[]> {
   const repo = getRepo(cfg);
   const url = `${GITHUB_API}/repos/${repo}/actions/runs/${runId}/jobs`;
-  const res = await fetch(url, { headers: headers(cfg) });
+  const res = await fetchWithTimeout(url, { headers: headers(cfg) });
   if (!res.ok) return [];
   const data = await res.json() as { jobs: GitHubJob[] };
   return data.jobs ?? [];
@@ -78,7 +79,7 @@ export async function getRunJobs(cfg: GitHubConfig, runId: number): Promise<GitH
 export async function getOpenBugIssues(cfg: GitHubConfig, limit = 5): Promise<GitHubIssue[]> {
   const repo = getRepo(cfg);
   const url = `${GITHUB_API}/repos/${repo}/issues?state=open&labels=bug&per_page=${limit}`;
-  const res = await fetch(url, { headers: headers(cfg) });
+  const res = await fetchWithTimeout(url, { headers: headers(cfg) });
   if (!res.ok) {
     logger.warn({ status: res.status }, 'GitHub issues fetch failed');
     return [];
@@ -91,7 +92,7 @@ export async function getLatestCommitSha(cfg: GitHubConfig): Promise<string | nu
   const repo = getRepo(cfg);
   const branch = cfg.branch || 'main';
   const url = `${GITHUB_API}/repos/${repo}/commits/${branch}`;
-  const res = await fetch(url, { headers: headers(cfg) });
+  const res = await fetchWithTimeout(url, { headers: headers(cfg) });
   if (!res.ok) return null;
   const data = await res.json() as { sha: string };
   return data.sha ?? null;
@@ -143,7 +144,7 @@ export async function getFileContent(
   // Encode each path segment but keep the slashes.
   const encodedPath = filePath.split('/').map(encodeURIComponent).join('/');
   const url = `${GITHUB_API}/repos/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(branch)}`;
-  const res = await fetch(url, { headers: headers(cfg) });
+  const res = await fetchWithTimeout(url, { headers: headers(cfg) });
   if (res.status === 404) return null;
   if (!res.ok) {
     logger.warn({ status: res.status, filePath }, 'GitHub getFileContent failed');
@@ -159,7 +160,7 @@ export async function getRepoTree(cfg: GitHubConfig, ref?: string): Promise<stri
   const repo = getRepo(cfg);
   const branch = ref || cfg.branch || 'main';
   const url = `${GITHUB_API}/repos/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`;
-  const res = await fetch(url, { headers: headers(cfg) });
+  const res = await fetchWithTimeout(url, { headers: headers(cfg) });
   if (!res.ok) {
     logger.warn({ status: res.status }, 'GitHub getRepoTree failed');
     return [];
@@ -181,13 +182,13 @@ export async function createBranch(
   const repo = getRepo(cfg);
   const base = fromBranch || cfg.branch || 'main';
 
-  const refRes = await fetch(`${GITHUB_API}/repos/${repo}/git/ref/heads/${encodeURIComponent(base)}`, {
+  const refRes = await fetchWithTimeout(`${GITHUB_API}/repos/${repo}/git/ref/heads/${encodeURIComponent(base)}`, {
     headers: headers(cfg),
   });
   if (!refRes.ok) throw new Error(`GitHub base ref lookup failed: ${refRes.status} ${await refRes.text()}`);
   const baseSha = ((await refRes.json()) as { object: { sha: string } }).object.sha;
 
-  const createRes = await fetch(`${GITHUB_API}/repos/${repo}/git/refs`, {
+  const createRes = await fetchWithTimeout(`${GITHUB_API}/repos/${repo}/git/refs`, {
     method: 'POST',
     headers: { ...headers(cfg), 'Content-Type': 'application/json' },
     body: JSON.stringify({ ref: `refs/heads/${newBranch}`, sha: baseSha }),
@@ -219,7 +220,7 @@ export async function createPullRequest(
   if (!cfg.token) throw new Error('GitHub token is not configured');
   const repo = getRepo(cfg);
 
-  const createRes = await fetch(`${GITHUB_API}/repos/${repo}/pulls`, {
+  const createRes = await fetchWithTimeout(`${GITHUB_API}/repos/${repo}/pulls`, {
     method: 'POST',
     headers: { ...headers(cfg), 'Content-Type': 'application/json' },
     body: JSON.stringify({ title, head, base, body }),
@@ -232,7 +233,7 @@ export async function createPullRequest(
   // 422 commonly means a PR for this head already exists — look it up.
   if (createRes.status === 422) {
     const owner = repo.split('/')[0];
-    const listRes = await fetch(
+    const listRes = await fetchWithTimeout(
       `${GITHUB_API}/repos/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${head}`)}`,
       { headers: headers(cfg) },
     );
@@ -255,7 +256,7 @@ export async function pushFilesViaApi(
   const repo = getRepo(cfg);
 
   const api = (path: string, init?: RequestInit) =>
-    fetch(`${GITHUB_API}/repos/${repo}${path}`, {
+    fetchWithTimeout(`${GITHUB_API}/repos/${repo}${path}`, {
       ...init,
       headers: {
         ...headers(cfg),

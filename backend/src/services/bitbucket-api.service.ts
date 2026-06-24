@@ -1,4 +1,5 @@
 import { logger } from '../lib/logger.js';
+import { fetchWithTimeout } from '../lib/http.js';
 import type { ChangedFile, PushResult } from './github-api.service.js';
 
 const BITBUCKET_API = 'https://api.bitbucket.org/2.0';
@@ -51,7 +52,7 @@ export async function getFileContent(
   const branch = ref || cfg.branch || 'main';
   const encodedPath = filePath.split('/').map(encodeURIComponent).join('/');
   const url = `${BITBUCKET_API}/repositories/${workspace}/${slug}/src/${encodeURIComponent(branch)}/${encodedPath}`;
-  const res = await fetch(url, { headers: headers(cfg) });
+  const res = await fetchWithTimeout(url, { headers: headers(cfg) });
   if (res.status === 404) return null;
   if (!res.ok) {
     logger.warn({ status: res.status, filePath }, 'Bitbucket getFileContent failed');
@@ -66,7 +67,7 @@ export async function getFileContent(
 async function getBranchHash(cfg: BitbucketConfig, branch: string): Promise<string | null> {
   const { workspace, slug } = parseRepo(cfg);
   const url = `${BITBUCKET_API}/repositories/${workspace}/${slug}/refs/branches/${encodeURIComponent(branch)}`;
-  const res = await fetch(url, { headers: headers(cfg) });
+  const res = await fetchWithTimeout(url, { headers: headers(cfg) });
   if (!res.ok) return null;
   const data = (await res.json()) as { target?: { hash?: string } };
   return data.target?.hash ?? null;
@@ -86,7 +87,7 @@ export async function createBranch(
   const baseHash = await getBranchHash(cfg, base);
   if (!baseHash) throw new Error(`Bitbucket base branch "${base}" not found`);
 
-  const res = await fetch(`${BITBUCKET_API}/repositories/${workspace}/${slug}/refs/branches`, {
+  const res = await fetchWithTimeout(`${BITBUCKET_API}/repositories/${workspace}/${slug}/refs/branches`, {
     method: 'POST',
     headers: { ...headers(cfg), 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: newBranch, target: { hash: baseHash } }),
@@ -126,7 +127,7 @@ export async function pushFilesViaApi(
     }
   }
 
-  const res = await fetch(`${BITBUCKET_API}/repositories/${workspace}/${slug}/src`, {
+  const res = await fetchWithTimeout(`${BITBUCKET_API}/repositories/${workspace}/${slug}/src`, {
     method: 'POST',
     headers: headers(cfg), // do NOT set Content-Type; fetch sets the multipart boundary
     body: form,
@@ -154,7 +155,7 @@ export async function createPullRequest(
 ): Promise<BitbucketPullRequestResult> {
   const { workspace, slug } = parseRepo(cfg);
 
-  const res = await fetch(`${BITBUCKET_API}/repositories/${workspace}/${slug}/pullrequests`, {
+  const res = await fetchWithTimeout(`${BITBUCKET_API}/repositories/${workspace}/${slug}/pullrequests`, {
     method: 'POST',
     headers: { ...headers(cfg), 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -172,7 +173,7 @@ export async function createPullRequest(
   // A duplicate PR for this source branch yields 400/409 — look it up.
   if (res.status === 400 || res.status === 409) {
     const listUrl = `${BITBUCKET_API}/repositories/${workspace}/${slug}/pullrequests?q=${encodeURIComponent(`source.branch.name="${head}" AND state="OPEN"`)}`;
-    const listRes = await fetch(listUrl, { headers: headers(cfg) });
+    const listRes = await fetchWithTimeout(listUrl, { headers: headers(cfg) });
     if (listRes.ok) {
       const data = (await listRes.json()) as { values?: Array<{ id: number; links?: { html?: { href?: string } } }> };
       const existing = data.values?.[0];

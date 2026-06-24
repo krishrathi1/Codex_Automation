@@ -1,11 +1,24 @@
 import { ChannelType } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { encryptField, decryptField } from '../lib/crypto.js';
 
-// Mask sensitive tokens: show first 4 + last 4 chars
-function maskToken(token: string | null | undefined): string | null {
+// Decrypt a stored token for display/use. decryptField transparently handles
+// legacy plaintext values, so this is safe for rows written before encryption.
+function decryptStored(token: string | null | undefined): string | null {
   if (!token) return null;
-  if (token.length <= 10) return '****';
-  return `${token.slice(0, 4)}...${token.slice(-4)}`;
+  try {
+    return decryptField(token);
+  } catch {
+    return token;
+  }
+}
+
+// Mask sensitive tokens: show first 4 + last 4 chars (decrypting first).
+function maskToken(token: string | null | undefined): string | null {
+  const plain = decryptStored(token);
+  if (!plain) return null;
+  if (plain.length <= 10) return '****';
+  return `${plain.slice(0, 4)}...${plain.slice(-4)}`;
 }
 
 // Strip credentials from response
@@ -77,12 +90,12 @@ export async function upsertIntegration(
   if (data.enabled !== undefined) updateData.enabled = data.enabled;
   if (data.webhookUrl !== undefined) updateData.webhookUrl = data.webhookUrl;
 
-  // Only update tokens if they're real values (not masked)
+  // Only update tokens if they're real values (not masked). Encrypt at rest.
   if (data.botToken !== undefined && data.botToken !== null && !data.botToken.includes('...')) {
-    updateData.botToken = data.botToken;
+    updateData.botToken = encryptField(data.botToken);
   }
   if (data.appToken !== undefined && data.appToken !== null && !data.appToken.includes('...')) {
-    updateData.appToken = data.appToken;
+    updateData.appToken = encryptField(data.appToken);
   }
   if (data.serviceAccount !== undefined && !(data.serviceAccount as Record<string, unknown>)?.masked) {
     updateData.serviceAccount = data.serviceAccount as any;
@@ -93,8 +106,8 @@ export async function upsertIntegration(
     create: {
       agentId,
       channel,
-      botToken: data.botToken || null,
-      appToken: data.appToken || null,
+      botToken: data.botToken ? encryptField(data.botToken) : null,
+      appToken: data.appToken ? encryptField(data.appToken) : null,
       serviceAccount: data.serviceAccount as any || undefined,
       webhookUrl: data.webhookUrl || null,
       dmPolicy: data.dmPolicy || 'open',

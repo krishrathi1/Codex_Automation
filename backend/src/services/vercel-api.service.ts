@@ -1,4 +1,5 @@
 import { logger } from '../lib/logger.js';
+import { fetchWithTimeout } from '../lib/http.js';
 
 const VERCEL_API = 'https://api.vercel.com';
 
@@ -52,7 +53,7 @@ export interface VercelProject {
 
 export async function listProjects(cfg: VercelConfig): Promise<VercelProject[]> {
   const url = `${VERCEL_API}/v9/projects?limit=100${teamQuery(cfg)}`;
-  const res = await fetch(url, { headers: headers(cfg) });
+  const res = await fetchWithTimeout(url, { headers: headers(cfg) });
   if (!res.ok) {
     throw new Error(`Vercel projects list failed: ${res.status} ${await res.text()}`);
   }
@@ -67,7 +68,7 @@ export async function resolveProjectId(cfg: VercelConfig): Promise<string> {
 
   // 1) Exact name lookup.
   const url = `${VERCEL_API}/v9/projects/${encodeURIComponent(cfg.projectName || 'mutual-fund')}?${teamQuery(cfg).slice(1)}`;
-  const res = await fetch(url, { headers: headers(cfg) });
+  const res = await fetchWithTimeout(url, { headers: headers(cfg) });
   if (res.ok) {
     const project = await res.json() as VercelProject;
     return project.id;
@@ -90,7 +91,7 @@ export async function resolveProjectId(cfg: VercelConfig): Promise<string> {
 
 export async function getRecentDeployments(cfg: VercelConfig, projectId: string, limit = 5): Promise<VercelDeployment[]> {
   const url = `${VERCEL_API}/v6/deployments?projectId=${encodeURIComponent(projectId)}&limit=${limit}${teamQuery(cfg)}`;
-  const res = await fetch(url, { headers: headers(cfg) });
+  const res = await fetchWithTimeout(url, { headers: headers(cfg) });
   if (!res.ok) {
     throw new Error(`Vercel deployments fetch failed: ${res.status}`);
   }
@@ -100,7 +101,7 @@ export async function getRecentDeployments(cfg: VercelConfig, projectId: string,
 
 export async function getDeploymentErrorLogs(cfg: VercelConfig, deploymentId: string): Promise<string> {
   const url = `${VERCEL_API}/v2/deployments/${encodeURIComponent(deploymentId)}/events?type=error${teamQuery(cfg)}`;
-  const res = await fetch(url, { headers: headers(cfg) });
+  const res = await fetchWithTimeout(url, { headers: headers(cfg) });
   if (!res.ok) {
     logger.warn({ deploymentId, status: res.status }, 'Could not fetch Vercel deployment events');
     return '';
@@ -115,7 +116,7 @@ export async function getDeploymentErrorLogs(cfg: VercelConfig, deploymentId: st
 
 export async function getDeploymentBuildLogs(cfg: VercelConfig, deploymentId: string): Promise<string> {
   const url = `${VERCEL_API}/v2/deployments/${encodeURIComponent(deploymentId)}/events?type=stdout${teamQuery(cfg)}`;
-  const res = await fetch(url, { headers: headers(cfg) });
+  const res = await fetchWithTimeout(url, { headers: headers(cfg) });
   if (!res.ok) return '';
   const events = await res.json() as VercelLogEvent[];
   const errorLines = events
@@ -133,7 +134,7 @@ export async function triggerRedeploy(cfg: VercelConfig, projectId: string, late
   if (cfg.teamId) body.teamId = cfg.teamId;
 
   const url = `${VERCEL_API}/v13/deployments`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: headers(cfg),
     body: JSON.stringify(body),
